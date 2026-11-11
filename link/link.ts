@@ -172,9 +172,14 @@ export class Link {
 
   /** Prints a new single-use pairing code: a QR to scan, and the same code as text to type. */
   async showPairingCode(): Promise<void> {
-    const o = this.#offers.create({ device: this.#id.key.device, key: b64(this.#id.key.publicRaw), name: this.#id.name, person: this.#id.person }, this.#ports.lan);
-    const qr = await qrText(o.uri);
-    process.stdout.write(`\nPair an iPad: open Reflex, tap Connect, and scan this code or type it (single use, 10 minutes).\n\n${qr}\n${o.uri}\n\nPress Enter for a new code.\n`);
+    const uri = this.pairingCode();
+    const qr = await qrText(uri);
+    process.stdout.write(`\nPair an iPad: open Reflex, tap Connect, and scan this code or type it (single use, 10 minutes).\n\n${qr}\n${uri}\n\nPress Enter for a new code.\n`);
+  }
+
+  /** A new single-use pairing code. Only the process running the Link can make one; the RPC can't. */
+  pairingCode(): string {
+    return this.#offers.create({ device: this.#id.key.device, key: b64(this.#id.key.publicRaw), name: this.#id.name, person: this.#id.person }, this.#ports.lan).uri;
   }
 
   #ask(): void {

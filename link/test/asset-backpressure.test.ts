@@ -39,8 +39,7 @@ test("a 24 MiB asset goes out in parts that respect backpressure", async () => {
     const ca = await LinkClient.connect(a.dir, "admin");
     const cb = await LinkClient.connect(b.dir, "admin");
     try {
-      const { uri } = await ca.call<{ uri: string }>("pair.offer");
-      await cb.call("pair.join", { uri });
+      await cb.call("pair.join", { uri: a.pairingCode() });
       await until("both Links bound to each other", PEER_WAIT_MS, () => state(a).peers.length > 0 && state(b).peers.length > 0);
 
       const bytes = Buffer.alloc(24 * MiB, 3);

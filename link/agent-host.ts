@@ -191,6 +191,11 @@ export async function startAgentHost(o: AgentHostOptions) {
       a = o.catalog.request(name, credential);
       o.log("agent_requested", { agent: a.id, name });
       o.announce(a);
+    } else if (a.status === "denied" || a.status === "revoked") {
+      // Only the person can let an Agent in, so the way back for one they turned away is to ask them again.
+      a = o.catalog.askAgain(a.id);
+      o.log("agent_requested", { agent: a.id, name, again: true });
+      o.announce(a);
     }
     if (a.status === "pending") {
       await o.decision(a.id, APPROVAL_WAIT_MS, signal);
@@ -198,7 +203,7 @@ export async function startAgentHost(o: AgentHostOptions) {
     }
     if (a.status === "pending")
       throw notApproved(a, `The person has not approved ${a.name} yet.`, "Ask them to tap Allow on their iPad, or answer y in the Link's terminal, then call again.");
-    if (a.status !== "approved") throw notApproved(a, `The person ${a.status} ${a.name}.`, "Ask the person to allow it again on their iPad or in the Link's terminal.");
+    if (a.status !== "approved") throw notApproved(a, `The person ${a.status} ${a.name}.`, "Call again to ask the person once more, and tell them to expect the question on their iPad or in the Link's terminal.");
     return { agent: a.id, name: a.name, color: a.color };
   }
 

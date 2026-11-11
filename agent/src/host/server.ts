@@ -88,6 +88,18 @@ export function serveHost(o: HostOptions): Promise<Server> {
   rmSync(o.socket, { force: true }); // a stale socket from a Link that was killed
   return new Promise((resolve, reject) => {
     const server = createServer(serve);
+    // close() waits for every connection to end, and `reflex mcp` holds one for the harness's whole session,
+    // so the Link could never stop. Closing drops them; their held calls abort (see "close" above).
+    const open = new Set<Socket>();
+    server.on("connection", (s) => {
+      open.add(s);
+      s.on("close", () => open.delete(s));
+    });
+    const close = server.close.bind(server);
+    server.close = (cb) => {
+      for (const s of open) s.destroy();
+      return close(cb);
+    };
     server.once("error", reject);
     server.listen(o.socket, () => resolve(server));
   });

@@ -130,6 +130,15 @@ export class Catalog {
     return rec;
   }
 
+  /** A denied or revoked Agent that connects again: pending, so the person is asked again. */
+  askAgain(id: string, now = Date.now()): AgentRecord {
+    const a = this.agent(id);
+    if (!a) throw new Error(`No Agent '${id}'.`);
+    const rec: AgentRecord = { ...a, status: "pending", requested_at: now, decided_at: null };
+    this.#put("agent", id, rec);
+    return rec;
+  }
+
   decide(id: string, status: "approved" | "denied" | "revoked", by: string, now = Date.now()): AgentRecord {
     const a = this.agent(id);
     if (!a) throw new Error(`No Agent '${id}'. Run \`reflex link agents\` to see them.`);
