@@ -32,6 +32,7 @@ const union = (bs: Bounds[]): Bounds => {
 };
 const pad = (b: Bounds, p: number): Bounds => [b[0] - p, b[1] - p, b[2] + 2 * p, b[3] + 2 * p];
 const overlaps = (a: Bounds, b: Bounds) => a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
+const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const contains = (outer: Bounds, b: Bounds) => b[0] >= outer[0] && b[1] >= outer[1] && b[0] + b[2] <= outer[0] + outer[2] && b[1] + b[3] <= outer[1] + outer[3];
 
 /**
@@ -83,6 +84,15 @@ export function project(opts: {
 
   const marks: Record<string, any>[] = [];
   const refs: MarkRef[] = [];
+  // A Send from a Region (its button, or watch) is about that Region's work: its first image
+  // is the whole Region, so every line and the Agent's earlier notes beside them show at once.
+  const region = frozen.region && (frozen.trigger === "region" || frozen.kind === "watch") ? byId.get(opts.displayId(frozen.region)) : undefined;
+  if (region) {
+    const device = (frozen.crops ?? []).find((c) => contains(c.bounds, region.bounds));
+    const png = device ? opts.asset(device.asset) : undefined;
+    const crop = pad(region.bounds, 20);
+    images.push(device && png ? { n: 1, shows: `Region ${region.id}`, bounds: device.bounds, png, asset: device.asset } : { n: 1, shows: `Region ${region.id}`, bounds: crop, png: render(crop) });
+  }
   for (const km of opts.marks) {
     const mark: Record<string, any> = {};
     for (const [k, v] of Object.entries(km)) if (MARK_FIELDS.has(k) && v !== null && v !== undefined) mark[k] = v;
@@ -94,9 +104,10 @@ export function project(opts: {
       const shows = `${km.id}${shownIds.length ? ` and ${[...new Set(shownIds)].join(", ")}` : ""}`;
       // The device's own crop when one covers this Mark and its targets; one image can show several Marks.
       const device = (frozen.crops ?? []).find((c) => contains(c.bounds, want));
-      const same = images.find((i) => (device ? i.asset === device.asset : contains(i.bounds, want)));
+      const same = images.find((i) => (device && !region ? i.asset === device.asset : contains(i.bounds, want)));
       if (same) {
-        if (same.shows.length + shows.length < 190) same.shows = `${same.shows}; ${shows}`;
+        // The Region image says which lines it shows once, after the loop.
+        if (!(region && same.n === 1 && km.line) && same.shows.length + shows.length < 190) same.shows = `${same.shows}; ${shows}`;
         mark.image = same.n;
       } else if (images.length < MAX_IMAGES) {
         const n = images.length + 1;
@@ -113,6 +124,11 @@ export function project(opts: {
     if (mark.kind === "writing" && (mark.confidence ?? 1) < 0.6 && mark.image) mark.note = `Low confidence: read it from image ${mark.image}.`;
     marks.push(mark);
     refs.push({ id: km.id, strokes: km.strokes, bounds: km.bounds });
+  }
+
+  if (region) {
+    const ls = marks.filter((m) => m.line && m.image === 1);
+    if (ls.length) images[0].shows = `Region ${region.id}, ${plural(ls.length, "line")} (${ls.length === 1 ? ls[0].id : `${ls[0].id}–${ls.at(-1)!.id}`})${images[0].shows.slice(`Region ${region.id}`.length)}`.slice(0, 200);
   }
 
   const changes = (frozen.changes ?? [])
@@ -163,12 +179,15 @@ export function project(opts: {
     ...(frozen.region ? { region: opts.displayId(frozen.region) } : {}),
     ...(frozen.element ? { element: opts.displayId(frozen.element) } : {}),
     ...(frozen.payload ? { payload: frozen.payload } : {}),
+    ...(kind === "watch" ? { user_still_writing: frozen.user_still_writing === true } : {}),
     images: images.map(({ n, shows, bounds }) => ({ n, shows, bounds })),
     also_sent_to: opts.alsoSentTo,
     redelivered: opts.redelivered,
     pending_after: opts.pendingAfter,
     next:
-      kind === "send"
+      kind === "watch"
+        ? `A snapshot of ${opts.personName === "You" ? "the person's" : `${opts.personName}'s`} work in progress${frozen.user_still_writing ? "; they are still writing" : ""}. Step in only when a line is wrong and they have moved past it, with a short hint beside it; never answer in full. Then wait_for_user(after: '${s}').`
+        : kind === "send"
         ? `Reply with apply(in_reply_to: '${s}')${refs.length ? `; what you add without at goes next to ${refs[0].id}` : ""}, then wait_for_user(after: '${s}').`
         : `${opts.personName}'s turn is not over. Answer if useful, then wait_for_user(after: '${s}').`,
   };

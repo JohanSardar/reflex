@@ -60,6 +60,8 @@ export type FrozenSend = {
   owner?: { agent?: string; person?: string };
   panel?: string;
   values?: Record<string, unknown>;
+  /** A watch snapshot: whether the person was still writing. */
+  user_still_writing?: boolean;
 };
 
 export type Delivery = { send: FrozenSend; redelivered: boolean };

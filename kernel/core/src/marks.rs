@@ -186,17 +186,38 @@ fn targets<R: ReadDoc>(d: &R) -> Vec<Target> {
         .collect()
 }
 
-/// The Space as it was when the stroke `key` was drawn: forked at the change that added it.
-fn drawn_at(d: &Automerge, key: &str) -> Option<Automerge> {
+/// The change that added the stroke `key`.
+fn change_of(changes: &[automerge::Change], d: &Automerge, key: &str) -> Option<ChangeHash> {
     let elements = doc::root(d, "elements");
     let ExId::Id(counter, actor, _) = doc::obj(d, &elements, key)? else {
         return None;
     };
-    let change = d.get_changes(&[]).into_iter().find(|c| {
-        let start = c.start_op().get();
-        c.actor_id() == &actor && counter >= start && counter < start + c.len() as u64
-    })?;
-    d.fork_at(&[change.hash()]).ok()
+    changes
+        .iter()
+        .find(|c| {
+            let start = c.start_op().get();
+            c.actor_id() == &actor && counter >= start && counter < start + c.len() as u64
+        })
+        .map(|c| c.hash())
+}
+
+/// Whether anything that can move, add or remove a Mark's target happened after
+/// `hash` (or concurrently with it): anything but this person drawing strokes,
+/// Sends and attention requests. When nothing did, the Space at the frontier
+/// shows the targets as they were when the Mark was drawn, and no fork is needed.
+fn targets_changed_after(
+    d: &Automerge,
+    hash: ChangeHash,
+    ink_only: &std::collections::BTreeSet<String>,
+) -> bool {
+    d.get_changes(&[hash]).iter().any(|c| match c.message() {
+        Some("send") => false,
+        Some(m) if m.starts_with("attention ") => false,
+        Some(m) => !m
+            .strip_prefix("intent ")
+            .is_some_and(|id| ink_only.contains(id)),
+        None => true,
+    })
 }
 
 fn is_container(t: &Target) -> bool {
@@ -218,7 +239,7 @@ fn stroke_points(rec: &Record) -> Vec<(f64, f64, f64)> {
 }
 
 /// When each of this person's strokes was committed (their history entry's time).
-fn stroke_times<R: ReadDoc>(d: &R, person: &str) -> BTreeMap<String, i64> {
+pub(crate) fn stroke_times<R: ReadDoc>(d: &R, person: &str) -> BTreeMap<String, i64> {
     let mut out = BTreeMap::new();
     for e in crate::history_entries(d, person) {
         for ed in &e.edits {
@@ -501,6 +522,144 @@ fn classify(g: &Group, strokes: &[Stroke], ts: &[Target]) -> Kind {
     Kind::Ink
 }
 
+/// The most Elements one Mark lists in `on`.
+const MAX_ON: usize = 20;
+/// The most lines one Send reports; the rest fold into the last.
+const MAX_LINES: usize = 60;
+
+struct Line {
+    strokes: Vec<usize>,
+    bounds: B,
+    text: Option<(String, f64)>,
+}
+
+/// Splits handwriting into lines: strokes whose vertical extents overlap, or whose
+/// middle sits inside a line's band (a minus sign, a dot), are on the same line.
+/// Each line gets the recognized text of the hints on it. A hint that spans several
+/// lines is split at its line breaks when they match; otherwise its whole text goes
+/// to the line it covers most.
+fn lines(strokes: &[Stroke], pooled: &[usize], hints: &[(Vec<usize>, Hint)]) -> Vec<Line> {
+    // The letters and digits form the lines first, largest first; flat strokes (a minus
+    // sign, the bars of =) then join the line they sit in, and very tall strokes (a
+    // fraction's parts, brackets around several lines) join last.
+    let mut order: Vec<usize> = pooled.to_vec();
+    let tall = |i: usize| strokes[i].bounds[3] > 120.0;
+    order.sort_by(|&a, &b| {
+        let (ha, hb) = (strokes[a].bounds[3], strokes[b].bounds[3]);
+        tall(a).cmp(&tall(b)).then(hb.total_cmp(&ha)).then(
+            center(strokes[a].bounds)
+                .1
+                .total_cmp(&center(strokes[b].bounds).1),
+        )
+    });
+    let mut out: Vec<Line> = vec![];
+    for i in order {
+        let b = strokes[i].bounds;
+        let (_, cy) = center(b);
+        let best = out
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| {
+                let (ly0, lh) = (l.bounds[1], l.bounds[3].max(1.0));
+                let ov = (b[1] + b[3]).min(ly0 + lh) - b[1].max(ly0);
+                let band = cy >= ly0 - 0.15 * lh && cy <= ly0 + lh * 1.15;
+                band || ov >= 0.5 * b[3].min(lh).max(1.0)
+            })
+            .min_by(|a, c| {
+                (center(a.1.bounds).1 - cy)
+                    .abs()
+                    .total_cmp(&(center(c.1.bounds).1 - cy).abs())
+            })
+            .map(|(n, _)| n);
+        match best {
+            Some(n) => {
+                out[n].strokes.push(i);
+                out[n].bounds = union(out[n].bounds, b);
+            }
+            None => out.push(Line {
+                strokes: vec![i],
+                bounds: b,
+                text: None,
+            }),
+        }
+    }
+    out.sort_by(|a, b| a.bounds[1].total_cmp(&b.bounds[1]));
+    // Fold anything past the limit into the last line.
+    if out.len() > MAX_LINES {
+        let extra: Vec<Line> = out.drain(MAX_LINES..).collect();
+        let last = out.last_mut().expect("lines");
+        for l in extra {
+            last.strokes.extend(l.strokes);
+            last.bounds = union(last.bounds, l.bounds);
+        }
+    }
+    for l in out.iter_mut() {
+        l.strokes
+            .sort_by_key(|&i| (strokes[i].bounds[0] as i64, strokes[i].start));
+    }
+    let line_of: BTreeMap<usize, usize> = out
+        .iter()
+        .enumerate()
+        .flat_map(|(n, l)| l.strokes.iter().map(move |&i| (i, n)))
+        .collect();
+    // (line, x where the text starts, text, confidence)
+    let mut texts: Vec<(usize, f64, String, f64)> = vec![];
+    let mut covered: std::collections::BTreeSet<usize> = Default::default();
+    for (members, h) in hints {
+        // The same strokes read twice (a hint repeated in a later Send) count once.
+        if members.iter().all(|i| covered.contains(i)) {
+            continue;
+        }
+        covered.extend(members.iter().copied());
+        let mut on: Vec<usize> = members
+            .iter()
+            .filter_map(|i| line_of.get(i).copied())
+            .collect();
+        if on.is_empty() {
+            continue;
+        }
+        let x = |n: usize| {
+            members
+                .iter()
+                .filter(|i| line_of.get(i) == Some(&n))
+                .map(|&i| strokes[i].bounds[0])
+                .fold(f64::MAX, f64::min)
+        };
+        let most = *on
+            .iter()
+            .max_by_key(|n| on.iter().filter(|m| m == n).count())
+            .expect("on");
+        on.sort();
+        on.dedup();
+        let parts: Vec<&str> = h
+            .text
+            .lines()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .collect();
+        if on.len() > 1 && parts.len() == on.len() {
+            for (n, p) in on.iter().zip(parts) {
+                texts.push((*n, x(*n), p.to_string(), h.confidence));
+            }
+        } else {
+            texts.push((most, x(most), parts.join(" "), h.confidence));
+        }
+    }
+    texts.sort_by(|a, b| {
+        (a.0, a.1)
+            .partial_cmp(&(b.0, b.1))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for (n, _, t, c) in texts {
+        let l = &mut out[n];
+        l.text = Some(match l.text.take() {
+            None => (t, c),
+            Some((s, c0)) => (format!("{s} {t}"), c0.min(c)),
+        });
+    }
+    out
+}
+
 /// Groups a frozen Send's strokes into Marks and resolves their Anchors.
 /// `send` is the stored frozen Send; `now` is the current document, used only
 /// to tell whether a target moved after the Send.
@@ -523,15 +682,22 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
     let person = send["from"]["person"].as_str().unwrap_or("");
     let times = stroke_times(at, person);
 
-    let keys: Vec<String> = send
-        .get("strokes")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
+    let list = |k: &str| -> Vec<String> {
+        send.get(k)
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    // `context`: strokes a Region's earlier Sends already carried, shown again for its lines.
+    let earlier: std::collections::BTreeSet<String> = list("context").into_iter().collect();
+    let keys: Vec<String> = list("strokes")
+        .into_iter()
+        .chain(earlier.iter().cloned())
+        .collect();
     let strokes: Vec<Stroke> = keys
         .iter()
         .filter_map(|k| doc::read_record(at, k))
@@ -555,10 +721,49 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
         .map(|(i, s)| (s.key.as_str(), i))
         .collect();
 
-    // The device's handwriting hints, by the strokes they cover.
-    let hints: Vec<(Vec<usize>, Hint)> = send
+    // The device's handwriting hints, by the strokes they cover: this Send's, and for
+    // context strokes, those of the earlier Sends that carried them.
+    let mut all_hints: Vec<Value> = send
         .get("hints")
         .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // A watch snapshot, or a Region's context, shows strokes earlier Sends carried:
+    // their text is in those Sends' hints.
+    if send.get("region").is_some() {
+        let claims = doc::root(at, "claims");
+        let sends = doc::root(at, "sends");
+        let this = send.get("send").and_then(Value::as_str).unwrap_or("");
+        let before: std::collections::BTreeSet<String> = keys
+            .iter()
+            .filter_map(|k| doc::get_str(at, &claims, &format!("stroke:{k}")))
+            .filter(|id| id != this)
+            .collect();
+        let shown: std::collections::BTreeSet<&str> = keys.iter().map(String::as_str).collect();
+        for id in before {
+            let Some(old) =
+                doc::get_str(at, &sends, &id).and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            else {
+                continue;
+            };
+            all_hints.extend(
+                old.get("hints")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|h| {
+                        h.get("strokes")
+                            .and_then(Value::as_array)
+                            .is_some_and(|ss| {
+                                ss.iter()
+                                    .any(|x| x.as_str().is_some_and(|x| shown.contains(x)))
+                            })
+                    }),
+            );
+        }
+    }
+    let hints: Vec<(Vec<usize>, Hint)> = Some(&all_hints)
         .map(|a| {
             a.iter()
                 .filter_map(|h| {
@@ -616,16 +821,135 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
         })
         .unwrap_or_default();
 
+    // This person's actions that only drew strokes: they never move a target.
+    let ink_only: std::collections::BTreeSet<String> = crate::history_entries(at, person)
+        .into_iter()
+        .filter(|e| {
+            e.edits.iter().all(|ed| match ed {
+                Edit::Create { snapshot } => {
+                    snapshot.get("type").and_then(Value::as_str) == Some("ink")
+                }
+                _ => false,
+            })
+        })
+        .map(|e| e.id)
+        .collect();
+    let all_changes = if groups.is_empty() {
+        vec![]
+    } else {
+        at.get_changes(&[])
+    };
+    let mut forks: BTreeMap<ChangeHash, Vec<Target>> = BTreeMap::new();
+
+    // A Send from a Region (its Send button, or watch) is the person's written work:
+    // its handwriting comes back line by line, in reading order, and only gestures
+    // that point at something other than the Region stay gestures.
+    let by_line = send.get("region").is_some_and(Value::is_string)
+        && matches!(
+            send.get("trigger").and_then(Value::as_str),
+            Some("region" | "watch")
+        );
     let mut out: Vec<Value> = vec![];
     let mut placed: Vec<(String, B)> = vec![];
-    for (n, g) in groups.iter().enumerate() {
-        let id = format!("m{}", n + 1);
-        // Anchors are frozen when the Mark is drawn: resolve them against the Space as it was then.
+    let mut gestures: Vec<(&Group, Kind)> = vec![];
+    if by_line {
+        let mut pooled: Vec<usize> = vec![];
+        for g in &groups {
+            let k = classify(g, &strokes, &ts);
+            let outside = |i: &usize| !is_container(&ts[*i]);
+            let keep = g.hint.is_none()
+                && match &k {
+                    Kind::Circle(on) => on.iter().any(outside),
+                    Kind::Arrow(f, t) => f.iter().chain(t.iter()).any(outside),
+                    Kind::Strike(t) | Kind::Underline(t) => outside(t),
+                    Kind::Check(t) | Kind::Cross(t) => t.iter().any(outside),
+                    Kind::Writing | Kind::Ink => false,
+                };
+            let old = g.strokes.iter().all(|&i| earlier.contains(&strokes[i].key));
+            if keep && old {
+                continue; // a gesture from an earlier Send was answered then
+            }
+            if keep {
+                gestures.push((g, k));
+            } else {
+                pooled.extend(&g.strokes);
+            }
+        }
+        for (n, line) in lines(&strokes, &pooled, &hints).into_iter().enumerate() {
+            let id = format!("m{}", n + 1);
+            let mut m = Map::new();
+            m.insert("id".into(), json!(id));
+            m.insert(
+                "kind".into(),
+                json!(if line.text.is_some() {
+                    "writing"
+                } else {
+                    "ink"
+                }),
+            );
+            m.insert("line".into(), json!(n + 1));
+            if line
+                .strokes
+                .iter()
+                .all(|&i| earlier.contains(&strokes[i].key))
+            {
+                m.insert("earlier".into(), json!(true));
+            }
+            if let Some((text, conf)) = &line.text {
+                m.insert("text_guess".into(), json!(text));
+                m.insert("confidence".into(), json!((conf * 100.0).round() / 100.0));
+            }
+            m.insert("bounds".into(), json!(ib(line.bounds)));
+            m.insert("stroke_count".into(), json!(line.strokes.len()));
+            m.insert(
+                "strokes".into(),
+                json!(line
+                    .strokes
+                    .iter()
+                    .map(|&i| show(&strokes[i].key))
+                    .collect::<Vec<_>>()),
+            );
+            m.insert(
+                "at".into(),
+                json!(line
+                    .strokes
+                    .iter()
+                    .map(|&i| strokes[i].start)
+                    .min()
+                    .unwrap_or(0)),
+            );
+            m.insert(
+                "end".into(),
+                json!(line
+                    .strokes
+                    .iter()
+                    .map(|&i| strokes[i].end)
+                    .max()
+                    .unwrap_or(0)),
+            );
+            placed.push((id, line.bounds));
+            out.push(Value::Object(m));
+        }
+    }
+    let first = out.len();
+    let rest: Vec<&Group> = if by_line {
+        gestures.iter().map(|(g, _)| *g).collect()
+    } else {
+        groups.iter().collect()
+    };
+    for (n, g) in rest.into_iter().enumerate() {
+        let id = format!("m{}", first + n + 1);
+        // Anchors are frozen when the Mark is drawn: resolve them against the Space as it was
+        // then. Fork only when something that could move a target happened since.
         let last = g.strokes.iter().max_by_key(|&&i| strokes[i].end);
-        let drawn: Option<Vec<Target>> = last
-            .and_then(|&i| drawn_at(at, &strokes[i].key))
-            .map(|d| targets(&d));
-        let ts: &Vec<Target> = drawn.as_ref().unwrap_or(&ts);
+        let hash = last.and_then(|&i| change_of(&all_changes, at, &strokes[i].key));
+        let fork = hash.filter(|h| !by_line && targets_changed_after(at, *h, &ink_only));
+        if let Some(h) = fork {
+            forks
+                .entry(h)
+                .or_insert_with(|| at.fork_at(&[h]).map(|d| targets(&d)).unwrap_or_default());
+        }
+        let ts: &Vec<Target> = fork.and_then(|h| forks.get(&h)).unwrap_or(&ts);
         let gesture = classify(g, &strokes, ts);
         let mut m = Map::new();
         m.insert("id".into(), json!(id));
@@ -641,6 +965,22 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
         match &kind {
             Kind::Circle(on) => {
                 m.insert("kind".into(), json!("circle"));
+                // The largest first; a lasso around a whole diagram lists only some of it.
+                let mut on = on.clone();
+                on.sort_by(|a, b| {
+                    let area = |i: usize| ts[i].bounds[2] * ts[i].bounds[3];
+                    area(*b).total_cmp(&area(*a))
+                });
+                if on.len() > MAX_ON {
+                    m.insert(
+                        "note".into(),
+                        json!(format!(
+                            "It covers {} Elements; on lists the {MAX_ON} largest. read(bounds: <its bounds>) lists all of them.",
+                            on.len()
+                        )),
+                    );
+                    on.truncate(MAX_ON);
+                }
                 m.insert(
                     "on".into(),
                     json!(on.iter().map(|&i| show(&ts[i].key)).collect::<Vec<_>>()),

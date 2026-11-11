@@ -183,6 +183,42 @@ function inkSvg(pts: number[][], color: string, width: number): string {
   return `<g stroke="${color}" stroke-linecap="round" fill="none">${segs.join("")}</g>`;
 }
 
+const SUP: Record<string, string> = { 0: "⁰", 1: "¹", 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶", 7: "⁷", 8: "⁸", 9: "⁹", "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾", n: "ⁿ", i: "ⁱ", x: "ˣ" };
+const SUB: Record<string, string> = { 0: "₀", 1: "₁", 2: "₂", 3: "₃", 4: "₄", 5: "₅", 6: "₆", 7: "₇", 8: "₈", 9: "₉", "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎", a: "ₐ", e: "ₑ", i: "ᵢ", n: "ₙ", x: "ₓ" };
+const SYMBOLS: Record<string, string> = {
+  cdot: "·", times: "×", div: "÷", pm: "±", mp: "∓", le: "≤", leq: "≤", ge: "≥", geq: "≥", ne: "≠", neq: "≠", approx: "≈", equiv: "≡",
+  to: "→", rightarrow: "→", Rightarrow: "⇒", infty: "∞", sum: "∑", prod: "∏", int: "∫", partial: "∂", nabla: "∇", degree: "°", circ: "°",
+  alpha: "α", beta: "β", gamma: "γ", delta: "δ", Delta: "Δ", epsilon: "ε", varepsilon: "ε", theta: "θ", lambda: "λ", mu: "μ", pi: "π",
+  rho: "ρ", sigma: "σ", Sigma: "Σ", tau: "τ", phi: "φ", varphi: "φ", omega: "ω", Omega: "Ω", ldots: "…", cdots: "⋯", quad: "  ", qquad: "    ",
+};
+
+/**
+ * LaTeX as one line of readable text, for the headless renderer (the iPad and the web viewer
+ * typeset it properly): \frac{a}{b} becomes (a)/(b), x^2 becomes x², \sqrt{x} becomes √(x).
+ */
+export function latexText(src: string): string {
+  let t = src.replace(/\^\s*\{?\s*\\circ\s*\}?/g, "°");
+  const group = String.raw`\{((?:[^{}]|\{[^{}]*\})*)\}`;
+  for (let i = 0; i < 4; i++) {
+    t = t
+      .replace(new RegExp(String.raw`\\[dt]?frac\s*${group}\s*${group}`, "g"), (_, a, b) => `(${/^\w+$/.test(a) ? a : `(${a})`}/${/^\w+$/.test(b) ? b : `(${b})`})`)
+      .replace(new RegExp(String.raw`\\sqrt\s*${group}`, "g"), (_, a) => `√${/^\w+$/.test(a) ? a : `(${a})`}`)
+      .replace(new RegExp(String.raw`\\(?:text|mathrm|mathbf|mathit|operatorname)\s*${group}`, "g"), "$1");
+  }
+  const script = (map: Record<string, string>, body: string, mark: string) => ([...body].every((c) => map[c]) ? [...body].map((c) => map[c]).join("") : `${mark}(${body})`);
+  t = t
+    .replace(new RegExp(String.raw`\^${group}`, "g"), (_, a) => script(SUP, a, "^"))
+    .replace(/\^(\w)/g, (_, a) => script(SUP, a, "^"))
+    .replace(new RegExp(String.raw`_${group}`, "g"), (_, a) => script(SUB, a, "_"))
+    .replace(/_(\w)/g, (_, a) => script(SUB, a, "_"))
+    .replace(/\\(left|right|big|Big|bigg|Bigg)\b/g, "")
+    .replace(/\\([a-zA-Z]+)/g, (m, name) => SYMBOLS[name] ?? m)
+    .replace(/\\[,;:! ]/g, " ")
+    .replace(/[{}]/g, "")
+    .replace(/\s+/g, " ");
+  return t.trim();
+}
+
 function elementSvg(e: SceneElement, byId: Map<string, SceneElement>, strokes: RenderRequest["strokes"], asset?: RenderRequest["asset"]): string {
   const b = e.bounds;
   const color = COLORS[e.color] ?? COLORS.black;
@@ -199,7 +235,7 @@ function elementSvg(e: SceneElement, byId: Map<string, SceneElement>, strokes: R
       return textBlock(e.text ?? "", b, SIZES[e.size] ?? 18, color, e.align === "middle");
     }
     case "math":
-      return `<text x="${b[0] + 4}" y="${b[1] + b[3] / 2 + 7}" font-family="Times New Roman, serif" font-style="italic" font-size="${SIZES[e.size] ?? 22}" fill="${color}">${esc(e.latex ?? "")}</text>`;
+      return `<text x="${b[0] + 4}" y="${b[1] + b[3] / 2 + 7}" font-family="Times New Roman, serif" font-style="italic" font-size="${SIZES[e.size] ?? 22}" fill="${color}">${esc(latexText(e.latex ?? ""))}</text>`;
     case "connector": {
       let pts: [number, number][];
       const from = e.from && byId.get(e.from);

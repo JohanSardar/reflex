@@ -2339,6 +2339,8 @@ pub enum Code {
     NotYours,
     #[serde(rename = "region_read_only")]
     RegionReadOnly,
+    #[serde(rename = "region_no_ink")]
+    RegionNoInk,
     #[serde(rename = "too_large")]
     TooLarge,
     #[serde(rename = "unknown_space")]
@@ -2370,7 +2372,7 @@ pub enum Code {
 }
 
 impl Code {
-    pub const ALL: &'static [&'static str] = &["batch_rejected", "invalid_input", "unknown_id", "duplicate_id", "unknown_type", "invalid_props", "invalid_placement", "not_yours", "region_read_only", "too_large", "unknown_space", "unknown_send", "unknown_batch", "unknown_recipe", "unknown_topic", "invalid_params", "request_reused", "exec_failed", "not_approved", "not_a_member", "rate_limited", "unavailable", "internal"];
+    pub const ALL: &'static [&'static str] = &["batch_rejected", "invalid_input", "unknown_id", "duplicate_id", "unknown_type", "invalid_props", "invalid_placement", "not_yours", "region_read_only", "region_no_ink", "too_large", "unknown_space", "unknown_send", "unknown_batch", "unknown_recipe", "unknown_topic", "invalid_params", "request_reused", "exec_failed", "not_approved", "not_a_member", "rate_limited", "unavailable", "internal"];
     pub fn as_str(&self) -> &'static str {
         match self {
             Code::BatchRejected => "batch_rejected",
@@ -2382,6 +2384,7 @@ impl Code {
             Code::InvalidPlacement => "invalid_placement",
             Code::NotYours => "not_yours",
             Code::RegionReadOnly => "region_read_only",
+            Code::RegionNoInk => "region_no_ink",
             Code::TooLarge => "too_large",
             Code::UnknownSpace => "unknown_space",
             Code::UnknownSend => "unknown_send",
@@ -2784,9 +2787,12 @@ pub struct RawSend {
     /// Each Embed's answer, from the resolve function it registered, for the strokes drawn on it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embed_anchors: Option<Vec<RawSendEmbedAnchorsItem>>,
-    /// trigger region: the Region whose Send button was pressed. The Send goes to the Region's owner.
+    /// trigger region: the Region whose Send button was pressed; the Send claims only the strokes and changes inside it. trigger watch: the watched Region the snapshot shows. The Send goes to the Region's owner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
+    /// trigger watch: true when the person was still writing when the snapshot was taken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_still_writing: Option<bool>,
     /// trigger behavior: the Element that was interacted with. The kernel runs that Element's Behaviors for on (and event): a send action makes a full Send, a notify makes a tap (nothing is claimed and the person's turn goes on), and set and apply_recipe are run by the Link as the Element's owner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub element: Option<String>,
@@ -3158,6 +3164,15 @@ pub struct Mark {
     /// [x, y, width, height] in the reading Agent's coordinates. x and y are the top-left corner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marked_at: Option<[i64; 4]>,
+    /// In a Send from a Region (its Send button, or watch): which handwritten line this is, 1 at the top. Each line is one Mark, in reading order, so you can answer at the exact line with at: {right_of: <mark id>}.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<i64>,
+    /// true for a line an earlier Send from this Region already carried, shown again so the lines read in order. Only lines without it are new.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub earlier: Option<bool>,
+    /// How many strokes it has. Read them with read(ids: [mark id], detail: 'strokes').
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_count: Option<i64>,
     /// The image (its n) that shows this Mark.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<i64>,

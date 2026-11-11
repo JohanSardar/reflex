@@ -4,4 +4,6 @@ Pass after: the ID of the last Send you handled; that acknowledges it. If the ti
 
 kind says what you got. "send": the person's turn is over, so answer it. "tap": they used one of your Behaviors and are still working. "watch": a snapshot of a Region you watch; user_still_writing says whether they are mid-stroke, so hold back until they finish. redelivered: true means you saw this Send before but didn't acknowledge it.
 
+A Send from a Region (its Send button, or watch) carries only that Region's work, and its handwriting comes as one writing Mark per line, top to bottom (line: 1, 2, …), so answer at the exact line with at: {right_of: "m2"}. Filter with region to wait for one Region.
+
 text_guess is only a hint. When the handwriting matters, read it from the image.

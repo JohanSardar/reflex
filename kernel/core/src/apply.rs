@@ -375,6 +375,32 @@ fn check_region(tx: &Tx, p: &Principal, i: usize, key: &str, b: [i64; 4]) -> Res
     }
 }
 
+/// People may not draw inside a Region whose ink is false (SPEC §5). Checked
+/// where the stroke is written, against the Region as that writer sees it, so a
+/// rule never removes strokes already accepted (ARCHITECTURE §7.2).
+fn check_ink(tx: &Tx, p: &Principal, i: usize, b: [i64; 4]) -> Result<(), OpError> {
+    if !matches!(p, Principal::Person(_)) {
+        return Ok(());
+    }
+    let hit = doc::live_records(tx).into_iter().find(|r| {
+        r.typ == "region"
+            && r.field_json("ink") == Some(Value::Bool(false))
+            && crate::send::inside(r.bounds, b)
+    });
+    match hit {
+        None => Ok(()),
+        Some(r) => Err(OpError::new(
+            i,
+            Code::RegionNoInk,
+            format!(
+                "Ink isn't allowed in Region '{}'.",
+                display_id(Some(p), &r.key)
+            ),
+            "Draw outside that Region.",
+        )),
+    }
+}
+
 fn data_json(data: &BTreeMap<String, Value>) -> BTreeMap<String, String> {
     data.iter()
         .map(|(k, v)| (k.clone(), v.to_string()))
@@ -940,6 +966,11 @@ fn add_element(
     };
     if add.typ != "connector" && add.typ != "ink" {
         if let Err(e) = check_region(tx, p, i, &key, bounds) {
+            errs.push(e);
+        }
+    }
+    if add.typ == "ink" {
+        if let Err(e) = check_ink(tx, p, i, bounds) {
             errs.push(e);
         }
     }

@@ -831,6 +831,77 @@ export class Core {
     return { id: ids[0], ids };
   }
 
+  /**
+   * One line of handwritten working inside a Region, below the lines already there, as the
+   * person would write a step of a solution. Digits and letters are small strokes; x and +
+   * are two crossing strokes and = two short bars, as a hand draws them. The device's
+   * recognized text for the line comes as a hint, as Apple's recognizer gives it line by line.
+   */
+  personWriteLine(space: string, region: string, text: string, o: { confidence?: number } = {}) {
+    const entry = this.#entry(space);
+    const all: SceneElement[] = this.scene(entry, { person: this.person.person }, "full");
+    const r = this.#findForPerson(entry, region);
+    if (r.type !== "region") throw fail("invalid_input", `'${region}' is a ${r.type}, not a Region.`, `Regions: ${all.filter((e) => e.type === "region").map((e) => e.id).join(", ") || "none"}`);
+    const [rx, ry, rw, rh] = r.bounds;
+    const inside = (b: Bounds) => b[0] + b[2] / 2 >= rx && b[0] + b[2] / 2 <= rx + rw && b[1] + b[3] / 2 >= ry && b[1] + b[3] / 2 <= ry + rh;
+    const mine = all.filter((e) => e.type === "ink" && e.owner?.person === this.person.person && inside(e.bounds));
+    const top = mine.length ? Math.max(...mine.map((e) => e.bounds[1] + e.bounds[3])) + 34 : ry + 64;
+    if (top + 30 > ry + rh) throw fail("too_large", `Region '${region}' is full.`, "Write in a bigger Region, or ask the Agent to resize it.");
+    const ids: string[] = [];
+    const y = top + 14; // the line's middle
+    let x = rx + 40;
+    const stroke = (pts: number[][]) => ids.push(this.personStroke(space, pts.map((p) => p.map(Math.round)), { width: 2, color: "black" }).id);
+    for (const ch of text) {
+      if (ch === " ") {
+        x += 14;
+        continue;
+      }
+      if (ch === "x" || ch === "+" || ch === "×") {
+        const d = ch === "x" ? 9 : 10;
+        if (ch === "+") {
+          stroke([[x, y], [x + 2 * d, y]]);
+          stroke([[x + d, y - d], [x + d, y + d]]);
+        } else {
+          stroke([[x, y - d], [x + 2 * d, y + d]]);
+          stroke([[x + 2 * d, y - d], [x, y + d]]);
+        }
+      } else if (ch === "=") {
+        stroke([[x, y - 4], [x + 18, y - 4]]);
+        stroke([[x, y + 4], [x + 18, y + 4]]);
+      } else if (ch === "-" || ch === "−") {
+        stroke([[x, y], [x + 16, y]]);
+      } else if (GLYPHS[ch]) {
+        for (const g of GLYPHS[ch]) stroke(g.map(([gx, gy]) => [x + gx, y - 12 + gy]));
+      } else {
+        const pts: number[][] = [];
+        for (let k = 0; k <= 8; k++) pts.push([x + k * 2, y + 6 * Math.sin((k / 8) * Math.PI * 2 + x)]);
+        stroke(pts);
+      }
+      x += 24;
+      if (x > rx + rw - 30) break;
+    }
+    const list = this.#hints.get(entry.name) ?? [];
+    list.push({ strokes: ids, text, confidence: o.confidence ?? 0.86 });
+    this.#hints.set(entry.name, list);
+    return { id: ids[0], ids };
+  }
+
+  /**
+   * A watch snapshot of one Region (SPEC §9): all of the person's Ink in it now, claiming
+   * nothing, so their turn goes on and the Region's own Send still carries the work. The Link's
+   * watcher decides when (debounce and budgets, link/watch.ts). Handwriting hints are the dev
+   * person's; an iPad's come with its Sends.
+   */
+  watchSnapshot(space: string, region: string, o: { stillWriting: boolean }) {
+    const entry = this.#entry(space);
+    const send = `s_${randomBytes(5).toString("hex")}`;
+    const hints = this.#hints.get(entry.name) ?? [];
+    const raw = { send, trigger: "watch", region, user_still_writing: o.stillWriting, viewport: entry.viewport, ...(hints.length ? { hints } : {}) };
+    const frozen = JSON.parse(this.spaces.write(entry, "send", (s) => s.freezeSend(this.person.person, "link-watch", JSON.stringify(raw), Date.now())));
+    if (frozen.ok === false) throw new ReflexError(frozen.reason, frozen.errors);
+    return frozen as FrozenSend;
+  }
+
   /** The person speaks while holding the mic: words are timed as they are said, so Marks drawn between land between them. */
   personSay(space: string, text: string) {
     const entry = this.#entry(space);
@@ -918,15 +989,19 @@ export class Core {
   }
 
   /** Presses Send: freezes the person's strokes and changes and delivers the Send. */
-  personSend(space: string, o: { said?: string; trigger?: string; embedAnchors?: Record<string, unknown>[] } = {}) {
+  personSend(space: string, o: { said?: string; trigger?: string; region?: string; embedAnchors?: Record<string, unknown>[] } = {}) {
     const entry = this.#entry(space);
+    // A Region's own Send button: only what is inside that Region.
+    const region = o.region ? this.#findForPerson(entry, o.region) : undefined;
+    if (region && region.type !== "region") throw fail("invalid_input", `'${o.region}' is a ${region.type}, not a Region.`, "Pass the Region whose Send button the person pressed.");
     const send = `s_${randomBytes(5).toString("hex")}`;
     const words = this.#said.get(entry.name) ?? [];
     const hints = this.#hints.get(entry.name) ?? [];
     const said = o.said ?? (words.length ? words.map((w) => w.text).join(" ") : undefined);
     const raw = {
       send,
-      trigger: o.trigger ?? (said ? "voice" : "button"),
+      trigger: region ? "region" : (o.trigger ?? (said ? "voice" : "button")),
+      ...(region ? { region: region.id } : {}),
       viewport: entry.viewport,
       ...(said ? { said } : {}),
       ...(words.length ? { words } : {}),
@@ -944,6 +1019,24 @@ export class Core {
     return { send, recipients: recipients.map((r) => this.#names.get(r) ?? r) };
   }
 }
+
+/** Single-stroke shapes for the dev person's handwriting, in a 12×24 box (y down). */
+const GLYPHS: Record<string, number[][][]> = {
+  "0": [[[6, 0], [1, 4], [0, 12], [1, 20], [6, 24], [11, 20], [12, 12], [11, 4], [6, 0]]],
+  "1": [[[3, 4], [7, 0], [7, 24]]],
+  "2": [[[0, 5], [4, 0], [9, 0], [12, 5], [10, 11], [0, 24], [12, 24]]],
+  "3": [[[0, 2], [10, 1], [5, 10], [11, 15], [9, 23], [0, 22]]],
+  "4": [[[9, 24], [9, 0], [0, 16], [12, 16]]],
+  "5": [[[12, 0], [2, 0], [1, 10], [8, 9], [12, 16], [8, 24], [0, 22]]],
+  "6": [[[11, 1], [4, 5], [0, 15], [2, 23], [9, 23], [12, 17], [8, 12], [1, 15]]],
+  "7": [[[0, 0], [12, 0], [4, 24]]],
+  "8": [[[6, 12], [1, 6], [6, 0], [11, 6], [6, 12], [0, 18], [6, 24], [12, 18], [6, 12]]],
+  "9": [[[11, 7], [6, 12], [1, 7], [6, 0], [11, 5], [11, 14], [8, 24]]],
+  "(": [[[8, -2], [3, 6], [2, 14], [4, 22], [8, 28]]],
+  ")": [[[4, -2], [9, 6], [10, 14], [8, 22], [4, 28]]],
+  "/": [[[11, -2], [1, 26]]],
+  y: [[[0, 8], [6, 18]], [[12, 8], [3, 32]]],
+};
 
 const TEXT_MIME = /^(text\/|application\/(json|xml|yaml|x-yaml|javascript|typescript|x-sh|toml|sql|csv|x-ndjson))/;
 const TEXT_EXT = /\.(txt|md|markdown|csv|tsv|json|ya?ml|toml|xml|html?|css|js|mjs|ts|tsx|jsx|py|rb|go|rs|java|kt|swift|c|h|cpp|hpp|sh|sql|log|ini|cfg|env)$/i;

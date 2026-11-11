@@ -353,16 +353,16 @@ const COMMANDS: Record<string, Cmd> = {
   },
   "dev person": {
     usage:
-      "reflex dev person circle|underline|strike <space> <element> | arrow <space> <from> <to> | write <space> <near> <text> [--confidence <0-1>] | say <space> <words> | move <space> <element> --by dx,dy | add-file <space> <path> [--near <element>] | tap <space> <element> [--on tap|long_press|…] [--values '<JSON>'] | revert <space> <agent> | history <space> | send <space> [--said <text>]",
+      "reflex dev person circle|underline|strike <space> <element> | arrow <space> <from> <to> | write <space> <near> <text> [--confidence <0-1>] | write-line <space> <region> <text> [--confidence <0-1>] | say <space> <words> | move <space> <element> --by dx,dy | add-file <space> <path> [--near <element>] | tap <space> <element> [--on tap|long_press|…] [--values '<JSON>'] | revert <space> <agent> | history <space> | send <space> [--said <text>] [--region <region>]",
     summary: "Act as the person without an iPad (a Link started with --dev): mark, write, speak, add files, tap, revert, press Send",
-    flags: ["said", "trigger", "confidence", "by", "near", "on", "values"],
+    flags: ["said", "trigger", "confidence", "by", "near", "on", "values", "region"],
     run: async (p, f) => {
       const [action, space, target, extra] = p;
-      const actions = ["circle", "underline", "strike", "arrow", "write", "say", "move", "add-file", "tap", "revert", "history", "send"];
+      const actions = ["circle", "underline", "strike", "arrow", "write", "write-line", "say", "move", "add-file", "tap", "revert", "history", "send"];
       const usage = COMMANDS["dev person"].usage;
       if (!actions.includes(action ?? "")) throw new Usage(`Usage: ${usage}`);
       if (!space) throw new Usage("Missing <space>.");
-      if (!["send", "history"].includes(action) && !target) throw new Usage(`Missing <${action === "say" ? "words" : action === "add-file" ? "path" : action === "revert" ? "agent" : "element"}>.`);
+      if (!["send", "history"].includes(action) && !target) throw new Usage(`Missing <${action === "say" ? "words" : action === "add-file" ? "path" : action === "revert" ? "agent" : action === "write-line" ? "region" : "element"}>.`);
       const args: Record<string, unknown> = { space, target, said: f.said, trigger: f.trigger };
       if (action === "arrow") {
         if (!extra) throw new Usage("Missing <to>.");
@@ -373,6 +373,12 @@ const COMMANDS: Record<string, Cmd> = {
         args.text = p.slice(3).join(" ");
         if (f.confidence !== undefined) args.confidence = Number(f.confidence);
       }
+      if (action === "write-line") {
+        if (!extra) throw new Usage("Missing <text>.");
+        args.text = p.slice(3).join(" ");
+        if (f.confidence !== undefined) args.confidence = Number(f.confidence);
+      }
+      if (action === "send" && typeof f.region === "string") args.region = f.region;
       if (action === "say") args.text = p.slice(2).join(" ");
       if (action === "move") {
         const by = typeof f.by === "string" ? f.by.split(",").map(Number) : [];
