@@ -37,6 +37,8 @@ Options
   --name <name>   This device's name, on first start
   --port <n>      LAN port (default 7420; any free port if taken)
   --dev           Allow acting as the person without an iPad
+  --web-port <n>  The web viewer's port on 127.0.0.1 (default 7421; any free one if taken)
+  --no-web        Don't serve the web viewer
   --json          Machine-readable output
   --no-prompt     Don't use this terminal for pairing codes or questions
   -h, --help      Show this help
@@ -51,6 +53,8 @@ const { values: flags, positionals: args } = parseArgs({
     json: { type: "boolean", default: false },
     "no-prompt": { type: "boolean", default: false },
     dev: { type: "boolean", default: false },
+    "web-port": { type: "string" },
+    "no-web": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -68,7 +72,7 @@ async function admin<T>(method: string, params: Record<string, unknown> = {}): P
 }
 
 async function start(): Promise<void> {
-  const link = new Link({ dir, name: flags.name, port: flags.port ? Number(flags.port) : undefined, prompt: !flags["no-prompt"], dev: flags.dev });
+  const link = new Link({ dir, name: flags.name, port: flags.port ? Number(flags.port) : undefined, prompt: !flags["no-prompt"], dev: flags.dev, webPort: flags["no-web"] ? null : flags["web-port"] ? Number(flags["web-port"]) : undefined });
   await link.start();
   const stop = async (sig: string): Promise<void> => {
     console.log(`link: ${sig}, stopping`);

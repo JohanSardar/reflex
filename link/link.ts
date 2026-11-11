@@ -32,6 +32,7 @@ import { Coordinator } from "./sync/coordinator.ts";
 import { startAgentHost } from "./agent-host.ts";
 import { socketPath as agentSocketPath } from "../agent/src/host/rpc.ts";
 import { LanTransport } from "./transports/lan.ts";
+import { startWebViewer } from "./web.ts";
 
 export class LinkError extends Error {
   reason: string;
@@ -56,6 +57,8 @@ export interface LinkOptions {
   prompt?: boolean;
   /** Allow acting as the person without an iPad (`dev` commands, `reflex dev person`). */
   dev?: boolean;
+  /** The web viewer's loopback port (default 7421; any free one if taken). null turns it off. */
+  webPort?: number | null;
   log?: (msg: string) => void;
 }
 
@@ -77,6 +80,7 @@ export class Link {
   #server: Server | null = null;
   #agentServer: Server | null = null;
   #db!: DatabaseSync;
+  #web: Awaited<ReturnType<typeof startWebViewer>> | null = null;
   #questions: AgentRecord[] = [];
   #rl: ReturnType<typeof createInterface> | null = null;
   #ports: Record<string, number> = {};
@@ -143,6 +147,8 @@ export class Link {
     this.#agentServer = host.server;
     this.#ports = (await this.#coord.start()).ports;
     await this.#listen();
+    if (this.#opts.webPort !== null)
+      this.#web = await startWebViewer({ store: this.#store, assets: this.#assets, catalog: this.#catalog, person: () => this.#id.person, port: this.#opts.webPort ?? 7421, log: this.#log });
     writeFileSync(
       this.home.runtime,
       JSON.stringify({ pid: process.pid, socket: this.home.socket, lan: this.#ports.lan, device: this.#id.key.device }, null, 2),
@@ -152,6 +158,8 @@ export class Link {
         `${rec.replayed} journal entries replayed, ${this.#inbox.all().length} Sends in the Inbox, ` +
         `${devices.length} paired devices · LAN :${this.#ports.lan} · ${this.home.socket}`,
     );
+    // Like a pairing code, the viewer's address carries its key and is shown only here.
+    if (this.#web) this.#log(`web viewer: ${this.#web.url}`);
     if (this.#opts.prompt && process.stdin.isTTY) this.#terminal();
   }
 
@@ -202,6 +210,7 @@ export class Link {
 
   async stop(): Promise<void> {
     this.#rl?.close();
+    await this.#web?.close();
     await new Promise<void>((r) => (this.#agentServer ? this.#agentServer.close(() => r()) : r()));
     await this.#coord.stop();
     await new Promise<void>((r) => (this.#server ? this.#server.close(() => r()) : r()));

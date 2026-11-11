@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>reflex dev</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="/icon.svg">
+</head>
+<body class="dev">
+  <header>
+    <span class="brand">reflex dev</span>
+    <span id="title" class="title"></span>
+    <span id="checks" class="muted"></span>
+    <span id="status" class="status connecting">Connecting…</span>
+  </header>
+  <main id="canvas" class="canvas pen"></main>
+  <aside class="side">
+    <div class="tabs">
+      <button data-pane="reads" class="on">What the Agent reads</button>
+      <button data-pane="send">What a Send produces</button>
+      <button data-pane="lints">Lints and Anchors</button>
+    </div>
+    <section id="pane-reads" class="pane on"></section>
+    <section id="pane-send" class="pane"><p class="muted">Draw on the canvas with the mouse (Pen on), then press Send.</p></section>
+    <section id="pane-lints" class="pane"></section>
+    <div class="toolbar">
+      <button id="pen" class="btn on" title="Draw with the mouse; off to pan and use Embeds">Pen</button>
+      <input id="said" type="text" placeholder="What you'd say (optional)">
+      <button id="send" class="btn primary">Send</button>
+      <button id="save" class="btn" title="Save the last Send's Marks as a conformance example">Save example</button>
+      <button id="reset" class="btn" title="Start over on a fresh Space">Reset</button>
+    </div>
+  </aside>
+  <div id="toast" class="toast"></div>
+  <script type="module" src="/src/dev.ts"></script>
+</body>
+</html>

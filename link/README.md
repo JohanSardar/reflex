@@ -25,6 +25,7 @@ The Link runs in its terminal. Enter shows a new pairing code; when an Agent ask
 | `transports/` | the transport seam, and LAN: TCP frames plus Bonjour `_reflex-link._tcp` |
 | `pairing/` | device keys and the handshake, QR pairing offers, the signed control catalog |
 | `rpc/client.ts` | the client for the local RPC |
+| `web.ts` | the person's web viewer on 127.0.0.1 (`apps/web`); its address and key are printed in this terminal at start |
 | `bin/reflex-link.ts` | the command |
 
 ## Guarantees
@@ -37,6 +38,7 @@ The Link runs in its terminal. Enter shows a new pairing code; when an Agent ask
 - **Pairing:** the QR code carries the offering device's key, a single-use secret valid for 10 minutes, its addresses, and its person. A device that holds nothing yet becomes that person's device (ADR-0008).
 - **One path per peer.** If both sides dial at once, both keep the path dialed by the lower device ID. Sync state is reset on every new binding, so anti-entropy runs after each reconnect.
 - **Agent approval.** Agents reach the Link on `agent.sock` with `rpc.key` and a credential they keep (`agents/*.cred`, 0600). The first time, the Link asks the person: Allow on an iPad that paired by scanning this Link's code, or `y` in the Link's terminal. Nothing else can approve: the admin RPC (`admin.key`) can deny or revoke but never approve, and another Link can't decide either. The Agent sees no Space content until it is approved. The decision is kept in the signed control catalog against the credential's hash, and records whose signature doesn't verify are ignored.
+- **The web viewer reads and never writes.** Its key is new at every start, held in memory and shown only on the Link's terminal; what a browser sends goes through `receive_sync_message_checked` with no writers, so a change from it is refused and logged. `--web-port <n>` moves it, `--no-web` turns it off.
 - **Received changes are checked.** The kernel tries a peer's changes on a fork first and applies them only if that peer may make them: an iPad writes only as its person (its own Ink, its Sends, its removals), a paired Link also on behalf of Agents. A rejected message is logged and the session is closed. The Agent layer writes as each Agent through the kernel's own checks.
 
 ## Not here yet

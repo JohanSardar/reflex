@@ -11,6 +11,7 @@ import { basename, join, resolve } from "node:path";
 import { Client, type CallResult } from "../host/client.ts";
 import { credential, NoLink, type Who } from "../host/rpc.ts";
 import { TOOLS, description } from "../protocol.ts";
+import { authorCommands } from "../author/commands.ts";
 
 type Flags = Record<string, string | boolean>;
 type Cmd = { usage: string; summary: string; flags?: string[]; run: (pos: string[], f: Flags) => Promise<number> };
@@ -249,6 +250,10 @@ const COMMANDS: Record<string, Cmd> = {
   },
 };
 
+// The author kit, its own group: offline, no Link needed.
+const AUTHOR = authorCommands(Usage);
+Object.assign(COMMANDS, AUTHOR);
+
 async function openSpace(p: string[], f: Flags, create: boolean, usage: string) {
   const space = need(p, 0, "space", usage);
   const args: Record<string, unknown> = { space };
@@ -264,7 +269,8 @@ async function openSpace(p: string[], f: Flags, create: boolean, usage: string) 
 }
 
 function help(): string {
-  const rows = Object.entries(COMMANDS).map(([k, c]) => `  reflex ${k.padEnd(16)} ${c.summary}`);
+  const rows = Object.entries(COMMANDS).filter(([k]) => !(k in AUTHOR)).map(([k, c]) => `  reflex ${k.padEnd(16)} ${c.summary}`);
+  const author = Object.entries(AUTHOR).map(([k, c]) => `  reflex ${k.padEnd(16)} ${c.summary}`);
   return [
     `reflex ${VERSION}: the Reflex canvas from a shell`,
     "",
@@ -272,6 +278,9 @@ function help(): string {
     "",
     "  reflex link             Start the Reflex Link and show a pairing code (reflex link --help)",
     ...rows,
+    "",
+    "Author kit (offline, no Link needed):",
+    ...author,
     "",
     "Global flags:",
     "  --json            Print exactly one JSON document",
@@ -291,7 +300,7 @@ function parse(argv: string[]) {
     else if (a.startsWith("--")) {
       const [k, v] = a.slice(2).split(/=(.*)/s, 2);
       if (v !== undefined) f[k] = v;
-      else if (["json", "help", "create", "look", "version"].includes(k)) f[k] = true;
+      else if (["json", "help", "create", "look", "version", "no-open"].includes(k)) f[k] = true;
       else if (i + 1 < argv.length) f[k] = argv[++i];
       else f[k] = true;
     } else pos.push(a);
