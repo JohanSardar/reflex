@@ -11,6 +11,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Core, ReflexError } from "../../agent/src/capabilities/index.ts";
 import { TOOLS, description, inputSchema, instructions } from "../../agent/src/protocol.ts";
+import { serveApp, toolMeta } from "../../agent/src/surfaces/app.ts";
 import type { Renderer } from "../../agent/src/render.ts";
 import type { Assets, Bounds, Delivery, FrozenSend, Inbox, SpaceEntry, SpaceStore, WaitFilter, WriteOrigin } from "../../agent/src/store.ts";
 import type { Bucket, Sql } from "./ports.ts";
@@ -252,11 +253,14 @@ export class CloudSession {
     const server = new Server(
       { name: "reflex-relay", version: "0.1.0" },
       // The SDK validates only elicitation results with this; the Agent layer validates tool input itself (Ajv).
-      { capabilities: { tools: {} }, instructions, jsonSchemaValidator: { getValidator: () => (v: unknown) => ({ valid: true, data: v, errorMessage: undefined }) } as never },
+      { capabilities: { tools: {}, resources: {} }, instructions, jsonSchemaValidator: { getValidator: () => (v: unknown) => ({ valid: true, data: v, errorMessage: undefined }) } as never },
     );
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: TOOLS.map((t) => ({ name: t, description: description(t), inputSchema: inputSchema(t) })),
+      tools: TOOLS.map((t) => ({ name: t, description: description(t), inputSchema: inputSchema(t), ...(toolMeta(t) ? { _meta: toolMeta(t) } : {}) })),
     }));
+    // The MCP App view for chat hosts (claude.ai, ChatGPT): it holds wait_for_user on this session's Inbox and
+    // posts each Send to the chat as a new turn (agent/src/surfaces/app.ts).
+    serveApp(server);
     server.setRequestHandler(CallToolRequestSchema, async (r, extra) => {
       if (Date.now() >= this.grant.expires) throw new Error("This grant has expired. Ask the person for a new one.");
       this.catchUp();

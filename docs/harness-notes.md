@@ -133,6 +133,42 @@ one interactive session in tmux against `reflex link --dev`.
   A new `claude -p` session read it with `wait_for_user(timeout_s: 0)`, flagged
   `redelivered: true`.
 
+## Webhook and MCP App (push), 2026-11-11
+
+Measured with T17's adapters against `reflex link --dev`.
+
+- **Webhook.** `reflex adapters add webhook --url http://127.0.0.1:8790/ --agent "Webhook Claude"`
+  printed the target and its `whsec_…` secret once. The person circled "Auth service" and
+  pressed Send; the receiver acknowledged the signed POST 43 ms after the push began. The receiver
+  (`agent/examples/webhook-claude.ts`) checked the signature, answered 202 and ran
+  `claude -p` (Claude Code 2.1.322) with `reflex mcp` under the same Agent name. Claude
+  answered beside the circle with `apply(in_reply_to)`, and its run ended 32 s after the push; the receipt went
+  `delivered` → `acknowledged`, and `reflex link status` listed the attempt as `pushed`.
+- **Webhook killed mid-push.** The receiver was frozen (SIGSTOP), the person pressed Send,
+  and the receiver was killed with SIGKILL while the POST was open. Try 1 failed
+  `ECONNRESET`, tries 2 and 3 (after 1 s and 5 s) `ECONNREFUSED`, and the receipt turned
+  `failed`. `reflex wait --timeout 0` then returned the Send (`redelivered: false`).
+- **MCP App, reference host.** The MCP Apps reference host (`ext-apps/examples/basic-host`,
+  2.1.0) against `https://reflex.eilmer.si/mcp`, signed in through the Relay's OAuth with a
+  grant typed into the Link. The reference host can't sign in, so a local proxy added the
+  bearer token. `open_space` rendered `ui://reflex/space`. The view drew the Space with
+  `look` through the host and held `wait_for_user(timeout_s: 25)` in a loop. The person
+  circled "Auth service" and pressed Send; the view got the Bundle and `ui/message` put it
+  in the chat as a user message, with the crop as an image block (the host took both). The
+  Agent's `apply(in_reply_to)` through the same host reached the Link through the log.
+- **MCP App, local.** A stdio host that declares `extensions["io.modelcontextprotocol/ui"]`
+  (as Claude Desktop does) gets an `mcp-app` push target, listed `live` in `reflex link
+  status`. A Send pressed while the view was between waits was pushed, held by `reflex mcp`
+  and given to the view's next `wait_for_user` 1.0 s later. One that no wait asked for
+  expired at the 5 s deadline and stayed in the Inbox.
+- **Live or read-only (SPEC §18).** Live, with limits. A view reaches its server only through
+  the host's `tools/call`, so it can stay current by polling: here `look` every 20 s and
+  after each Send, and a held `wait_for_user`. The host can't push to it, and it can't draw:
+  a view has no Ink, so the person still marks up on the iPad or the web viewer. Holding a
+  tool call open from a view works in the reference host. Whether claude.ai and ChatGPT
+  allow a 25 s view call, or keep a view polling once it scrolls away, wasn't measured:
+  claude.ai couldn't be reached from this machine.
+
 ## What this decides
 
 **Timeout policy.**

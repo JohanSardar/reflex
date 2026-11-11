@@ -20,9 +20,12 @@ import type { SpaceStore } from "./storage/journal.ts";
 import { recipient, route } from "./routing.ts";
 import { Watcher } from "./watch.ts";
 import { ClaudeChannel } from "./adapters/claude-channel.ts";
+import { McpApp } from "./adapters/mcp-app.ts";
+import { Webhook } from "./adapters/webhook.ts";
 import { Dispatcher } from "./adapters/dispatch.ts";
 import { PushStore } from "./adapters/store.ts";
 import type { PushTarget } from "./adapters/contract.ts";
+import { randomBytes } from "node:crypto";
 import { Ajv2020 } from "ajv/dist/2020.js";
 
 /** The Agent layer's view of the Link's Spaces. */
@@ -183,7 +186,7 @@ export interface AgentHostOptions {
 /** How long a first call waits for the person to approve the Agent before it returns `not_approved`. */
 const APPROVAL_WAIT_MS = 120_000;
 /** After the person turns an Agent away, how long before it may ask them again. */
-const REASK_MS = Number(process.env.REFLEX_REASK_S ?? 600) * 1000;
+const reaskMs = () => Number(process.env.REFLEX_REASK_S ?? 600) * 1000;
 
 export async function startAgentHost(o: AgentHostOptions) {
   const spaces = new LinkSpaces(o.store, o.db, o.inbox);
@@ -246,6 +249,7 @@ export async function startAgentHost(o: AgentHostOptions) {
       // Only the person can let an Agent in, so the way back for one they turned away is to ask them again,
       // but not on every call: once per REASK_MS, so an Agent that keeps calling can't keep asking.
       const since = Date.now() - (a.decided_at ?? 0);
+      const REASK_MS = reaskMs();
       if (since < REASK_MS) {
         const wait = Math.ceil((REASK_MS - since) / 60_000);
         throw new ReflexError("rate_limited", [
@@ -273,9 +277,17 @@ export async function startAgentHost(o: AgentHostOptions) {
   // Push Send Adapters (link/adapters/): targets, secrets and attempts are kept here, outside the adapters.
   const pushes = new PushStore(o.db, o.home);
   const channel = new ClaudeChannel();
-  const adapters = [channel];
+  const app = new McpApp();
+  const webhook = new Webhook();
+  const adapters = [channel, app, webhook];
+  // Adapters whose live end is a surface's connection (a `listen` frame), and how each reports opening.
+  const surfaces = new Map([
+    [channel.name, { adapter: channel, event: "channel", fix: "Connect through `reflex mcp --channel`." }],
+    [app.name, { adapter: app, event: "app", fix: "Connect through `reflex mcp` from an MCP Apps host." }],
+  ]);
   const ajv = new Ajv2020({ strict: false });
   const validConfig = new Map(adapters.map((a) => [a.name, ajv.compile(a.config)]));
+  const invalid = (msg: string, fix: string) => new ReflexError("invalid_input", [{ code: "invalid_input", msg, fix }]);
   const dispatcher = new Dispatcher({
     inbox: o.inbox,
     store: pushes,
@@ -293,20 +305,44 @@ export async function startAgentHost(o: AgentHostOptions) {
   dispatcher.start();
 
   const listen = (l: Listener): string => {
-    if (l.adapter !== channel.name)
-      throw new ReflexError("invalid_input", [{ code: "invalid_input", msg: `No push adapter '${l.adapter}'.`, fix: `Use ${adapters.map((a) => a.name).join(", ")}.` }]);
+    const s = surfaces.get(l.adapter);
+    if (!s) throw invalid(`No push adapter '${l.adapter}' takes a connection.`, `Use ${[...surfaces.keys()].join(" or ")}.`);
     const valid = validConfig.get(l.adapter)!;
-    if (!valid(l.config))
-      throw new ReflexError("invalid_input", [{ code: "invalid_input", msg: `The ${l.adapter} config is not valid: ${ajv.errorsText(valid.errors)}.`, fix: "Connect through `reflex mcp --channel`." }]);
+    if (!valid(l.config)) throw invalid(`The ${l.adapter} config is not valid: ${ajv.errorsText(valid.errors)}.`, s.fix);
     const target = pushes.upsert({ agent: l.who.agent, adapter: l.adapter, instance: l.client, config: l.config, callback: "mcp" });
-    channel.attach(target, l, () => {
+    s.adapter.attach(target, l, () => {
       pushes.touch(target.id);
-      o.log("channel_closed", { target: target.id, agent: l.who.name });
+      o.log(`${s.event}_closed`, { target: target.id, agent: l.who.name });
     });
-    o.log("channel_open", { target: target.id, agent: l.who.name, config: l.config });
+    o.log(`${s.event}_open`, { target: target.id, agent: l.who.name, config: l.config });
     return target.id;
   };
 
-  const server = await serveHost({ core, socket: o.socket, token: o.token, authorize, devPerson: o.devPerson, listen, log: o.log });
+  const shown = (t: PushTarget) => ({ target: t.id, adapter: t.adapter, config: t.config, callback: t.callback, live: adapters.some((a) => a.name === t.adapter && a.liveSince(t) !== undefined), created_at: t.created_at });
+  // `reflex adapters`: an Agent's own webhook targets. Only the Agent itself manages them, once approved.
+  const manage = (who: Identity, action: string, args: Record<string, unknown>): Record<string, any> => {
+    const mine = pushes.all().filter((t) => t.agent === who.agent);
+    if (action === "list") return { ok: true, targets: mine.map(shown) };
+    if (action === "remove") {
+      const t = mine.find((x) => x.id === args.target);
+      if (!t) throw invalid(`You have no push target '${String(args.target)}'.`, "List yours with `reflex adapters list`.");
+      pushes.remove(t.id);
+      o.log("push_target_removed", { target: t.id, agent: who.name, adapter: t.adapter });
+      return { ok: true, removed: t.id };
+    }
+    if (action !== "add") throw invalid(`Unknown adapters action '${action}'.`, "Use add, list or remove.");
+    if (args.adapter !== webhook.name) throw invalid(`'${String(args.adapter)}' can't be added by hand.`, `Add a ${webhook.name}; ${[...surfaces.keys()].join(" and ")} targets open on their own from \`reflex mcp\`.`);
+    const config = (args.config ?? {}) as Record<string, unknown>;
+    const valid = validConfig.get(webhook.name)!;
+    if (!valid(config)) throw invalid(`The webhook config is not valid: ${ajv.errorsText(valid.errors)}.`, "Pass --url https://… (or http:// for a receiver on this machine).");
+    const t = pushes.upsert({ agent: who.agent, adapter: webhook.name, instance: String(config.url), config, callback: "tools" });
+    // A new secret each time a webhook is added; adding the same URL again rotates it.
+    const secret = `whsec_${randomBytes(24).toString("base64url")}`;
+    pushes.setSecret(t.id, secret);
+    o.log("push_target_added", { target: t.id, agent: who.name, adapter: webhook.name, url: config.url });
+    return { ok: true, ...shown(pushes.get(t.id)!), secret, next: "Keep the secret in your receiver to check each request's reflex-signature. It is not shown again; adding the same URL again makes a new one." };
+  };
+
+  const server = await serveHost({ core, socket: o.socket, token: o.token, authorize, devPerson: o.devPerson, listen, adapters: manage, log: o.log });
   return { core, server, pushes, dispatcher, live: (t: PushTarget) => adapters.some((a) => a.name === t.adapter && a.liveSince(t) !== undefined) };
 }

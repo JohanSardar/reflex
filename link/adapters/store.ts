@@ -2,7 +2,7 @@
 // outside any adapter (link/adapters/contract.ts). Targets and attempts live in
 // the Link's SQLite database; secrets in 0600 files under `<home>/adapters/`.
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { PushTarget } from "./contract.ts";
@@ -84,6 +84,12 @@ export class PushStore {
 
   all(): PushTarget[] {
     return (this.#db.prepare("SELECT * FROM push_targets ORDER BY seen_at DESC").all() as unknown as Row[]).map((r) => this.#target(r));
+  }
+
+  /** Removes a target and its secret. Its attempts stay, as history. */
+  remove(id: string): boolean {
+    rmSync(this.#secretFile(id), { force: true });
+    return Number(this.#db.prepare("DELETE FROM push_targets WHERE id = ?").run(id).changes) > 0;
   }
 
   touch(id: string, now = Date.now()) {
