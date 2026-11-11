@@ -1187,6 +1187,12 @@
                   "pattern": "^[a-z0-9.-]{1,253}$"
                 },
                 "maxItems": 32
+              },
+              "source": {
+                "description": "For an MCP App view: the 'ui://' resource template was read from. Its calls to that server's tools are denied, with a note on the Embed, unless the person allows the server; then they reach you as a tap.",
+                "type": "string",
+                "maxLength": 4096,
+                "pattern": "^ui://"
               }
             },
             "required": [

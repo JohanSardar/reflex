@@ -1,5 +1,6 @@
 import OSLog
 import PencilKit
+import ReflexEmbed
 import ReflexInput
 import ReflexLink
 import ReflexRender
@@ -30,6 +31,8 @@ final class SpaceSession {
     private(set) var panelValues: [String: [String: JSONValue]] = [:]
     /// Something to tell the person, shown briefly.
     var notice: String?
+    /// The Space's live HTML Embeds, on the canvas and in Panels.
+    let embeds = EmbedHost()
 
     @ObservationIgnored private let link: LinkSync
     /// Kernel history entries made by each canvas action, so one canvas undo undoes all of them.
@@ -44,6 +47,12 @@ final class SpaceSession {
     @ObservationIgnored private var panelTimer: Task<Void, Never>?
     @ObservationIgnored private var hintsTimer: Task<Void, Never>?
     @ObservationIgnored private var refusedAt = Date.distantPast
+    @ObservationIgnored private var seenLibrary = -1
+    /// Embed state saved since the last write, by Element, written once the Embed pauses.
+    @ObservationIgnored private var statePatches: [String: [String: Any]] = [:]
+    @ObservationIgnored private var stateTimer: Task<Void, Never>?
+    /// Panel values entered here and not yet saved, by Element and component, so the scene doesn't overwrite them.
+    @ObservationIgnored private var unsavedPanel: [String: Set<String>] = [:]
 
     init(id: String, link: LinkSync) {
         self.id = id
@@ -69,11 +78,16 @@ final class SpaceSession {
             guard let self else { return }
             self.link.reportPresence(space: self.id, pen: down)
         }
+        embeds.onEvent = { [weak self] key, event in self?.embedEvent(key, event) }
         refresh()
     }
 
     /// Reads the scene again when the Space changed, here or on the Link.
     func refresh() {
+        if let lib = link.library, lib.revision != seenLibrary {
+            seenLibrary = lib.revision
+            embeds.templates = Dictionary(link.embedTemplates().map { ($0.name, EmbedHost.Template(html: $0.html, allow: $0.allow, source: $0.source)) }) { a, _ in a }
+        }
         let r = link.revision[id] ?? 0
         guard r != seen, let json = link.scene(id) else { return }
         seen = r
@@ -90,6 +104,20 @@ final class SpaceSession {
         if !missing.isEmpty { next.merge(link.strokes(id, ids: missing)) { a, _ in a } }
         if next.keys.sorted() != remoteInk.keys.sorted() { remoteInk = next }
         timeline = link.timeline(id)
+        // Panel values saved on any device (the Element's `values`), except what is being entered here.
+        for e in scene.elements {
+            guard let saved = e.values?.object else { continue }
+            for (_, panelValues) in saved {
+                for (k, v) in panelValues.object ?? [:] where !(unsavedPanel[e.id]?.contains(k) ?? false) {
+                    self.panelValues[e.id, default: [:]][k] = v
+                }
+            }
+        }
+        var live = Set(scene.elements.filter { $0.type == "embed" }.map(\.id))
+        if let (eid, p) = panel {
+            for c in p.components where c.kind == "embed" { live.insert(Self.panelKey(eid, c)) }
+        }
+        embeds.keep(live)
     }
 
     var localInk: Set<String> { Set(ink.strokes.map(\.id)) }
@@ -249,8 +277,8 @@ final class SpaceSession {
     /// everything else goes to the kernel as a raw Send naming the Element and the
     /// trigger, and the kernel decides what it is: a full Send (`send`), a tap that
     /// claims nothing (`notify`), or an action the Link runs (`set`, `apply_recipe`).
-    func fire(_ e: SceneElement, on trigger: String, panel: String? = nil, values: [String: Any]? = nil, strokes: [String] = []) {
-        let behaviors = e.behaviors(on: trigger).map(\.1)
+    func fire(_ e: SceneElement, on trigger: String, event: String? = nil, payload: [String: Any]? = nil, panel: String? = nil, values: [String: Any]? = nil, strokes: [String] = []) {
+        let behaviors = e.behaviors(on: trigger).map(\.1).filter { trigger != "embed_event" || $0.event == event }
         guard !behaviors.isEmpty else { return }
         log.info("Behavior \(trigger, privacy: .public) on \(e.id, privacy: .public): \(behaviors.map(\.action), privacy: .public)")
         for b in behaviors where b.action == "open_panel" {
@@ -258,6 +286,8 @@ final class SpaceSession {
         }
         guard behaviors.contains(where: { $0.action != "open_panel" }) else { return }
         var fired: [String: Any] = ["element": e.id, "on": trigger]
+        if let event { fired["event"] = event }
+        if let payload, !payload.isEmpty { fired["payload"] = payload }
         if let panel { fired["panel"] = panel }
         if let values { fired["values"] = values }
         if behaviors.contains(where: { $0.action == "send" }) {
@@ -296,12 +326,23 @@ final class SpaceSession {
     func setPanelValue(_ value: JSONValue, for key: String) {
         guard let (eid, p) = panel else { return }
         panelValues[eid, default: [:]][key] = value
+        unsavedPanel[eid, default: []].insert(key)
         panelTimer?.cancel()
         panelTimer = Task { [weak self] in
             try? await Task.sleep(for: .seconds(0.8))
             guard !Task.isCancelled, let self else { return }
+            self.savePanel(eid, p)
             self.panelChanged(eid, p)
         }
+    }
+
+    /// Saves the values entered in a Panel on its Element (`set_state` with the Panel's ID):
+    /// they sync to the person's other devices, survive a reload and go with the next Send.
+    private func savePanel(_ eid: String, _ p: Panel) {
+        guard let keys = unsavedPanel.removeValue(forKey: eid), !keys.isEmpty else { return }
+        let values = (panelValues[eid] ?? [:]).filter { keys.contains($0.key) }.mapValues(\.any)
+        let r = link.intent(id, ["intent": "set_state", "id": eid, "panel": p.id ?? "panel", "values": values])
+        if r?["ok"] as? Bool == false { say("Couldn't save the Panel: \((r?["errors"] as? [[String: Any]])?.first?["msg"] as? String ?? "it was refused")") }
     }
 
     /// A Panel button counts as a value (`true` under its ID) and fires `panel_change` now.
@@ -315,16 +356,105 @@ final class SpaceSession {
 
     private func panelChanged(_ eid: String, _ p: Panel) {
         guard let el = scene.elements.first(where: { $0.id == eid }) else { return }
-        guard !el.behaviors(on: "panel_change").isEmpty else {
-            say("This Panel doesn't send its values anywhere")
-            return
-        }
+        // Without a panel_change Behavior the values still go with the next Send.
+        guard !el.behaviors(on: "panel_change").isEmpty else { return }
         fire(el, on: "panel_change", panel: p.id, values: (panelValues[eid] ?? [:]).mapValues(\.any))
     }
 
     func panelValue(_ key: String?) -> JSONValue? {
         guard let key, let (eid, _) = panel else { return nil }
         return panelValues[eid]?[key]
+    }
+
+    // MARK: Embeds
+
+    /// An Embed in a Panel is keyed by its Element and component.
+    static func panelKey(_ element: String, _ c: Panel.Component) -> String { "panel|\(element)|\(c.id)" }
+
+    /// What an Embed did through its bridge. Its state is saved on its Element (an
+    /// Embed in a Panel saves it as its component's value); `notify` becomes a tap for
+    /// the Agent; `emit` fires the Element's `embed_event` Behaviors.
+    private func embedEvent(_ key: String, _ event: EmbedHost.Event) {
+        let parts = key.split(separator: "|", maxSplits: 2).map(String.init)
+        let inPanel = parts.count == 3 && parts[0] == "panel"
+        let eid = inPanel ? parts[1] : key
+        guard let el = scene.elements.first(where: { $0.id == eid }) else { return }
+        switch event {
+        case .setState(let patch):
+            if inPanel {
+                guard let (open, _) = panel, open == eid else { return }
+                var state = panelValues[eid]?[parts[2]]?.object ?? [:]
+                for (k, v) in patch { state[k] = v is NSNull ? nil : JSONValue(any: v) }
+                setPanelValue(.object(state), for: parts[2])
+            } else {
+                statePatches[eid, default: [:]].merge(patch) { _, b in b }
+                stateTimer?.cancel()
+                stateTimer = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(0.3))
+                    guard !Task.isCancelled else { return }
+                    self?.saveEmbedState()
+                }
+            }
+        case .notify(let payload):
+            notify(el, payload)
+        case .toolCall(let server, let name, let arguments):
+            notify(el, ["tool_call": ["server": server, "name": name, "arguments": arguments]])
+        case .message(let message):
+            notify(el, ["message": message])
+        case .emit(let name, let payload):
+            if el.behaviors(on: "embed_event").contains(where: { $0.behavior.event == name }) {
+                fire(el, on: "embed_event", event: name, payload: payload)
+            } else {
+                log.info("Embed \(eid, privacy: .public) emitted \(name, privacy: .public), which no Behavior takes")
+            }
+        case .panel(let spec):
+            guard let data = try? JSONSerialization.data(withJSONObject: spec), let p = try? JSONDecoder().decode(Panel.self, from: data) else {
+                say("The Embed's Panel couldn't be read")
+                return
+            }
+            openPanel(p, on: el)
+        }
+    }
+
+    private func saveEmbedState() {
+        let pending = statePatches
+        statePatches = [:]
+        for (eid, patch) in pending {
+            let r = link.intent(id, ["intent": "set_state", "id": eid, "state": patch])
+            if r?["ok"] as? Bool == false { say("Couldn't save the Embed's state: \((r?["errors"] as? [[String: Any]])?.first?["msg"] as? String ?? "it was refused")") }
+        }
+    }
+
+    /// An Embed's "notify agent" event: a tap for the Agent that placed it, which claims nothing.
+    private func notify(_ el: SceneElement, _ payload: [String: Any]) {
+        saveEmbedState()
+        let raw: [String: Any] = ["send": Self.newSendID(), "trigger": "embed", "element": el.id, "payload": payload, "viewport": Self.ints(viewport())]
+        do {
+            _ = try link.freezeSend(id, raw: raw)
+            say("Told the Agent")
+        } catch {
+            say("Couldn't tell the Agent: \(error.localizedDescription)")
+        }
+    }
+
+    /// Asks each Embed a stroke was drawn on what the stroke points at, in the Embed's own pixels.
+    private func embedAnchors(_ strokes: [String]) async -> [[String: Any]] {
+        let frames = scene.elements.filter { $0.type == "embed" }.compactMap { e in e.frame.map { (e.id, $0) } }
+        guard !frames.isEmpty, !strokes.isEmpty else { return [] }
+        var out: [[String: Any]] = []
+        let bounds = Dictionary(ink.strokes.map { ($0.id, $0.bounds) }) { a, _ in a }
+        let points = link.strokes(id, ids: strokes)
+        for s in strokes {
+            guard let b = bounds[s], let pts = points[s] else { continue }
+            for (eid, f) in frames where f.intersects(b) {
+                let local = pts.map { [$0[0] - f.minX, $0[1] - f.minY] }
+                let lb = [b.minX - f.minX, b.minY - f.minY, b.width, b.height].map { Double(($0 * 10).rounded() / 10) }
+                if let anchor = await embeds.resolve(eid, points: local, bounds: lb) {
+                    out.append(["element": eid, "strokes": [s], "anchor": anchor])
+                }
+            }
+        }
+        return out
     }
 
     // MARK: Regions
@@ -458,6 +588,8 @@ final class SpaceSession {
             }
         }
         let pk = ink.pkStrokes(strokes)
+        saveEmbedState()
+        if let (eid, p) = panel { savePanel(eid, p) }
         // Sends freeze in the order they were made: the kernel claims every unsent
         // stroke, so a later Send must not freeze while this one reads handwriting.
         let previous = sending
@@ -465,6 +597,8 @@ final class SpaceSession {
             await previous?.value
             let hints = await Handwriting.hints(pk)
             if !hints.isEmpty { raw["hints"] = hints }
+            let anchors = await embedAnchors(strokes)
+            if !anchors.isEmpty { raw["embed_anchors"] = anchors }
             freeze(raw)
         }
     }

@@ -134,6 +134,15 @@ pub enum Op {
         target: String,
         fragments: Vec<AddOp>,
     },
+    /// A person saving what they did inside an Element: an Embed's
+    /// `reflex.element.setState(patch)` (`panel` unset, into `state`), or the
+    /// values entered in one of its Panels (into `values[panel]`). The patch is
+    /// merged key by key; a null value removes that key.
+    SetState {
+        target: String,
+        panel: Option<String>,
+        patch: Map<String, Value>,
+    },
 }
 
 /// Every Element type the protocol defines.
@@ -700,12 +709,46 @@ pub fn parse_intent(v: &Value) -> Result<Op, Vec<OpError>> {
             }
             target.map(|target| Op::ErasePrecise { target, fragments })
         }
+        "set_state" => {
+            let target = o.get("id").and_then(Value::as_str).map(String::from);
+            let panel = o.get("panel").and_then(Value::as_str).map(String::from);
+            let patch = o
+                .get(if panel.is_some() { "values" } else { "state" })
+                .and_then(Value::as_object)
+                .cloned();
+            for k in o.keys() {
+                if !["intent", "id", "panel", "state", "values"].contains(&k.as_str()) {
+                    errs.push(OpError::new(
+                        0,
+                        Code::InvalidInput,
+                        format!("set_state has no field '{k}'."),
+                        "Pass id and state, or id, panel and values.",
+                    ));
+                }
+            }
+            match (target, patch) {
+                (Some(target), Some(patch)) => Some(Op::SetState {
+                    target,
+                    panel,
+                    patch,
+                }),
+                _ => {
+                    errs.push(OpError::new(
+                        0,
+                        Code::InvalidInput,
+                        "set_state needs the Element's id and a state object (or a panel and its values).",
+                        "Pass {\"intent\": \"set_state\", \"id\": \"sim-1\", \"state\": {\"gravity\": 4.2}}.",
+                    ));
+                    None
+                }
+            }
+        }
         other => {
             errs.push(OpError::new(
                 0,
                 Code::InvalidInput,
                 format!("'{other}' is not a user intent."),
-                "Use add_stroke, add, patch, move, erase, erase_precise, undo or redo.",
+                "Use add_stroke, add, patch, move, erase, erase_precise, set_state, undo or redo.",
             ));
             None
         }

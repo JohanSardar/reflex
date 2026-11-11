@@ -23,8 +23,13 @@ use std::collections::{BTreeMap, BTreeSet};
 /// abandoned, the one undone most recently. An entry is abandoned when an
 /// action was made after it was undone, even on another device whose new
 /// action didn't see the undo (two devices of one person, concurrently).
+/// The history kind of saved Embed state and Panel values: kept for the next
+/// Send's changes, but not an undo step (a slider move isn't undone with the pen).
+pub const KEPT: &str = "set_state";
+
 pub fn redo_pick(entries: &[HistoryEntry]) -> Option<usize> {
-    let newest = |after: i64| entries.iter().any(|f| f.at > after);
+    // Saved Embed state and Panel values aren't undo steps, so they don't end a redo chain.
+    let newest = |after: i64| entries.iter().any(|f| f.at > after && f.kind != KEPT);
     entries
         .iter()
         .enumerate()

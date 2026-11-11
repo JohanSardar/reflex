@@ -1,0 +1,41 @@
+{
+  "type": "object",
+  "properties": {
+    "kind": { "type": "string", "enum": ["bar", "line", "scatter"], "description": "bar: one bar per label, grouped by series. line: points joined in order. scatter: points at numeric x and y." },
+    "title": { "type": "string", "maxLength": 120 },
+    "x_label": { "type": "string", "maxLength": 60 },
+    "y_label": { "type": "string", "maxLength": 60 },
+    "unit": { "type": "string", "maxLength": 12, "description": "Shown after each y value, such as '%' or 'ms'." },
+    "series": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 60 },
+          "rows": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "maxLength": 100, "description": "What a Mark on this bar or point reports in target.rows. Defaults to the label, or to x." },
+                "label": { "type": "string", "maxLength": 60, "description": "bar and line: the category on the x axis." },
+                "x": { "type": "number", "description": "scatter (and a line without labels): the x value." },
+                "y": { "type": "number" }
+              },
+              "required": ["y"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["name", "rows"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["kind", "series"],
+  "additionalProperties": false
+}

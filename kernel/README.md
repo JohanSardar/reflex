@@ -42,6 +42,15 @@ request_attention(agent, json, now_ms) -> result JSON
 - `apply_user_intent` also takes `{intent: "add_file", …}`: a photo becomes an
   image Element, each rendered PDF page another, and any other file a `file`
   Element.
+- `{intent: "set_state", id, state}` saves what an Embed keeps with
+  `reflex.element.setState` on its Element; `{intent: "set_state", id, panel,
+  values}` saves a Panel's values on the Element that opened it. Both merge (a
+  null removes a key), are capped at 16 KB, come only from a person, and show in
+  that person's next Send as `embed_state` and `panel` changes. Undo skips them,
+  and a run of them between Sends is kept as one history entry.
+- A Mark drawn on an Embed takes the Embed's own answer for what it points at
+  (`embed_anchors` on the raw Send, from the Embed's Anchor resolver): its
+  `target`, and `on` that Embed.
 
 - **Owners** are `person:<id>` or `agent:<id>` (ADR-0008). They come from the caller's authenticated context and never from the batch.
 - **Agent IDs are scoped to the Agent.** Claude's `n-auth` is stored as `claude/n-auth`. Claude sees it as `n-auth`; everyone else sees `claude:n-auth` (`/` is not in the protocol's ID alphabet). Both forms resolve.

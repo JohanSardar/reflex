@@ -961,6 +961,26 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
         }
         let ts: &Vec<Target> = fork.and_then(|h| forks.get(&h)).unwrap_or(&ts);
         let gesture = classify(g, &strokes, ts);
+        // An Embed that said what these strokes point at is what they are on: a closed
+        // loop on part of a chart encloses no whole Element, but it circles a bar.
+        let embed_at = embed
+            .iter()
+            .find(|(ss, _, _)| {
+                g.strokes
+                    .iter()
+                    .any(|&i| ss.iter().any(|s| s == &strokes[i].key))
+            })
+            .and_then(|(_, el, _)| ts.iter().position(|t| &t.key == el));
+        let closed = g.strokes.iter().any(|&i| strokes[i].closed());
+        let gesture = match (gesture, embed_at) {
+            (Kind::Ink, Some(e)) if closed => Kind::Circle(vec![e]),
+            (Kind::Circle(on), Some(e))
+                if !on.contains(&e) && on.iter().all(|&j| is_container(&ts[j])) =>
+            {
+                Kind::Circle(vec![e])
+            }
+            (k, _) => k,
+        };
         let mut m = Map::new();
         m.insert("id".into(), json!(id));
         let mut anchored: Vec<usize> = vec![];
@@ -1097,6 +1117,13 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
                     break;
                 }
                 _ => {}
+            }
+        }
+        // Any other stroke an Embed answered for is on that Embed.
+        if let Some(e) = embed_at.filter(|e| !anchored.contains(e)) {
+            if !m.contains_key("on") && !m.contains_key("to") {
+                m.insert("on".into(), json!([show(&ts[e].key)]));
+                anchored.push(e);
             }
         }
         let skeys: Vec<&str> = g.strokes.iter().map(|&i| strokes[i].key.as_str()).collect();

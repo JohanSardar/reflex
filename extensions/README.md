@@ -6,6 +6,7 @@ Built-in content uses the same rungs as anyone else's.
 | Folder | Kind | Format |
 |---|---|---|
 | `guides/` | Guide (rung 0) | One Markdown file. Front matter `name` and `summary`; the body is what `read_me(name)` returns. |
+| `embeds/` | Embed Template (rung 2) | A folder: `reflex.json` (`kind: "embed"`, `name`, `summary`, an example), `index.html`, `params.schema.json`, `guide.md`. `reflex test extensions/embeds/<name>` checks it. An Agent adds it with `add embed {template: name, params}`; Reflex saves the built-in copy to the person's Library on first use, so every device can draw it. |
 | `recipes/` | Recipe (rung 1) | One Markdown file. Front matter `name` and `summary`, a `## Params` section with a fenced JSON Schema, and a `## Template` section with a fenced JSON list of `apply` ops. The rest is the Guide `read_me(name)` returns. |
 
 In a template, a string that is exactly `"{{name}}"` becomes that parameter's

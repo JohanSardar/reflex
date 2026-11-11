@@ -1,0 +1,178 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #fff; overflow: hidden; }
+  body { font: 13px -apple-system, system-ui, "Segoe UI", sans-serif; color: #1d1d1f; }
+  svg { display: block; width: 100%; height: 100%; }
+  .title { font-size: 16px; font-weight: 600; }
+  .axis-label { fill: #6e6e73; font-size: 12px; }
+  .tick { fill: #6e6e73; font-size: 11px; }
+  .grid { stroke: #e8e8ea; }
+  .axis { stroke: #8e8e93; }
+  .value { fill: #1d1d1f; font-size: 11px; }
+</style>
+</head>
+<body>
+<svg id="chart" role="img"></svg>
+<script>
+(() => {
+  const SVG = "http://www.w3.org/2000/svg";
+  const COLORS = ["#0090ff", "#f76b15", "#30a46c", "#6e56cf", "#e5484d", "#12a594", "#d6409f", "#f5c400"];
+  const p = reflex.element.props();
+  const kind = ["bar", "line", "scatter"].includes(p.kind) ? p.kind : "bar";
+  const unit = p.unit ? ` ${p.unit}` : "";
+  const series = (Array.isArray(p.series) ? p.series : []).map((s, i) => ({
+    name: String(s.name ?? `Series ${i + 1}`),
+    color: COLORS[i % COLORS.length],
+    rows: (Array.isArray(s.rows) ? s.rows : []).filter((r) => typeof r.y === "number" && isFinite(r.y)),
+  }));
+  const svg = document.getElementById("chart");
+  /** Every part a Mark can name, with its box in this Embed's pixels. */
+  let parts = [];
+
+  const el = (tag, attrs, text) => {
+    const n = document.createElementNS(SVG, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+    if (text !== undefined) n.textContent = text; // data is text, never markup
+    svg.append(n);
+    return n;
+  };
+  const rowId = (r) => String(r.id ?? r.label ?? r.x);
+  const fmt = (v) => (Math.abs(v) >= 100 ? Math.round(v).toLocaleString("en") : String(+v.toFixed(2)));
+  const nice = (lo, hi) => {
+    if (lo === hi) { lo -= 1; hi += 1; }
+    const step0 = (hi - lo) / 5, mag = 10 ** Math.floor(Math.log10(step0));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= step0);
+    return { lo: Math.floor(lo / step) * step, hi: Math.ceil(hi / step) * step, step };
+  };
+
+  function draw() {
+    svg.replaceChildren();
+    parts = [];
+    const W = innerWidth, H = innerHeight;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    const legend = series.length > 1;
+    const top = p.title ? 44 : 16, bottom = 40 + (p.x_label ? 18 : 0), left = 56 + (p.y_label ? 18 : 0), right = legend ? 130 : 20;
+    const pw = Math.max(10, W - left - right), ph = Math.max(10, H - top - bottom);
+    if (p.title) el("text", { x: left, y: 26, class: "title" }, p.title);
+    if (p.y_label) el("text", { x: 14, y: top + ph / 2, class: "axis-label", transform: `rotate(-90 14 ${top + ph / 2})`, "text-anchor": "middle" }, p.y_label);
+    if (p.x_label) el("text", { x: left + pw / 2, y: H - 8, class: "axis-label", "text-anchor": "middle" }, p.x_label);
+
+    const all = series.flatMap((s) => s.rows);
+    const ys = all.map((r) => r.y);
+    const yr = nice(Math.min(kind === "bar" ? 0 : Infinity, ...ys), Math.max(kind === "bar" ? 0 : -Infinity, ...ys));
+    const Y = (v) => top + ph - ((v - yr.lo) / (yr.hi - yr.lo)) * ph;
+    for (let v = yr.lo; v <= yr.hi + yr.step / 2; v += yr.step) {
+      el("line", { x1: left, x2: left + pw, y1: Y(v), y2: Y(v), class: "grid" });
+      el("text", { x: left - 8, y: Y(v) + 4, class: "tick", "text-anchor": "end" }, fmt(v));
+    }
+    el("line", { x1: left, x2: left, y1: top, y2: top + ph, class: "axis" });
+    el("line", { x1: left, x2: left + pw, y1: Y(Math.max(yr.lo, 0)), y2: Y(Math.max(yr.lo, 0)), class: "axis" });
+
+    const numericX = kind === "scatter" || all.every((r) => r.label === undefined && typeof r.x === "number");
+    if (numericX) {
+      const xs = all.map((r) => r.x).filter((x) => typeof x === "number");
+      const xr = nice(Math.min(...xs), Math.max(...xs));
+      const X = (v) => left + ((v - xr.lo) / (xr.hi - xr.lo)) * pw;
+      for (let v = xr.lo; v <= xr.hi + xr.step / 2; v += xr.step) {
+        el("text", { x: X(v), y: top + ph + 18, class: "tick", "text-anchor": "middle" }, fmt(v));
+      }
+      for (const s of series) {
+        const pts = s.rows.filter((r) => typeof r.x === "number").map((r) => ({ r, x: X(r.x), y: Y(r.y) }));
+        if (kind === "line") el("polyline", { points: pts.map((q) => `${q.x},${q.y}`).join(" "), fill: "none", stroke: s.color, "stroke-width": 2.5 });
+        for (const q of pts) {
+          el("circle", { cx: q.x, cy: q.y, r: 5, fill: s.color });
+          parts.push({ kind: "point", name: `point ${rowId(q.r)}`, rows: [rowId(q.r)], x: q.r.x, y: q.r.y, series: s.name, box: [q.x - 7, q.y - 7, 14, 14], data: true });
+        }
+      }
+    } else {
+      const labels = [...new Set(all.map((r) => String(r.label ?? r.id ?? r.x)))];
+      const band = pw / Math.max(1, labels.length);
+      const at = (l) => left + band * labels.indexOf(l);
+      labels.forEach((l) => {
+        const cx = at(l) + band / 2;
+        const t = el("text", { x: cx, y: top + ph + 18, class: "tick", "text-anchor": "middle" }, l);
+        const w = Math.min(band, t.getComputedTextLength?.() || l.length * 6.5);
+        const rows = series.flatMap((s) => s.rows.filter((r) => String(r.label ?? r.id ?? r.x) === l).map(rowId));
+        parts.push({ kind: "tick", name: `x-axis tick ${l}`, rows, box: [cx - w / 2 - 4, top + ph + 4, w + 8, 20], data: false });
+      });
+      if (kind === "bar") {
+        const inner = band * 0.72, bw = inner / series.length;
+        series.forEach((s, si) => {
+          for (const r of s.rows) {
+            const l = String(r.label ?? r.id ?? r.x);
+            const x = at(l) + (band - inner) / 2 + si * bw, y0 = Y(Math.max(yr.lo, 0)), y1 = Y(r.y);
+            const box = [x, Math.min(y0, y1), Math.max(1, bw - 2), Math.max(1, Math.abs(y0 - y1))];
+            el("rect", { x: box[0], y: box[1], width: box[2], height: box[3], fill: s.color, rx: 2 });
+            if (bw > 26) el("text", { x: x + bw / 2 - 1, y: box[1] - 5, class: "value", "text-anchor": "middle" }, fmt(r.y));
+            parts.push({ kind: "bar", name: `bar ${l}${series.length > 1 ? ` · ${s.name}` : ""}`, rows: [rowId(r)], y: r.y, series: s.name, box, data: true });
+          }
+        });
+      } else {
+        for (const s of series) {
+          const pts = s.rows.map((r) => ({ r, x: at(String(r.label ?? r.id ?? r.x)) + band / 2, y: Y(r.y) }));
+          el("polyline", { points: pts.map((q) => `${q.x},${q.y}`).join(" "), fill: "none", stroke: s.color, "stroke-width": 2.5 });
+          for (const q of pts) {
+            el("circle", { cx: q.x, cy: q.y, r: 4.5, fill: s.color });
+            parts.push({ kind: "point", name: `point ${String(q.r.label ?? rowId(q.r))}`, rows: [rowId(q.r)], y: q.r.y, series: s.name, box: [q.x - 7, q.y - 7, 14, 14], data: true });
+          }
+        }
+      }
+    }
+    if (legend) {
+      series.forEach((s, i) => {
+        const y = top + 8 + i * 22;
+        el("rect", { x: W - right + 16, y: y - 9, width: 12, height: 12, fill: s.color, rx: 2 });
+        const t = el("text", { x: W - right + 34, y: y + 1, class: "tick" }, s.name);
+        const w = t.getComputedTextLength?.() || s.name.length * 6.5;
+        parts.push({ kind: "series", name: `series ${s.name}`, rows: s.rows.map(rowId), series: s.name, box: [W - right + 12, y - 12, w + 28, 20], data: false });
+      });
+    }
+  }
+
+  // What a Mark points at: the parts it encloses (a circle or lasso), or crosses (a strike or an arrow).
+  const inside = (pt, poly) => {
+    let c = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < ((xj - xi) * (pt[1] - yi)) / (yj - yi) + xi) c = !c;
+    }
+    return c;
+  };
+  const center = (b) => [b[0] + b[2] / 2, b[1] + b[3] / 2];
+  const hits = (b, pts) => pts.some(([x, y]) => x >= b[0] - 4 && x <= b[0] + b[2] + 4 && y >= b[1] - 4 && y <= b[1] + b[3] + 4);
+
+  reflex.anchors.register({
+    resolve(region) {
+      const pts = (region.points ?? []).map((q) => [q[0], q[1]]);
+      if (!pts.length) return null;
+      const [bx, by, bw, bh] = region.bounds;
+      const first = pts[0], last = pts[pts.length - 1];
+      const closed = pts.length > 8 && Math.hypot(first[0] - last[0], first[1] - last[1]) < 0.35 * Math.hypot(bw, bh);
+      let found = closed ? parts.filter((q) => inside(center(q.box), pts)) : [];
+      if (!found.length) found = parts.filter((q) => hits(q.box, pts));
+      if (!found.length) return { kind: "local", bounds: region.bounds.map(Math.round), label: "the chart, away from its data" };
+      const data = found.filter((q) => q.data);
+      const chosen = data.length ? data : found.filter((q) => q.kind === found[0].kind);
+      const rows = [...new Set(chosen.flatMap((q) => q.rows))].slice(0, 1000);
+      const out = { kind: "data", rows };
+      const yv = chosen.filter((q) => typeof q.y === "number").map((q) => q.y);
+      const round = (v) => +v.toPrecision(12);
+      if (yv.length) out.y = [round(Math.min(...yv)), round(Math.max(...yv))];
+      const xv = chosen.filter((q) => typeof q.x === "number").map((q) => q.x);
+      if (xv.length) out.x = [round(Math.min(...xv)), round(Math.max(...xv))];
+      const describe = (q) => (q.data && typeof q.y === "number" ? `${q.name} (${q.series} ${fmt(q.y)}${unit})` : q.name);
+      out.label = (chosen.length <= 3 ? chosen.map(describe).join(", ") : `${chosen.length} ${chosen[0].kind}s: ${chosen.slice(0, 3).map((q) => q.name.replace(/^\w+ /, "")).join(", ")}…`).slice(0, 200);
+      return out;
+    },
+  });
+
+  draw();
+  addEventListener("resize", draw);
+})();
+</script>
+</body>
+</html>

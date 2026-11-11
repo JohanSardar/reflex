@@ -387,6 +387,9 @@
             "data": {
               "$ref": "#/$defs/element_data"
             },
+            "values": {
+              "$ref": "#/$defs/values"
+            },
             "behaviors": {
               "$ref": "#/$defs/behaviors"
             },
@@ -434,6 +437,9 @@
             },
             "data": {
               "$ref": "#/$defs/element_data"
+            },
+            "values": {
+              "$ref": "#/$defs/values"
             },
             "behaviors": {
               "$ref": "#/$defs/behaviors"
@@ -485,6 +491,9 @@
             },
             "data": {
               "$ref": "#/$defs/element_data"
+            },
+            "values": {
+              "$ref": "#/$defs/values"
             },
             "behaviors": {
               "$ref": "#/$defs/behaviors"
@@ -542,6 +551,9 @@
             },
             "data": {
               "$ref": "#/$defs/element_data"
+            },
+            "values": {
+              "$ref": "#/$defs/values"
             },
             "behaviors": {
               "$ref": "#/$defs/behaviors"
@@ -606,6 +618,9 @@
             "data": {
               "$ref": "#/$defs/element_data"
             },
+            "values": {
+              "$ref": "#/$defs/values"
+            },
             "behaviors": {
               "$ref": "#/$defs/behaviors"
             },
@@ -656,6 +671,9 @@
             "data": {
               "$ref": "#/$defs/element_data"
             },
+            "values": {
+              "$ref": "#/$defs/values"
+            },
             "behaviors": {
               "$ref": "#/$defs/behaviors"
             },
@@ -703,6 +721,9 @@
             },
             "data": {
               "$ref": "#/$defs/element_data"
+            },
+            "values": {
+              "$ref": "#/$defs/values"
             },
             "behaviors": {
               "$ref": "#/$defs/behaviors"
@@ -759,6 +780,9 @@
             },
             "data": {
               "$ref": "#/$defs/element_data"
+            },
+            "values": {
+              "$ref": "#/$defs/values"
             },
             "behaviors": {
               "$ref": "#/$defs/behaviors"
@@ -822,6 +846,9 @@
             "data": {
               "$ref": "#/$defs/element_data"
             },
+            "values": {
+              "$ref": "#/$defs/values"
+            },
             "behaviors": {
               "$ref": "#/$defs/behaviors"
             },
@@ -874,6 +901,9 @@
             },
             "data": {
               "$ref": "#/$defs/element_data"
+            },
+            "values": {
+              "$ref": "#/$defs/values"
             },
             "behaviors": {
               "$ref": "#/$defs/behaviors"
@@ -928,6 +958,9 @@
             },
             "data": {
               "$ref": "#/$defs/element_data"
+            },
+            "values": {
+              "$ref": "#/$defs/values"
             },
             "behaviors": {
               "$ref": "#/$defs/behaviors"
@@ -997,6 +1030,9 @@
             },
             "data": {
               "$ref": "#/$defs/element_data"
+            },
+            "values": {
+              "$ref": "#/$defs/values"
             },
             "behaviors": {
               "$ref": "#/$defs/behaviors"
@@ -1375,7 +1411,7 @@
     },
     "state": {
       "type": "object",
-      "description": "State the Embed saved with reflex.element.setState. Read only."
+      "description": "State the Embed saved with reflex.element.setState: it syncs to every device, survives reloads and shows in the next Send's changes. Read only."
     },
     "stroke": {
       "type": "string",
@@ -1429,6 +1465,10 @@
       "type": "string",
       "maxLength": 4096,
       "pattern": "^(ui://|https://)"
+    },
+    "values": {
+      "type": "object",
+      "description": "What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only."
     },
     "watch": {
       "type": "boolean",

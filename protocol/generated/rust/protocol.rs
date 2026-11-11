@@ -1468,6 +1468,9 @@ pub struct OpDefineEmbed {
     pub guide: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow: Option<Vec<String>>,
+    /// For an MCP App view: the 'ui://' resource template was read from. Its calls to that server's tools are denied, with a note on the Embed, unless the person allows the server; then they reach you as a tap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1582,7 +1585,7 @@ pub const OP_FIELDS: &[(&str, &[&str])] = &[
     ("arrange", &["op", "ids", "layout", "gap", "columns", "align", "at"]),
     ("focus", &["op", "ids", "bounds"]),
     ("define recipe", &["op", "kind", "name", "summary", "params", "template", "guide"]),
-    ("define embed", &["op", "kind", "name", "summary", "params", "template", "guide", "allow"]),
+    ("define embed", &["op", "kind", "name", "summary", "params", "template", "guide", "allow", "source"]),
 ];
 
 impl<'de> Deserialize<'de> for Op {
@@ -1796,6 +1799,9 @@ pub struct ElementText {
     /// A free JSON map the Agent defines, such as a task ID, a test case or a score. Reflex stores, syncs and returns it but never interprets it. At most 16 KiB of JSON per Element. Patch it with map_put and map_delete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Map<String, Value>>,
+    /// What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Map<String, Value>>,
     /// Trigger-action pairs, run when someone interacts with this Element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behaviors: Option<Vec<Behavior>>,
@@ -1828,6 +1834,9 @@ pub struct ElementNote {
     /// A free JSON map the Agent defines, such as a task ID, a test case or a score. Reflex stores, syncs and returns it but never interprets it. At most 16 KiB of JSON per Element. Patch it with map_put and map_delete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Map<String, Value>>,
+    /// What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Map<String, Value>>,
     /// Trigger-action pairs, run when someone interacts with this Element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behaviors: Option<Vec<Behavior>>,
@@ -1863,6 +1872,9 @@ pub struct ElementMath {
     /// A free JSON map the Agent defines, such as a task ID, a test case or a score. Reflex stores, syncs and returns it but never interprets it. At most 16 KiB of JSON per Element. Patch it with map_put and map_delete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Map<String, Value>>,
+    /// What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Map<String, Value>>,
     /// Trigger-action pairs, run when someone interacts with this Element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behaviors: Option<Vec<Behavior>>,
@@ -1901,6 +1913,9 @@ pub struct ElementShape {
     /// A free JSON map the Agent defines, such as a task ID, a test case or a score. Reflex stores, syncs and returns it but never interprets it. At most 16 KiB of JSON per Element. Patch it with map_put and map_delete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Map<String, Value>>,
+    /// What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Map<String, Value>>,
     /// Trigger-action pairs, run when someone interacts with this Element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behaviors: Option<Vec<Behavior>>,
@@ -1948,6 +1963,9 @@ pub struct ElementConnector {
     /// A free JSON map the Agent defines, such as a task ID, a test case or a score. Reflex stores, syncs and returns it but never interprets it. At most 16 KiB of JSON per Element. Patch it with map_put and map_delete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Map<String, Value>>,
+    /// What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Map<String, Value>>,
     /// Trigger-action pairs, run when someone interacts with this Element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behaviors: Option<Vec<Behavior>>,
@@ -1983,6 +2001,9 @@ pub struct ElementImage {
     /// A free JSON map the Agent defines, such as a task ID, a test case or a score. Reflex stores, syncs and returns it but never interprets it. At most 16 KiB of JSON per Element. Patch it with map_put and map_delete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Map<String, Value>>,
+    /// What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Map<String, Value>>,
     /// Trigger-action pairs, run when someone interacts with this Element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behaviors: Option<Vec<Behavior>>,
@@ -2016,6 +2037,9 @@ pub struct ElementFrame {
     /// A free JSON map the Agent defines, such as a task ID, a test case or a score. Reflex stores, syncs and returns it but never interprets it. At most 16 KiB of JSON per Element. Patch it with map_put and map_delete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Map<String, Value>>,
+    /// What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Map<String, Value>>,
     /// Trigger-action pairs, run when someone interacts with this Element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behaviors: Option<Vec<Behavior>>,
@@ -2058,6 +2082,9 @@ pub struct ElementRegion {
     /// A free JSON map the Agent defines, such as a task ID, a test case or a score. Reflex stores, syncs and returns it but never interprets it. At most 16 KiB of JSON per Element. Patch it with map_put and map_delete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Map<String, Value>>,
+    /// What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Map<String, Value>>,
     /// Trigger-action pairs, run when someone interacts with this Element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behaviors: Option<Vec<Behavior>>,
@@ -2098,12 +2125,15 @@ pub struct ElementEmbed {
     /// Extra network hosts this Embed may reach, on top of the person's allowlist.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow: Option<Vec<String>>,
-    /// State the Embed saved with reflex.element.setState. Read only.
+    /// State the Embed saved with reflex.element.setState: it syncs to every device, survives reloads and shows in the next Send's changes. Read only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<Map<String, Value>>,
     /// A free JSON map the Agent defines, such as a task ID, a test case or a score. Reflex stores, syncs and returns it but never interprets it. At most 16 KiB of JSON per Element. Patch it with map_put and map_delete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Map<String, Value>>,
+    /// What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Map<String, Value>>,
     /// Trigger-action pairs, run when someone interacts with this Element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behaviors: Option<Vec<Behavior>>,
@@ -2141,6 +2171,9 @@ pub struct ElementInk {
     /// A free JSON map the Agent defines, such as a task ID, a test case or a score. Reflex stores, syncs and returns it but never interprets it. At most 16 KiB of JSON per Element. Patch it with map_put and map_delete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Map<String, Value>>,
+    /// What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Map<String, Value>>,
     /// Trigger-action pairs, run when someone interacts with this Element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behaviors: Option<Vec<Behavior>>,
@@ -2174,6 +2207,9 @@ pub struct ElementFile {
     /// A free JSON map the Agent defines, such as a task ID, a test case or a score. Reflex stores, syncs and returns it but never interprets it. At most 16 KiB of JSON per Element. Patch it with map_put and map_delete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Map<String, Value>>,
+    /// What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Map<String, Value>>,
     /// Trigger-action pairs, run when someone interacts with this Element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behaviors: Option<Vec<Behavior>>,
@@ -2205,6 +2241,9 @@ pub struct ElementExtension {
     /// A free JSON map the Agent defines, such as a task ID, a test case or a score. Reflex stores, syncs and returns it but never interprets it. At most 16 KiB of JSON per Element. Patch it with map_put and map_delete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Map<String, Value>>,
+    /// What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Map<String, Value>>,
     /// Trigger-action pairs, run when someone interacts with this Element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behaviors: Option<Vec<Behavior>>,
@@ -2297,18 +2336,18 @@ impl Element {
 
 /// Each variant's title and the fields it accepts.
 pub const ELEMENT_FIELDS: &[(&str, &[&str])] = &[
-    ("text", &["id", "type", "owner", "bounds", "text", "markdown", "size", "color", "align", "data", "behaviors", "draggable", "locked", "snap"]),
-    ("note", &["id", "type", "owner", "bounds", "text", "color", "data", "behaviors", "draggable", "locked", "snap"]),
-    ("math", &["id", "type", "owner", "bounds", "latex", "size", "color", "data", "behaviors", "draggable", "locked", "snap"]),
-    ("shape", &["id", "type", "owner", "bounds", "shape", "text", "color", "fill", "stroke", "data", "behaviors", "draggable", "locked", "snap"]),
-    ("connector", &["id", "type", "owner", "bounds", "from", "to", "points", "text", "arrow", "stroke", "color", "data", "behaviors", "draggable", "locked", "snap"]),
-    ("image", &["id", "type", "owner", "bounds", "src", "alt", "page", "data", "behaviors", "draggable", "locked", "snap"]),
-    ("frame", &["id", "type", "owner", "bounds", "title", "color", "data", "behaviors", "draggable", "locked", "snap"]),
-    ("region", &["id", "type", "owner", "bounds", "title", "ink", "agents_read_only", "watch", "send_button", "data", "behaviors", "draggable", "locked", "snap"]),
-    ("embed", &["id", "type", "owner", "bounds", "template", "params", "html", "url", "model", "allow", "state", "data", "behaviors", "draggable", "locked", "snap"]),
-    ("ink", &["id", "type", "owner", "bounds", "tool", "color", "width", "parent", "data", "behaviors", "draggable", "locked", "snap"]),
-    ("file", &["id", "type", "owner", "bounds", "name", "mime", "size", "src", "data", "behaviors", "draggable", "locked", "snap"]),
-    ("extension", &["id", "type", "type_version", "owner", "bounds", "props", "data", "behaviors", "draggable", "locked", "snap"]),
+    ("text", &["id", "type", "owner", "bounds", "text", "markdown", "size", "color", "align", "data", "values", "behaviors", "draggable", "locked", "snap"]),
+    ("note", &["id", "type", "owner", "bounds", "text", "color", "data", "values", "behaviors", "draggable", "locked", "snap"]),
+    ("math", &["id", "type", "owner", "bounds", "latex", "size", "color", "data", "values", "behaviors", "draggable", "locked", "snap"]),
+    ("shape", &["id", "type", "owner", "bounds", "shape", "text", "color", "fill", "stroke", "data", "values", "behaviors", "draggable", "locked", "snap"]),
+    ("connector", &["id", "type", "owner", "bounds", "from", "to", "points", "text", "arrow", "stroke", "color", "data", "values", "behaviors", "draggable", "locked", "snap"]),
+    ("image", &["id", "type", "owner", "bounds", "src", "alt", "page", "data", "values", "behaviors", "draggable", "locked", "snap"]),
+    ("frame", &["id", "type", "owner", "bounds", "title", "color", "data", "values", "behaviors", "draggable", "locked", "snap"]),
+    ("region", &["id", "type", "owner", "bounds", "title", "ink", "agents_read_only", "watch", "send_button", "data", "values", "behaviors", "draggable", "locked", "snap"]),
+    ("embed", &["id", "type", "owner", "bounds", "template", "params", "html", "url", "model", "allow", "state", "data", "values", "behaviors", "draggable", "locked", "snap"]),
+    ("ink", &["id", "type", "owner", "bounds", "tool", "color", "width", "parent", "data", "values", "behaviors", "draggable", "locked", "snap"]),
+    ("file", &["id", "type", "owner", "bounds", "name", "mime", "size", "src", "data", "values", "behaviors", "draggable", "locked", "snap"]),
+    ("extension", &["id", "type", "type_version", "owner", "bounds", "props", "data", "values", "behaviors", "draggable", "locked", "snap"]),
 ];
 
 impl<'de> Deserialize<'de> for Element {
@@ -2654,7 +2693,7 @@ pub struct OpenSpaceOutput {
     pub next: String,
 }
 
-/// What sent it: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior (with element and on), a Region's Send button (with region), or watch mode.
+/// What sent it: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior (with element and on), a Region's Send button (with region), watch mode, or an Embed's reflex.notify (with element and payload; a tap that claims nothing).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RawSendTrigger {
     #[serde(rename = "button")]
@@ -2669,10 +2708,12 @@ pub enum RawSendTrigger {
     Region,
     #[serde(rename = "watch")]
     Watch,
+    #[serde(rename = "embed")]
+    Embed,
 }
 
 impl RawSendTrigger {
-    pub const ALL: &'static [&'static str] = &["button", "pencil", "voice", "behavior", "region", "watch"];
+    pub const ALL: &'static [&'static str] = &["button", "pencil", "voice", "behavior", "region", "watch", "embed"];
     pub fn as_str(&self) -> &'static str {
         match self {
             RawSendTrigger::Button => "button",
@@ -2681,6 +2722,7 @@ impl RawSendTrigger {
             RawSendTrigger::Behavior => "behavior",
             RawSendTrigger::Region => "region",
             RawSendTrigger::Watch => "watch",
+            RawSendTrigger::Embed => "embed",
         }
     }
 }
@@ -2761,7 +2803,7 @@ impl RawSendOn {
 pub struct RawSend {
     /// A new Send ID the device makes.
     pub send: String,
-    /// What sent it: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior (with element and on), a Region's Send button (with region), or watch mode.
+    /// What sent it: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior (with element and on), a Region's Send button (with region), watch mode, or an Embed's reflex.notify (with element and payload; a tap that claims nothing).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<RawSendTrigger>,
     /// What the screen showed, in Space coordinates.
@@ -2807,7 +2849,7 @@ pub struct RawSend {
     /// on panel_change: component id → the value entered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values: Option<Map<String, Value>>,
-    /// From an Embed's reflex.notify(payload); otherwise the Behavior's own payload is used.
+    /// From an Embed's reflex.notify(payload) or reflex.emit(name, payload); otherwise the Behavior's own payload is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<Map<String, Value>>,
 }
@@ -3288,7 +3330,7 @@ impl SendBundleKind {
     }
 }
 
-/// How it was sent: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior, a Region's Send button, or watch mode.
+/// How it was sent: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior, a Region's Send button, watch mode, or an Embed's reflex.notify.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SendBundleTrigger {
     #[serde(rename = "button")]
@@ -3303,10 +3345,12 @@ pub enum SendBundleTrigger {
     Region,
     #[serde(rename = "watch")]
     Watch,
+    #[serde(rename = "embed")]
+    Embed,
 }
 
 impl SendBundleTrigger {
-    pub const ALL: &'static [&'static str] = &["button", "pencil", "voice", "behavior", "region", "watch"];
+    pub const ALL: &'static [&'static str] = &["button", "pencil", "voice", "behavior", "region", "watch", "embed"];
     pub fn as_str(&self) -> &'static str {
         match self {
             SendBundleTrigger::Button => "button",
@@ -3315,6 +3359,7 @@ impl SendBundleTrigger {
             SendBundleTrigger::Behavior => "behavior",
             SendBundleTrigger::Region => "region",
             SendBundleTrigger::Watch => "watch",
+            SendBundleTrigger::Embed => "embed",
         }
     }
 }
@@ -3340,7 +3385,7 @@ pub struct SendBundle {
     pub space: String,
     /// The person who sent it. In a shared Space the Bundle carries only that person's Marks.
     pub from: PersonRef,
-    /// How it was sent: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior, a Region's Send button, or watch mode.
+    /// How it was sent: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior, a Region's Send button, watch mode, or an Embed's reflex.notify.
     pub trigger: SendBundleTrigger,
     /// The person's spoken words, transcribed on the iPad, with Mark IDs such as [m1] placed where they drew each Mark while speaking.
     #[serde(default, skip_serializing_if = "Option::is_none")]

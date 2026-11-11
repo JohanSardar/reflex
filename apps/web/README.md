@@ -18,7 +18,8 @@ reflex dev ./my-embed  # the playground on an in-memory Space (see agent/README 
 | `src/conn.ts` | the link to the host: one streamed fetch of events (newline-delimited JSON) and a POST per sync reply |
 | `src/live.ts` | one Space drawn live: redraws whenever its replica or the Library's changes |
 | `src/render.ts` | DOM renderers for the native Element types, with a pan and zoom camera |
-| `src/embed.ts` | HTML Embeds in sandboxed iframes, the `reflex` bridge, and Anchor requests |
+| `src/embed.ts` | HTML Embeds in sandboxed iframes: their documents, limits, diagnostics and Anchor requests |
+| `src/bridge.js` | The `reflex` bridge every Embed gets, here and on the iPad (`ReflexEmbed` links to this file) |
 
 There is no build step. The host serves `src/*.ts` with Node's type stripping, so the sources use only
 erasable TypeScript (`npx tsc -p apps/web`).
@@ -34,13 +35,20 @@ erasable TypeScript (`npx tsc -p apps/web`).
 - Agent text is set as DOM text, never parsed as HTML. Images load only from the Link's assets
   (`asset:`), never from a URL an Agent chose.
 - Each Embed runs in an iframe with `sandbox="allow-scripts"` (an opaque origin) and its own Content
-  Security Policy: its `allow` list plus the approved CDNs, nothing else. It reaches Reflex only
-  through the bridge (`reflex.element`, `notify`, `emit`, `panel`, `anchors`), over `postMessage`
-  from frames this page made.
+  Security Policy: code from its `allow` list and the approved CDNs, and no network at all
+  (`connect-src 'none'`) unless its `allow` list names hosts. It reaches Reflex only through the
+  bridge (`reflex.element`, `notify`, `emit`, `panel`, `anchors`), over `postMessage` from frames
+  this page made.
+- Limits: 16 KB of state or per event, 10 events per 10 seconds, and a heartbeat. An Embed that
+  stops answering for 5 seconds is stopped. Sandboxed frames can share a process, so one busy Embed
+  freezes the others with it: all of them are removed and restarted one at a time, and the one that
+  freezes again stays stopped. What the sandbox stops shows as a note on the Embed.
+- An MCP App view (an Embed Template with a `ui://` `source`) gets an MCP Apps host in its frame.
+  The viewer can't call tools, so its `tools/call` is always denied, with a note.
 
 ## Not here yet
 
 - Typing, tapping and Sending from the viewer (SPEC §3). It shows Spaces; the iPad and Agents change them.
 - Live cursors, Behaviors, Panels, and math typesetting (LaTeX shows as its source).
-- An Embed's `setState` and events stay in the page; they don't sync yet.
+- An Embed's `setState` and events stay in the page: the viewer can't write. They sync from the iPad.
 - The viewer runs only on the Link's computer. Reaching it from another device needs the Relay (T9).
