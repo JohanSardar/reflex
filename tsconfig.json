@@ -10,5 +10,5 @@
     "lib": ["ES2023", "DOM"],
     "types": ["node", "@cloudflare/workers-types"]
   },
-  "include": ["kernel/wasm/js/**/*.ts", "kernel/proof/**/*.ts"]
+  "include": ["kernel/wasm/js/**/*.ts", "kernel/proof/**/*.ts", "link/**/*.ts"]
 }
