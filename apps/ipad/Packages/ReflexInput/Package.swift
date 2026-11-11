@@ -9,5 +9,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "ReflexInput"),
+        .testTarget(name: "ReflexInputTests", dependencies: ["ReflexInput"]),
     ]
 )
