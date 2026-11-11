@@ -48,7 +48,16 @@ final class SpaceSession {
         self.link = link
         ink = InkCanvasController(space: id)
         ink.onEdit = { [weak self] edit in self?.commit(edit) }
-        ink.claimsTouch = { [weak self] p in self?.element(at: p, where: \.takesTouch) != nil }
+        ink.claimsTouch = { [weak self] kind, p in
+            self?.element(at: p) { e in
+                guard e.locked != true else { return false }
+                switch kind {
+                case .tap: return !e.behaviors(on: "tap").isEmpty
+                case .longPress: return !e.behaviors(on: "long_press").isEmpty
+                case .drag: return e.draggable == true
+                }
+            } != nil
+        }
         ink.onTap = { [weak self] p in self?.touched(p, trigger: "tap") }
         ink.onLongPress = { [weak self] p in self?.touched(p, trigger: "long_press") }
         ink.onDrag = { [weak self] start, by, ended in self?.drag(from: start, by: by, ended: ended) }
@@ -314,6 +323,10 @@ final class SpaceSession {
     /// is durable before the Send refers to it).
     func send(trigger: String, said: String? = nil, words: [[String: Any]] = [], behavior: [String: Any]? = nil) {
         let strokes = ink.takeUnsent()
+        if trigger == "voice", said?.isEmpty ?? true, strokes.isEmpty, unsentPanels.isEmpty {
+            say("Didn't hear anything, so nothing was sent.")
+            return
+        }
         let view = viewport()
         let zoom = ink.zoomScale, offset = ink.contentOffset
         var raw: [String: Any] = ["send": Self.newSendID(), "trigger": trigger, "viewport": Self.ints(view)]
@@ -347,6 +360,11 @@ final class SpaceSession {
             let n = (frozen["strokes"] as? [Any])?.count ?? 0
             let hints = (raw["hints"] as? [[String: Any]])?.compactMap { $0["text"] as? String } ?? []
             log.info("Send \(frozen["send"] as? String ?? "", privacy: .public) frozen with \(n) strokes, hints \(hints, privacy: .public), said \(raw["said"] as? String ?? "", privacy: .public)")
+            #if DEBUG
+            if let data = try? JSONSerialization.data(withJSONObject: frozen, options: [.sortedKeys]) {
+                log.info("Frozen Send: \(String(decoding: data, as: UTF8.self), privacy: .public)")
+            }
+            #endif
             var what = "\(n) stroke\(n == 1 ? "" : "s")"
             if raw["said"] != nil { what += " and your voice" }
             if case .connected = link.state { say("Sent: \(what)") } else { say("Saved: it goes out when the Link is back") }
@@ -436,6 +454,7 @@ final class SpaceSession {
     // MARK: Telling the person
 
     func say(_ text: String) {
+        log.info("Notice: \(text, privacy: .public)")
         withAnimation { notice = text }
         Task {
             try? await Task.sleep(for: .seconds(3))

@@ -115,6 +115,18 @@ struct CanvasScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .debugInk)) { note in
             guard let url = note.object as? URL, let open,
                   let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else { return }
+            if url.path == "/voice", let name = q.first(where: { $0.name == "file" })?.value {
+                let file = URL.documentsDirectory.appending(path: name)
+                Task {
+                    do {
+                        let (said, words) = try await voice.debugTranscribe(file)
+                        open.send(trigger: "voice", said: said, words: words)
+                    } catch {
+                        open.say(error.localizedDescription)
+                    }
+                }
+                return
+            }
             let v = { (k: String) in CGFloat(Double(q.first { $0.name == k }?.value ?? "") ?? 0) }
             let points = (0 ... 72).map { i in
                 let a = Double(i) / 72 * 2 * .pi

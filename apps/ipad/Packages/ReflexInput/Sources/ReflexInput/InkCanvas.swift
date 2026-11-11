@@ -28,6 +28,13 @@ public enum InkIntent: Sendable {
     case move([String], dx: Int, dy: Int)
 }
 
+/// What a finger on an Element can do to it.
+public enum ElementTouch: Sendable {
+    case tap
+    case longPress
+    case drag
+}
+
 /// What one drawing change did: new actions, or an undo or redo of one.
 public enum InkEdit: Sendable {
     case action([InkIntent])
@@ -43,32 +50,45 @@ public struct InkStrokeInfo: Identifiable, Sendable {
     public var bounds: CGRect
 }
 
-/// The PencilKit canvas, which hands a finger on an Element that takes touch
-/// (a tap or long-press Behavior, or a draggable Element) to that Element
-/// instead of drawing or scrolling with it.
+/// The PencilKit canvas. A finger that lands on an Element that takes touch
+/// (a tap or long-press Behavior, or a draggable Element) belongs to that
+/// Element: drawing and scrolling are off until it lifts.
 final class ReflexCanvasView: PKCanvasView {
-    /// Whether the touch at this screen point is the Element's, not the canvas's.
+    /// Whether the touch at this point (in the canvas's content coordinates) is the Element's, not the canvas's.
     var claims: ((CGPoint) -> Bool)?
-    /// The last touch's type, from `TouchWatcher`.
-    var lastTouch: UITouch.TouchType = .direct
-
-    override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-        if g === drawingGestureRecognizer || g === panGestureRecognizer,
-           lastTouch == .direct, g.numberOfTouches <= 1, claims?(g.location(in: self)) == true {
-            return false
-        }
-        return super.gestureRecognizerShouldBegin(g)
-    }
 }
 
-/// Watches every touch on the canvas without recognizing anything, so the
-/// canvas knows whether a finger or the Pencil is down.
+/// Watches every touch on the canvas without recognizing anything. When a
+/// finger lands on an Element that takes touch, it turns the canvas's drawing
+/// and scrolling off for that touch, so the Element's gestures get it.
 final class TouchWatcher: UIGestureRecognizer {
     weak var canvas: ReflexCanvasView?
+    private var held = false
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        if let t = touches.first { canvas?.lastTouch = t.type }
+        guard let canvas, let t = touches.first, !held else { return }
+        if t.type == .direct, (event.allTouches?.count ?? 1) == 1, canvas.claims?(t.location(in: canvas)) == true {
+            held = true
+            canvas.drawingGestureRecognizer.isEnabled = false
+            canvas.panGestureRecognizer.isEnabled = false
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { release() }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { release() }
+
+    private func release() {
+        if held, let canvas {
+            canvas.drawingGestureRecognizer.isEnabled = true
+            canvas.panGestureRecognizer.isEnabled = true
+        }
+        held = false
         state = .failed
+    }
+
+    override func reset() {
+        if held { release() }
+        super.reset()
     }
 }
 
@@ -92,8 +112,8 @@ public final class InkCanvasController: NSObject {
 
     /// Called for every finished change to the Ink, so it can be committed to the Space.
     @ObservationIgnored public var onEdit: ((InkEdit) -> Void)?
-    /// Whether a finger at this Space point belongs to an Element (tap, long-press or drag).
-    @ObservationIgnored public var claimsTouch: ((CGPoint) -> Bool)?
+    /// Whether an Element at this Space point takes this kind of finger touch (a tap, a long-press or a drag).
+    @ObservationIgnored public var claimsTouch: ((ElementTouch, CGPoint) -> Bool)?
     /// A finger tap or long-press on an Element that claims touch, at a Space point.
     @ObservationIgnored public var onTap: ((CGPoint) -> Void)?
     @ObservationIgnored public var onLongPress: ((CGPoint) -> Void)?
@@ -227,16 +247,21 @@ public final class InkCanvasController: NSObject {
         guard let canvas = canvasView as? ReflexCanvasView else { return }
         canvas.claims = { [weak self] screen in
             guard let self else { return false }
-            return MainActor.assumeIsolated { self.claimsTouch?(self.spacePoint(screen)) ?? false }
+            return MainActor.assumeIsolated {
+                let p = self.spacePoint(screen)
+                return [ElementTouch.tap, .longPress, .drag].contains { self.claimsTouch?($0, p) == true }
+            }
         }
         let watcher = TouchWatcher(target: nil, action: nil)
         watcher.canvas = canvas
         watcher.cancelsTouchesInView = false
         watcher.delaysTouchesEnded = false
+        watcher.delegate = watcherDelegate
         canvas.addGestureRecognizer(watcher)
         let tap = UITapGestureRecognizer(target: self, action: #selector(elementTap(_:)))
         let long = UILongPressGestureRecognizer(target: self, action: #selector(elementLongPress(_:)))
         let pan = UIPanGestureRecognizer(target: self, action: #selector(elementPan(_:)))
+        elementGestures = [ObjectIdentifier(tap): .tap, ObjectIdentifier(long): .longPress, ObjectIdentifier(pan): .drag]
         pan.maximumNumberOfTouches = 1
         for g in [tap, long, pan] as [UIGestureRecognizer] {
             g.allowedTouchTypes = [UITouch.TouchType.direct.rawValue as NSNumber]
@@ -258,22 +283,26 @@ public final class InkCanvasController: NSObject {
         if g.state == .began { onLongPress?(spacePoint(g.location(in: canvasView))) }
     }
 
-    @ObservationIgnored private var dragStart: CGPoint?
+    /// Where the finger that may drag an Element first touched, in Space points.
+    @ObservationIgnored private var touchDown: CGPoint?
+    @ObservationIgnored private var elementGestures: [ObjectIdentifier: ElementTouch] = [:]
+    @ObservationIgnored private let watcherDelegate = Simultaneous()
 
     @objc private func elementPan(_ g: UIPanGestureRecognizer) {
-        let zoom = canvasView.zoomScale
-        let t = g.translation(in: canvasView)
-        let by = CGSize(width: t.x / zoom, height: t.y / zoom)
+        // Measured from where the finger first touched (`touchDown`), so the whole
+        // movement counts, including the part before the pan was recognized.
+        let here = spacePoint(g.location(in: canvasView))
+        let start = touchDown ?? here
+        let by = CGSize(width: here.x - start.x, height: here.y - start.y)
         switch g.state {
-        case .began:
-            let p = g.location(in: canvasView)
-            dragStart = spacePoint(CGPoint(x: p.x - t.x, y: p.y - t.y))
-            if let dragStart { onDrag?(dragStart, by, false) }
-        case .changed:
-            if let dragStart { onDrag?(dragStart, by, false) }
-        case .ended, .cancelled, .failed:
-            if let dragStart { onDrag?(dragStart, g.state == .ended ? by : .zero, true) }
-            dragStart = nil
+        case .began, .changed:
+            onDrag?(start, by, false)
+        case .ended:
+            onDrag?(start, by, true)
+            touchDown = nil
+        case .cancelled, .failed:
+            onDrag?(start, .zero, true)
+            touchDown = nil
         default: break
         }
     }
@@ -448,11 +477,24 @@ extension InkCanvasController: PKCanvasViewDelegate {
     }
 }
 
+/// Lets the touch watcher see touches alongside every other recognizer.
+final class Simultaneous: NSObject, UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+}
+
 extension InkCanvasController: UIGestureRecognizerDelegate {
+    public nonisolated func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        false
+    }
+
     /// The Element gestures take only a finger that starts on an Element that claims touch.
     public nonisolated func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         MainActor.assumeIsolated {
-            touch.type == .direct && claimsTouch?(spacePoint(touch.location(in: canvasView))) == true
+            guard touch.type == .direct, let kind = elementGestures[ObjectIdentifier(g)] else { return false }
+            let p = spacePoint(touch.location(in: canvasView))
+            let claimed = claimsTouch?(kind, p) == true
+            if kind == .drag, claimed { touchDown = p }
+            return claimed
         }
     }
 }

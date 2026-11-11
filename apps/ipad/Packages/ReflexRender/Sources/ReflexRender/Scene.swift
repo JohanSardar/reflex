@@ -119,11 +119,6 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
     public func behaviors(on trigger: String) -> [(index: Int, behavior: Behavior)] {
         (behaviors ?? []).enumerated().filter { $0.element.on == trigger }.map { ($0.offset, $0.element) }
     }
-
-    /// Whether a finger on it is for it (a tap, a long-press or a drag) rather than for drawing or scrolling.
-    public var takesTouch: Bool {
-        locked != true && (draggable == true || !(behaviors(on: "tap") + behaviors(on: "long_press")).isEmpty)
-    }
 }
 
 /// What happens when the person interacts with an Element: one trigger paired

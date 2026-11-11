@@ -15,6 +15,7 @@ struct PanelView: View {
                 Spacer()
                 Button { session.panel = nil } label: {
                     Image(systemName: "xmark").font(.system(size: 14, weight: .semibold)).frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityIdentifier("panel-close")
                 .accessibilityLabel("Close")
@@ -30,7 +31,9 @@ struct PanelView: View {
         }
         .frame(width: 340)
         .frame(maxHeight: .infinity)
+        .background(Color(.systemBackground).opacity(0.82), in: RoundedRectangle(cornerRadius: 24))
         .glassEffect(in: RoundedRectangle(cornerRadius: 24))
+        .contentShape(RoundedRectangle(cornerRadius: 24))
         .accessibilityIdentifier("panel")
     }
 

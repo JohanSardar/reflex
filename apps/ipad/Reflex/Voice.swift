@@ -30,15 +30,9 @@ final class VoiceCapture {
     /// Starts listening. Throws a message the person can read if it can't.
     func start() async throws {
         guard state == .idle else { return }
+        let recognizer = try Self.recognizer()
         guard await Self.allowed() else {
             throw VoiceError("Reflex needs the microphone and speech recognition. Allow them in Settings.")
-        }
-        guard let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
-              recognizer.isAvailable else {
-            throw VoiceError("Speech recognition isn't available right now.")
-        }
-        guard recognizer.supportsOnDeviceRecognition else {
-            throw VoiceError("On-device speech recognition isn't available on this iPad for \(recognizer.locale.identifier).")
         }
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.record, mode: .measurement, options: .duckOthers)
@@ -55,25 +49,18 @@ final class VoiceCapture {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [request] buffer, _ in
-            request.append(buffer)
-        }
+        Self.tap(input, format: format, into: request)
         engine.prepare()
         try engine.start()
         started = Date()
         state = .listening
-        task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            let transcription = result?.bestTranscription
-            let final = result?.isFinal ?? false
-            let failed = error != nil
-            Task { @MainActor in
-                guard let self else { return }
-                if let transcription {
-                    self.latest = transcription
-                    self.partial = transcription.formattedString
-                }
-                if final || failed { self.finish() }
+        task = Self.listen(recognizer, request) { [weak self] heard, done in
+            guard let self else { return }
+            if let heard {
+                self.latest = heard
+                self.partial = heard.formattedString
             }
+            if done { self.finish() }
         }
         log.info("Listening, on-device")
     }
@@ -115,19 +102,112 @@ final class VoiceCapture {
         return (t?.formattedString ?? "", words)
     }
 
+    /// The on-device recognizer for the person's language. Audio never goes to a server, so
+    /// without on-device recognition there is no voice.
+    private nonisolated static func recognizer() throws -> SFSpeechRecognizer {
+        guard let r = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")), r.isAvailable else {
+            throw VoiceError("Speech recognition isn't available right now.")
+        }
+        guard r.supportsOnDeviceRecognition else {
+            throw VoiceError("On-device speech recognition isn't available on this iPad for \(r.locale.identifier).")
+        }
+        return r
+    }
+
+    #if DEBUG
+    /// Transcribes an audio file through the same on-device path as the mic, for
+    /// the Simulator (`reflex://debug/voice?file=`): its timings start when the file does.
+    func debugTranscribe(_ url: URL) async throws -> (said: String, words: [[String: Any]]) {
+        _ = try Self.recognizer()
+        guard await Self.speechAllowed() else { throw VoiceError("Speech recognition isn't allowed.") }
+        let started = Date()
+        let heard = try await Self.transcribe(url)
+        let base = started.timeIntervalSince1970
+        let words: [[String: Any]] = heard.segments.map { s in
+            ["text": s.text, "start": Int(((base + s.at) * 1000).rounded()), "end": Int(((base + s.at + s.duration) * 1000).rounded())]
+        }
+        log.info("Heard from file: \(heard.text, privacy: .public) (\(words.count) words)")
+        return (heard.text, words)
+    }
+
+    private nonisolated static func transcribe(_ url: URL) async throws -> (text: String, segments: [Heard]) {
+        let recognizer = try recognizer()
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.requiresOnDeviceRecognition = true
+        request.addsPunctuation = true
+        let file = try AVAudioFile(forReading: url)
+        return try await withCheckedThrowingContinuation { c in
+            let once = Once()
+            let task = recognizer.recognitionTask(with: request) { result, error in
+                guard result?.isFinal == true || error != nil, once.first() else { return }
+                let t = result?.bestTranscription
+                if let error, t == nil {
+                    c.resume(throwing: VoiceError("Speech recognition failed: \(error.localizedDescription)"))
+                    return
+                }
+                c.resume(returning: (t?.formattedString ?? "", (t?.segments ?? []).map { Heard(text: $0.substring, at: $0.timestamp, duration: $0.duration) }))
+            }
+            _ = task
+            while let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096),
+                  (try? file.read(into: buffer)) != nil, buffer.frameLength > 0 {
+                request.append(buffer)
+            }
+            request.endAudio()
+        }
+    }
+    #endif
+
+    // The audio tap and the recognizer call back on their own queues, so their
+    // closures are made here, outside the main actor, and hop back to it.
+    private nonisolated static func tap(_ input: AVAudioInputNode, format: AVAudioFormat, into request: SFSpeechAudioBufferRecognitionRequest) {
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+            request.append(buffer)
+        }
+    }
+
+    private nonisolated static func listen(
+        _ recognizer: SFSpeechRecognizer,
+        _ request: SFSpeechAudioBufferRecognitionRequest,
+        update: @escaping @MainActor @Sendable (SFTranscription?, Bool) -> Void
+    ) -> SFSpeechRecognitionTask {
+        recognizer.recognitionTask(with: request) { result, error in
+            nonisolated(unsafe) let heard = result?.bestTranscription
+            let done = result?.isFinal ?? false || error != nil
+            Task { @MainActor in update(heard, done) }
+        }
+    }
+
     private func finish() {
         finished?.resume()
         finished = nil
     }
 
-    private static func allowed() async -> Bool {
-        let speech = await withCheckedContinuation { c in
-            SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0 == .authorized) }
-        }
-        guard speech else { return false }
+    private nonisolated static func allowed() async -> Bool {
+        guard await speechAllowed() else { return false }
         return await AVAudioApplication.requestRecordPermission()
     }
+
+    private nonisolated static func speechAllowed() async -> Bool {
+        await withCheckedContinuation { c in
+            SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0 == .authorized) }
+        }
+    }
 }
+
+#if DEBUG
+/// True the first time only; the recognizer can report more than once.
+private final class Once: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func first() -> Bool { lock.withLock { defer { done = true }; return !done } }
+}
+
+struct Heard: Sendable {
+    var text: String
+    var at: TimeInterval
+    var duration: TimeInterval
+}
+#endif
 
 struct VoiceError: LocalizedError {
     let message: String

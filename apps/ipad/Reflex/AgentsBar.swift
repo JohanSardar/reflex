@@ -18,11 +18,11 @@ struct AgentsBar: View {
                     if let last = session.lastChange(of: agent) {
                         Text(History.describe(last, link: link, person: link.person?.id))
                         Button(role: .destructive) { session.revert(agent, name: name) } label: {
-                            Label("Revert \(name)'s last change", systemImage: "arrow.uturn.backward.circle")
+                            Label("Revert \(Self.short(name))'s last change", systemImage: "arrow.uturn.backward.circle")
                         }
                         .accessibilityIdentifier("revert-\(agent)")
                     } else {
-                        Text("Nothing of \(name)'s to revert")
+                        Text("Nothing of \(Self.short(name))'s to revert")
                     }
                     Button { showHistory = true } label: { Label("History", systemImage: "clock") }
                 } label: {
@@ -150,7 +150,7 @@ enum History {
     static func describe(_ e: [String: Any], link: LinkSync, person: String?, timeline: [[String: Any]] = []) -> String {
         let kind = e["kind"] as? String ?? ""
         let changes = e["changes"] as? [[String: Any]] ?? []
-        let ids = e["ids"] as? [String] ?? []
+        let ids = (e["ids"] as? [String] ?? []).map(label)
         switch kind {
         case "add_stroke": return "drew a stroke"
         case "erase": return "erased \(count(ids.count, "stroke"))"
@@ -169,7 +169,7 @@ enum History {
         if changes.isEmpty { return kind == "batch" ? "changed nothing" : kind.replacingOccurrences(of: "_", with: " ") }
         var parts: [String] = []
         for c in changes.prefix(5) {
-            let id = c["id"] as? String ?? ""
+            let id = label(c["id"] as? String ?? "")
             switch c["kind"] as? String {
             case "added": parts.append("added \(c["type"] as? String ?? "") \(id)")
             case "removed": parts.append("removed \(id)")
@@ -181,6 +181,13 @@ enum History {
         }
         if changes.count > 5 { parts.append("and \(changes.count - 5) more") }
         return parts.joined(separator: ", ")
+    }
+
+    /// An Agent's Element ids carry the Agent ("a_cbea6b8f86/n-cache", or
+    /// "a_cbea6b8f86:n-cache" in a revert); people read the last part.
+    private static func label(_ id: String) -> String {
+        guard id.hasPrefix("a_"), let cut = id.firstIndex(where: { $0 == "/" || $0 == ":" }) else { return id }
+        return String(id[id.index(after: cut)...])
     }
 
     private static func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }

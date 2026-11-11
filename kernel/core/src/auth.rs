@@ -154,11 +154,18 @@ pub fn check(before: &Automerge, after: &Automerge, w: &Writers) -> Vec<String> 
         Principal::Agent(a) => w.agent(a) || w.has_person(),
     };
     let before_elements = root_map(before, "elements");
+    let before_removed = root_map(before, "removed");
+    let was_removed = |key: &str| before_removed.values().any(|r| str_field(r, "key") == Some(key));
     let after_elements = root_map(after, "elements");
     for (key, b, a) in changed("elements") {
         match (&b, &a) {
             (None, Some(a)) => match owner_of(a) {
                 Some(o) if w.principal(&o) => {}
+                // Undoing a removal puts the Element back under its owner: allowed
+                // when the writer may change it and it was removed before.
+                Some(o)
+                    if may_change(&o, str_field(a, "type").unwrap_or(""))
+                        && was_removed(&key) => {}
                 _ => errs.push(format!("created Element '{key}' for someone else")),
             },
             (Some(b), a) => {
