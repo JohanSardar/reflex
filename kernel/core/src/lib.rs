@@ -121,7 +121,10 @@ impl Space {
     pub fn load(bytes: &[u8], actor_hex: &str) -> Result<Space> {
         let actor = parse_actor(actor_hex)?;
         let mut doc = doc::load(bytes).map_err(|e| KernelError::BadBytes(e.to_string()))?;
-        if doc::obj(&doc, &automerge::ROOT, "elements").is_none() {
+        if doc::ROOTS
+            .iter()
+            .any(|r| doc::obj(&doc, &automerge::ROOT, r).is_none())
+        {
             return Err(KernelError::BadBytes("not a Reflex Space".into()));
         }
         doc.set_actor(actor);
@@ -506,6 +509,17 @@ fn history_push(
     now_ms: i64,
 ) -> std::result::Result<(), automerge::AutomergeError> {
     let history = doc::root(tx, "history");
+    // A new action ends the redo chain: undone entries can no longer be redone.
+    let prefix = format!("{person}|");
+    let undone: Vec<_> = tx
+        .keys(&history)
+        .filter(|k| k.starts_with(&prefix))
+        .filter_map(|k| doc::obj(tx, &history, &k))
+        .filter(|m| doc::get_str(tx, m, "state").as_deref() == Some("undone"))
+        .collect();
+    for m in undone {
+        tx.put(&m, "state", "abandoned")?;
+    }
     let slot = format!("{person}|{:013}|{entry_id}", now_ms.max(0));
     let m = tx.put_object(&history, slot.as_str(), ObjType::Map)?;
     tx.put(&m, "id", entry_id)?;
