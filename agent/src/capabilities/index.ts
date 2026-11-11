@@ -10,6 +10,7 @@ import { normalizeOps } from "./normalize.ts";
 import * as library from "../library.ts";
 import { RECIPES, checkParams, expand, fromLibrary, typeGuide, type Recipe } from "../extensions.ts";
 import { runExec } from "../exec.ts";
+import { ModelError, importModel, modelParts, type Part } from "../model.ts";
 
 export type Identity = { agent: string; name: string; color: string };
 export type Person = { person: string; name: string };
@@ -60,6 +61,10 @@ export class Core {
   #lastSend = new Map<string, string>();
   #colors = new Map<string, string>();
   presence: () => { devices: number; viewing?: string[] };
+  /** Whether a 3D model may be read from a file path: only on the person's own Link. */
+  localFiles: boolean;
+  /** Each model asset's parts, once read. */
+  #parts = new Map<string, Part[]>();
 
   constructor(o: {
     spaces: SpaceStore;
@@ -75,7 +80,10 @@ export class Core {
     extensions?: library.Extension[];
     /** How many of the person's devices are connected now, and the Spaces on their screens, for request_attention. */
     presence?: () => { devices: number; viewing?: string[] };
+    /** Read 3D models from file paths on this computer (the person's Link, not a cloud session). */
+    localFiles?: boolean;
   }) {
+    this.localFiles = o.localFiles ?? false;
     this.#extensions = o.extensions ?? [];
     this.spaces = o.spaces;
     this.inbox = o.inbox;
@@ -282,6 +290,10 @@ export class Core {
         );
       }
       if (detail === "full") {
+        for (const e of found) if (e.type === "embed" && typeof e.model === "string") {
+          const parts = this.#partsOf(e.model);
+          if (parts.length) e.parts = parts.slice(0, 500);
+        }
         const { files, bytes } = this.#fileContents(found);
         return { json: { space: entry.name, elements: found, ...(files.length ? { files } : {}), pending_sends }, images: [], files: bytes };
       }
@@ -359,7 +371,9 @@ export class Core {
     const agent = ctx.who.agent;
     if (a.in_reply_to && !this.inbox.recipients(a.in_reply_to).includes(agent))
       throw fail("unknown_send", `No Send '${a.in_reply_to}' in your Inbox.`, "Pass the send ID from a Send Bundle, or leave in_reply_to out.", ["wait_for_user(timeout_s: 0)"]);
+    const imported = await this.#importModels(a.ops);
     const norm = normalizeOps(a.ops);
+    norm.repaired.unshift(...imported);
     if (norm.errors.length) throw new ReflexError(norm.errors.length === 1 ? norm.errors[0].code : "batch_rejected", norm.errors, [`read(space: '${a.space}')`]);
 
     // Placement next to a Mark: Marks live in Send Bundles, not in the kernel.
@@ -603,6 +617,52 @@ export class Core {
   // ---------- files ----------
 
   /** The contents of the file Elements among `found`: text inline, and every file's bytes for the surface. */
+  /**
+   * 3D models given as a link or a file path are read once and stored as an asset (a glTF packed
+   * into one GLB), so every device draws the same file without the network. Each op's model then
+   * names the asset. Returns what was done, for `repaired`.
+   */
+  async #importModels(ops: unknown): Promise<string[]> {
+    if (!Array.isArray(ops)) return [];
+    const done: string[] = [];
+    const errors: ProtocolError[] = [];
+    for (const [i, op] of ops.entries()) {
+      if (!op || typeof op !== "object") continue;
+      const holder = op.op === "add" || op.op === undefined ? op : op.op === "patch" && op.set && typeof op.set === "object" ? op.set : undefined;
+      const ref = holder?.model;
+      if (typeof ref !== "string" || /^asset:[0-9a-f]{64}$/.test(ref)) continue;
+      try {
+        if (!this.assets?.put) throw new ModelError("This Link can't store models.", "Run it with its asset store.");
+        const m = await importModel(ref, { files: this.localFiles });
+        const hash = this.assets.put(m.bytes);
+        holder.model = `asset:${hash}`;
+        const parts = this.#partsOf(holder.model);
+        done.push(`ops[${i}]: model ${m.name} stored as asset:${hash.slice(0, 12)}… (${m.format}${parts.length ? `, ${parts.length} parts: ${parts.slice(0, 12).map((p) => p.name).join(", ")}${parts.length > 12 ? ", …" : ""}` : ""})`);
+      } catch (e) {
+        const me = e instanceof ModelError ? e : new ModelError(`Couldn't read the model: ${(e as Error).message}.`, "Check the file, or export it again as .glb.");
+        errors.push({ op: i, field: op.op === "patch" ? "/set/model" : "/model", code: "invalid_input", msg: `ops[${i}]: ${me.message}`, fix: me.fix });
+      }
+    }
+    if (errors.length) throw new ReflexError(errors.length === 1 ? "invalid_input" : "batch_rejected", errors);
+    return done;
+  }
+
+  /** A model asset's parts, read once (none for USDZ, which only the devices read). */
+  #partsOf(model: string): Part[] {
+    const hash = /^asset:([0-9a-f]{64})$/.exec(model)?.[1];
+    if (!hash) return [];
+    if (!this.#parts.has(hash)) {
+      const bytes = this.assets?.get(hash);
+      if (!bytes) return [];
+      let parts: Part[] = [];
+      try {
+        parts = modelParts(bytes);
+      } catch {}
+      this.#parts.set(hash, parts);
+    }
+    return this.#parts.get(hash)!;
+  }
+
   #fileContents(found: Record<string, any>[]) {
     const files: Record<string, any>[] = [];
     const bytes: FileOut[] = [];

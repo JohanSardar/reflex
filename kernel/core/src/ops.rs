@@ -759,11 +759,21 @@ pub fn parse_intent(v: &Value) -> Result<Op, Vec<OpError>> {
     }
 }
 
+/// Whether a file is a 3D model a 3D Embed draws: glTF (binary or JSON) or USDZ.
+fn is_model(mime: &str, name: &str) -> bool {
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    matches!(
+        mime,
+        "model/gltf-binary" | "model/gltf+json" | "model/vnd.usdz+zip" | "model/usd"
+    ) || (name.contains('.') && matches!(ext.as_str(), "glb" | "gltf" | "usdz"))
+}
+
 /// A file the person added from the device (SPEC §5, "User imports"):
 /// `{intent: "add_file", id, name, mime, size, src, at?, w?, h?, pages?}`.
 /// A photo (an `image/*` mime) becomes one image Element; a PDF with `pages`
 /// (`[{id, src, page, at?, w?, h?}]`, each page rendered by the device) becomes
-/// one image Element per page; anything else becomes a file Element. Returns
+/// one image Element per page; a glTF or USDZ model becomes a 3D Embed (an
+/// `embed` with `model`); anything else becomes a file Element. Returns
 /// the ops and what the import was, for the next Send's `added_file` change.
 pub fn parse_add_file(v: &Value) -> Result<(Vec<Op>, Value), Vec<OpError>> {
     let bad = |m: &str, fix: &str| vec![OpError::new(0, Code::InvalidInput, m, fix)];
@@ -819,6 +829,12 @@ pub fn parse_add_file(v: &Value) -> Result<(Vec<Op>, Value), Vec<OpError>> {
                 )
             })
             .collect::<Result<_, _>>()?
+    } else if is_model(&mime, &name) {
+        // A glTF or USDZ model becomes a 3D Embed of it, which the person can turn and mark up.
+        let mut el = pick(&o, &["id", "at", "w", "h"]);
+        el["type"] = json!("embed");
+        el["model"] = o.get("src").cloned().unwrap_or(Value::Null);
+        vec![Op::Add(add_from(0, el).map_err(|e| vec![e])?)]
     } else if mime.starts_with("image/") {
         vec![image(
             pick(&o, &["id", "src", "at", "w", "h"]),

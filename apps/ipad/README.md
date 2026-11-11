@@ -29,6 +29,15 @@ xcodebuild -project Reflex.xcodeproj -scheme Reflex \
 - `Packages/ReflexRender`: draws Protocol v0 Elements (text, Markdown, shapes, sticky notes, math, frames, regions, connectors, images) from the kernel's scene JSON. Unknown types draw as a labelled placeholder. LaTeX (`math`) is typeset natively with [SwiftMath](https://github.com/mgriebling/SwiftMath) (MIT), drawn at the screen's scale times the zoom so it stays crisp when zoomed in; LaTeX that doesn't parse shows as its source.
 
 - `Packages/ReflexEmbed`: HTML Embeds. Each runs in its own `WKWebView` with a nonpersistent data store, a content rule list that blocks every load but its approved CDNs (code only) and `allow` hosts, the same Content Security Policy as the web viewer, no navigation, popups or dialogs, and the shared bridge (`Resources/bridge.js` links to `apps/web/src/bridge.js`) on a script message handler. A 5-second heartbeat stops an Embed that keeps the processor busy, a crashed web process is reported, and every block shows as a note on the Embed. Canvas Embeds don't take touches (the Pencil draws over them); Embeds in a Panel do. `setState` is saved on the Element (`set_state`) and syncs; an Embed in a Panel saves it as its component's value. `notify` becomes a tap for the Agent, `emit` fires `embed_event` Behaviors, and a Mark drawn on an Embed asks its Anchor resolver what it points at (`embed_anchors` on the Send). An MCP App view's tool calls are denied until the person taps "Allow <server>" on it; this iPad remembers the server.
+- `Packages/ReflexModel`: 3D Embeds (an Embed with a `model`). It reads the GLB the Link packs every glTF into (node tree, triangle meshes, base colors) or a USDZ into RealityKit, in an `ARView` with no camera feed. The orbit camera matches the web viewer and `look` (40° field of view, `yaw`, `pitch`, `zoom` around the model's center). Named nodes holding meshes are its parts. It answers which part is under a point (ray against the triangles), resolves a Mark to the parts it covers with the camera pose, and moves a grabbed part on a plane facing the camera.
+
+## 3D Embeds
+
+- **Turn, zoom, slide.** One finger on a 3D Embed turns the model, a pinch zooms, two fingers slide it. The Pencil still draws over it. These are read from the touches themselves in `ReflexInput`'s `TouchWatcher`: on iOS 26 PencilKit holds back a pan recognizer's actions on the canvas until the finger lifts.
+- **Grab a part.** Hold a finger still on a part for a moment (it turns blue), then move it. Letting go saves `part:<name>` in the Embed's state (`position`, `moved_by`, `base`), which syncs and shows in the next Send's `changes`. A viewer can't move parts.
+- **Marks.** A stroke drawn over the model is resolved when it is drawn, so it names the part as the person saw it: `{kind: "part", part, parts, label, camera}`.
+- **Send images** draw a snapshot of the model under the Ink, not a grey box.
+- **Import.** A `.glb`, `.gltf` (with its buffers inside) or `.usdz` from Files or dropped on the canvas becomes a 3D Embed.
 
 ## Minimum iPadOS: 26.0
 
@@ -78,6 +87,8 @@ Send claims the strokes drawn since the last Send in the kernel (`freeze_send`),
 - After a refused change, the iPad starts the Space over from the Link's copy; its own Ink comes back as remote Ink.
 - Remote Ink can't be erased or lassoed from this iPad; only its own Ink is in PencilKit.
 - An MCP App server the person allowed is allowed on this iPad only.
+- 3D models: textures, skins and animation aren't read from a GLB; a `.gltf` import needs its buffers inside it (data: URIs). Only one part moves at a time, by position; turning a part by hand isn't there.
+- A refused Panel save isn't retried.
 
 ## Debug
 

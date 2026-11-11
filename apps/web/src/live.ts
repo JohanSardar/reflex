@@ -6,7 +6,7 @@ import { SceneView, extent, type El } from "./render.ts";
 
 export class LiveSpace {
   readonly view: SceneView;
-  readonly embeds = new Embeds();
+  readonly embeds: Embeds;
   readonly conn: Connection;
   space = "";
   #frame = 0;
@@ -16,8 +16,15 @@ export class LiveSpace {
 
   constructor(conn: Connection, root: HTMLElement) {
     this.conn = conn;
+    this.embeds = new Embeds({
+      bytes: async (hash) => {
+        const r = await conn.api(`/api/asset/${hash}`);
+        return r.ok ? await r.arrayBuffer() : undefined;
+      },
+    });
     this.view = new SceneView(root, {
       embed: (e) => this.embeds.frame(e),
+      embedUpdate: (e) => this.embeds.update(e),
       asset: async (hash) => {
         const r = await conn.api(`/api/asset/${hash}`);
         return r.ok ? URL.createObjectURL(await r.blob()) : undefined;

@@ -17,6 +17,18 @@ const STALL_MS = 5000;
 const EVENTS_PER_10S = 10;
 
 const BRIDGE = await (await fetch(new URL("./bridge.js", import.meta.url))).text();
+const MODEL_VIEW = await (await fetch(new URL("./model-view.js", import.meta.url))).text();
+/** three.js for 3D Embeds, from an approved CDN, at a fixed version. */
+const THREE = "https://cdn.jsdelivr.net/npm/three@0.170.0";
+/** The document a 3D Embed runs: three.js and the model viewer; the host posts the model's bytes in. */
+const MODEL_DOC = `<!doctype html><html><head><style>
+html, body { margin: 0; height: 100%; overflow: hidden; background: #fff; font: 13px -apple-system, system-ui, sans-serif; }
+#view, canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+#title { position: absolute; left: 12px; top: 10px; font-weight: 600; font-size: 15px; color: #1d1d1f; pointer-events: none; }
+#note { position: absolute; left: 8px; bottom: 8px; right: 8px; padding: 6px 10px; border-radius: 8px; background: #fff5e6; color: #8a3b00; }
+</style></head><body><div id="view"></div><div id="title" hidden></div><div id="note" hidden></div>
+<script type="importmap">{"imports":{"three":"${THREE}/build/three.module.js","three/addons/":"${THREE}/examples/jsm/"}}</script>
+<script type="module">${MODEL_VIEW.replace(/<\/script/gi, "<\\/script")}</script></body></html>`;
 
 const safeJson = (v: unknown) => JSON.stringify(v ?? {}).replace(/[<\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 const hostOk = (h: string) => /^[a-z0-9.-]{1,253}$/.test(h);
@@ -25,7 +37,7 @@ const hostOk = (h: string) => /^[a-z0-9.-]{1,253}$/.test(h);
 export const serverOf = (uri?: string) => (uri?.startsWith("ui://") ? uri.slice(5).split("/")[0] || undefined : undefined);
 
 /** The document an Embed runs: CSP first, then the bridge, then the template. */
-export function embedDocument(html: string, o: { props: unknown; state: unknown; allow: string[]; mcp?: { server: string } }): string {
+export function embedDocument(html: string, o: { props: unknown; state: unknown; allow: string[]; mcp?: { server: string }; blobs?: boolean }): string {
   const own = [...new Set(o.allow)].filter(hostOk).map((h) => `https://${h}`);
   const code = [...new Set([...o.allow, ...DEFAULT_ALLOW])].filter(hostOk).map((h) => `https://${h}`).join(" ");
   const csp = [
@@ -36,7 +48,7 @@ export function embedDocument(html: string, o: { props: unknown; state: unknown;
     `font-src data: ${code}`,
     `media-src data: blob: ${own.join(" ")}`,
     // No network by default: only the hosts this Embed was allowed.
-    `connect-src ${own.length ? [...own, ...own.map((h) => h.replace("https://", "wss://"))].join(" ") : "'none'"}`,
+    `connect-src ${own.length || o.blobs ? [...own, ...own.map((h) => h.replace("https://", "wss://")), ...(o.blobs ? ["blob:"] : [])].join(" ") : "'none'"}`,
     "worker-src 'none'",
     "frame-src 'none'",
     "form-action 'none'",
@@ -61,6 +73,8 @@ type Live = {
   events: number[];
   stopped?: boolean;
   restarts: number;
+  /** A 3D Embed's model asset, posted in once its page is ready. */
+  model?: string;
 };
 
 /** Every live Embed frame, by Element ID, and what it registered. */
@@ -72,8 +86,11 @@ export class Embeds {
   #queue: string[] = [];
   #probe?: { id: string; until: number };
   templates = new Map<string, Template>();
+  /** An asset's bytes, for 3D Embeds. */
+  #bytes?: (hash: string) => Promise<ArrayBuffer | undefined>;
 
-  constructor() {
+  constructor(o: { bytes?: (hash: string) => Promise<ArrayBuffer | undefined> } = {}) {
+    this.#bytes = o.bytes;
     addEventListener("message", (ev) => {
       const m = ev.data as Record<string, unknown> | null;
       if (!m || m.__reflex !== 1) return;
@@ -84,8 +101,16 @@ export class Embeds {
       f.beat = performance.now();
       switch (m.t) {
         case "beat":
+          return;
         case "ready":
           return;
+        case "model_ready":
+          // A 3D Embed's viewer loaded three.js and listens: hand it the model.
+          if (f.model) void this.#sendModel(f, f.model);
+          return;
+        case "setState":
+          // The viewer reads and never writes, so what an Embed saves here would be lost: say so.
+          return this.#note(f, "Not saved: the web viewer can't change a Space. Do this on the iPad.");
         case "anchors":
           f.anchors = true;
           return;
@@ -166,6 +191,19 @@ export class Embeds {
     n.textContent = text.slice(0, 300); // text, never markup
   }
 
+  async #sendModel(f: Live, hash: string) {
+    const bytes = await this.#bytes?.(hash);
+    if (!bytes) return this.#note(f, "The model isn't on this Link yet");
+    f.frame.contentWindow?.postMessage({ __reflex: 2, t: "model", bytes }, "*", [bytes]);
+  }
+
+  /** A 3D Embed's parameters or state changed: tell its page, which keeps its camera. */
+  update(e: Record<string, any>) {
+    const f = this.#frames.get(e.id);
+    if (!f?.model || f.stopped) return;
+    f.frame.contentWindow?.postMessage({ __reflex: 2, t: "update", props: e.params ?? {}, state: e.state ?? {} }, "*");
+  }
+
   on(fn: (e: EmbedEvent) => void) {
     this.#listeners.push(fn);
   }
@@ -175,7 +213,9 @@ export class Embeds {
     let html: string | undefined;
     let allow: string[] = e.allow ?? [];
     let source: string | undefined = typeof e.url === "string" && e.url.startsWith("ui://") ? e.url : undefined;
-    if (typeof e.html === "string") html = e.html;
+    const model = typeof e.model === "string" && e.model.startsWith("asset:") ? e.model.slice(6) : undefined;
+    if (model) html = MODEL_DOC;
+    else if (typeof e.html === "string") html = e.html;
     else if (typeof e.template === "string") {
       const t = this.templates.get(e.template);
       if (t && typeof t.template === "string") {
@@ -188,7 +228,7 @@ export class Embeds {
     const box = document.createElement("div");
     box.className = "embed-box";
     const server = serverOf(source);
-    const doc = html === undefined ? undefined : embedDocument(html, { props: { ...(e.params ?? {}), ...(e.data ? { data: e.data } : {}) }, state: e.state ?? {}, allow, ...(server ? { mcp: { server } } : {}) });
+    const doc = html === undefined ? undefined : embedDocument(html, { props: { ...(e.params ?? {}), ...(e.data ? { data: e.data } : {}) }, state: e.state ?? {}, allow, ...(server ? { mcp: { server } } : {}), ...(model ? { blobs: true } : {}) });
     const make = () => {
       const frame = document.createElement("iframe");
       frame.className = "embed-frame";
@@ -203,7 +243,7 @@ export class Embeds {
     const frame = make();
     box.append(frame);
     this.#queue = this.#queue.filter((q) => q !== e.id);
-    this.#frames.set(e.id, { frame, box, make, anchors: false, beat: performance.now() + 10_000, ...(server ? { server } : {}), events: [], restarts: 0 });
+    this.#frames.set(e.id, { frame, box, make, anchors: false, beat: performance.now() + 10_000, ...(server ? { server } : {}), ...(model ? { model } : {}), events: [], restarts: 0 });
     return box;
   }
 

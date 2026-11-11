@@ -19,6 +19,7 @@ reflex dev ./my-embed  # the playground on an in-memory Space (see agent/README 
 | `src/live.ts` | one Space drawn live: redraws whenever its replica or the Library's changes |
 | `src/render.ts` | DOM renderers for the native Element types, with a pan and zoom camera |
 | `src/embed.ts` | HTML Embeds in sandboxed iframes: their documents, limits, diagnostics and Anchor requests |
+| `src/model-view.js` | 3D Embeds: three.js in the Embed's frame, the same orbit camera as the iPad, part settings and moves, and part Anchors |
 | `src/bridge.js` | The `reflex` bridge every Embed gets, here and on the iPad (`ReflexEmbed` links to this file) |
 
 There is no build step. The host serves `src/*.ts` with Node's type stripping, so the sources use only
@@ -51,5 +52,6 @@ erasable TypeScript (`npx tsc -p apps/web`).
 - Typing, tapping and Sending from the viewer (SPEC §3). It shows Spaces; the iPad and Agents change them.
 - The viewer shows who else is in the Space (names, cursors, selections) but doesn't report its own. Cursors move with the canvas only when the next update arrives.
 - Behaviors, Panels, and math typesetting (LaTeX shows as its source).
-- An Embed's `setState` and events stay in the page: the viewer can't write. They sync from the iPad.
+- An Embed's `setState` and events stay in the page: the viewer can't write, and the Embed is told so ("Not saved"). They sync from the iPad.
+- 3D Embeds turn and zoom here, but parts move only on the iPad. Each viewer keeps its own camera, so Ink drawn over a model on the iPad may not line up with the model here.
 - The viewer runs only on the Link's computer. Reaching it from another device needs the Relay (T9).

@@ -1,9 +1,12 @@
 import ReflexEmbed
+import ReflexModel
 import SwiftUI
 
 extension EnvironmentValues {
     /// The live Embeds of the open Space; without one, Embeds draw as placeholders.
     @Entry public var embedHost: EmbedHost? = nil
+    /// The open Space's 3D Embeds.
+    @Entry public var modelHost: ModelHost? = nil
 }
 
 extension EmbedHost {
@@ -36,10 +39,13 @@ extension EmbedHost {
 struct EmbedElementView: View {
     let element: SceneElement
     @Environment(\.embedHost) private var host
+    @Environment(\.modelHost) private var models
 
     var body: some View {
         Group {
-            if let host, let spec = host.spec(template: element.template, html: element.html, url: element.url, params: element.params, data: element.data, state: element.state, allow: element.allow) {
+            if let model = element.model {
+                ModelEmbedView(element: element, model: model, host: models)
+            } else if let host, let spec = host.spec(template: element.template, html: element.html, url: element.url, params: element.params, data: element.data, state: element.state, allow: element.allow) {
                 EmbedView(host: host, key: element.id, spec: spec, interactive: false)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.color("grey").opacity(0.4), lineWidth: 1))
                     .overlay(alignment: .bottomLeading) {
@@ -54,5 +60,31 @@ struct EmbedElementView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(element.id)
+    }
+}
+
+/// A 3D Embed: its RealityKit view, with the title the Agent gave it and why it isn't showing, if it isn't.
+struct ModelEmbedView: View {
+    let element: SceneElement
+    let model: String
+    let host: ModelHost?
+
+    var body: some View {
+        let scene = host?.scene(element.id, model: model)
+        ZStack(alignment: .topLeading) {
+            Color.white
+            if let scene { ModelView(scene: scene) }
+            if let title = element.params?.object?["title"].flatMap({ if case .string(let s) = $0 { s } else { nil } }) {
+                Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Color(white: 0.11)).padding(.horizontal, 12).padding(.vertical, 10)
+            }
+            if let note = scene?.note ?? (host == nil ? "3D model" : nil) {
+                Text(note).font(.caption).foregroundStyle(Palette.color("grey")).frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.color("grey").opacity(0.4), lineWidth: 1))
+        .onChange(of: element, initial: true) { _, e in
+            scene?.update(params: (e.params?.any as? [String: Any]) ?? [:], state: (e.state?.any as? [String: Any]) ?? [:])
+        }
     }
 }

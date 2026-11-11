@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		2479EB30C25B94EBE85498A4 /* RegionButtons.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC3D50E4BDE6A7D43E9EDAB6 /* RegionButtons.swift */; };
+		38DE8536458E2FDE4A5D07AB /* ReflexModel in Frameworks */ = {isa = PBXBuildFile; productRef = 072B3808F8D0A9D3136E83B0 /* ReflexModel */; };
 		3D0FBA11EE5FC8730D66FD91 /* ReflexEmbed in Frameworks */ = {isa = PBXBuildFile; productRef = 2B811EE745172282BE1206BF /* ReflexEmbed */; };
 		48B74E2F9FCF99E932A54C57 /* PairSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F279A47D5602D40DAD49D3C0 /* PairSheet.swift */; };
 		66AF564D327AA5A9C5F1E5E7 /* AgentsBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3BCA2CC1A4BA7515DC71FEE /* AgentsBar.swift */; };
@@ -30,6 +31,7 @@
 		025EBD84B13E2749FADC298A /* CanvasScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasScreen.swift; sourceTree = "<group>"; };
 		3E055100FAC6A8236B6631F8 /* ShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareSheet.swift; sourceTree = "<group>"; };
 		3EAE784E8E35762E81C8317F /* Reflex.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Reflex.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4AA1293C772A12E9C57DAD83 /* ReflexModel */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ReflexModel; path = Packages/ReflexModel; sourceTree = SOURCE_ROOT; };
 		67AC7BE637ACC8B15C35B1AA /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 		69BAF4E1D80231F143C1C8E1 /* SpaceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceSession.swift; sourceTree = "<group>"; };
 		6D4550F287B1A53DCAEC12B8 /* ReflexLink */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ReflexLink; path = Packages/ReflexLink; sourceTree = SOURCE_ROOT; };
@@ -57,6 +59,7 @@
 				FCCDCDA94BE70ED2342CED8B /* ReflexRender in Frameworks */,
 				839B6323F4EE7B1F75BC6E44 /* ReflexLink in Frameworks */,
 				3D0FBA11EE5FC8730D66FD91 /* ReflexEmbed in Frameworks */,
+				38DE8536458E2FDE4A5D07AB /* ReflexModel in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -69,6 +72,7 @@
 				DD39B1736128DF082AB8C576 /* ReflexEmbed */,
 				6F99831FE1DCFCD587A60690 /* ReflexInput */,
 				6D4550F287B1A53DCAEC12B8 /* ReflexLink */,
+				4AA1293C772A12E9C57DAD83 /* ReflexModel */,
 				AE1289844C38D7FE7CAF6CDF /* ReflexRender */,
 			);
 			path = Packages;
@@ -132,6 +136,7 @@
 				7A1451747DB4DC866B3F0C75 /* ReflexRender */,
 				178AADCDAE1C63DA1DF91BB1 /* ReflexLink */,
 				2B811EE745172282BE1206BF /* ReflexEmbed */,
+				072B3808F8D0A9D3136E83B0 /* ReflexModel */,
 			);
 			productName = Reflex;
 			productReference = 3EAE784E8E35762E81C8317F /* Reflex.app */;
@@ -164,6 +169,7 @@
 				CD071560A16D9BF2E185E946 /* XCLocalSwiftPackageReference "Packages/ReflexEmbed" */,
 				9C7596FAB3E75CA85B7D6F72 /* XCLocalSwiftPackageReference "Packages/ReflexInput" */,
 				0F719101244B5CB22E047F8D /* XCLocalSwiftPackageReference "Packages/ReflexLink" */,
+				2725F941756AAA48C7D826CF /* XCLocalSwiftPackageReference "Packages/ReflexModel" */,
 				D9FAB846B45CC2AFA1DEE4BF /* XCLocalSwiftPackageReference "Packages/ReflexRender" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -399,6 +405,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/ReflexLink;
 		};
+		2725F941756AAA48C7D826CF /* XCLocalSwiftPackageReference "Packages/ReflexModel" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/ReflexModel;
+		};
 		9C7596FAB3E75CA85B7D6F72 /* XCLocalSwiftPackageReference "Packages/ReflexInput" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/ReflexInput;
@@ -414,6 +424,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		072B3808F8D0A9D3136E83B0 /* ReflexModel */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ReflexModel;
+		};
 		178AADCDAE1C63DA1DF91BB1 /* ReflexLink */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ReflexLink;

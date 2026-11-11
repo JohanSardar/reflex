@@ -35,6 +35,20 @@ public enum ElementTouch: Sendable {
     case drag
 }
 
+/// A finger gesture on an Element that is a surface of its own (a 3D Embed): one finger turns
+/// it, two slide it, a pinch zooms, and a long press grabs what is under the finger. `start` is
+/// where the gesture began, in Space points; `at` is where the finger is now, in Space points;
+/// `by` is the movement since the last report, in screen points.
+public enum SurfaceGesture: Sendable {
+    public enum Phase: Sendable { case began, changed, ended, cancelled }
+    case orbit(start: CGPoint, by: CGSize)
+    case slide(start: CGPoint, by: CGSize)
+    case zoom(start: CGPoint, scale: CGFloat)
+    case hold(start: CGPoint, at: CGPoint, phase: Phase)
+    /// Every finger lifted.
+    case ended(start: CGPoint)
+}
+
 /// What one drawing change did: new actions, or an undo or redo of one.
 public enum InkEdit: Sendable {
     case action([InkIntent])
@@ -50,6 +64,19 @@ public struct InkStrokeInfo: Identifiable, Sendable {
     public var bounds: CGRect
 }
 
+extension SurfaceGesture {
+    /// The same gesture with its points (`start`, `at`) mapped, say from content to Space coordinates.
+    func mapped(_ f: (CGPoint) -> CGPoint) -> SurfaceGesture {
+        switch self {
+        case .orbit(let s, let by): .orbit(start: f(s), by: by)
+        case .slide(let s, let by): .slide(start: f(s), by: by)
+        case .zoom(let s, let k): .zoom(start: f(s), scale: k)
+        case .hold(let s, let at, let ph): .hold(start: f(s), at: f(at), phase: ph)
+        case .ended(let s): .ended(start: f(s))
+        }
+    }
+}
+
 /// The PencilKit canvas. A finger that lands on an Element that takes touch
 /// (a tap or long-press Behavior, or a draggable Element) belongs to that
 /// Element: drawing and scrolling are off until it lifts.
@@ -60,21 +87,69 @@ final class ReflexCanvasView: PKCanvasView {
     var refuses: ((CGPoint) -> Bool)?
     /// Where a touch or the hovering Pencil is now (content coordinates), or nil once it left.
     var moved: ((CGPoint?) -> Void)?
+    /// Whether a finger at this point (content coordinates) is on a surface Element (a 3D Embed), which takes every finger gesture.
+    var surface: ((CGPoint) -> Bool)?
+    /// The finger gestures on a surface, with points in content coordinates.
+    var onSurface: ((SurfaceGesture) -> Void)?
 }
 
 /// Watches every touch on the canvas without recognizing anything. When a
 /// finger lands on an Element that takes touch, it turns the canvas's drawing
 /// and scrolling off for that touch, so the Element's gestures get it.
+///
+/// A finger that lands on a surface (a 3D Embed) is read here, from the touches themselves:
+/// one finger turns the view, two slide and pinch it, and a finger held still grabs what is
+/// under it. Recognizers for these would compete with PencilKit's own, which on iOS 26 holds
+/// back a pan's actions until the finger lifts.
 final class TouchWatcher: UIGestureRecognizer {
     weak var canvas: ReflexCanvasView?
     private var held = false
 
+    /// The surface gesture under way: its fingers, where it began (content coordinates) and the
+    /// first finger's touch-down point and time on screen; the last center and spread of the
+    /// fingers on screen; whether it has moved past a tap or a hold; and whether it is a hold.
+    private var surfaceTouches: [UITouch] = []
+    private var surfaceStart: CGPoint?
+    private var surfaceDown: CGPoint = .zero
+    private var surfaceLast: (center: CGPoint, spread: CGFloat) = (.zero, 0)
+    private var surfaceMoved = false
+    private var surfaceHolding = false
+    private var holdTimer: Timer?
+    static let holdDelay: TimeInterval = 0.35
+    static let holdSlop: CGFloat = 12
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         if let canvas, let t = touches.first { canvas.moved?(t.location(in: canvas)) }
-        guard let canvas, let t = touches.first, !held else { return }
+        guard let canvas else { return }
+        if surfaceStart != nil {
+            // Another finger on a surface gesture: no hold now, and measure from the new center.
+            surfaceTouches += touches.filter { $0.type == .direct }
+            if !surfaceHolding { cancelHold() }
+            surfaceLast = measure()
+            return
+        }
+        guard let t = touches.first, !held else { return }
         if (event.allTouches?.count ?? 1) == 1, canvas.refuses?(t.location(in: canvas)) == true {
             held = true
             canvas.drawingGestureRecognizer.isEnabled = false
+            return
+        }
+        if t.type == .direct, canvas.surface?(t.location(in: canvas)) == true {
+            held = true
+            canvas.drawingGestureRecognizer.isEnabled = false
+            canvas.panGestureRecognizer.isEnabled = false
+            canvas.pinchGestureRecognizer?.isEnabled = false
+            surfaceTouches = touches.filter { $0.type == .direct }
+            surfaceStart = t.location(in: canvas)
+            surfaceDown = t.location(in: canvas.superview)
+            surfaceMoved = false
+            surfaceHolding = false
+            surfaceLast = measure()
+            if surfaceTouches.count == 1 {
+                holdTimer = Timer.scheduledTimer(withTimeInterval: Self.holdDelay, repeats: false) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.beginHold() }
+                }
+            }
             return
         }
         if t.type == .direct, (event.allTouches?.count ?? 1) == 1, canvas.claims?(t.location(in: canvas)) == true {
@@ -86,21 +161,91 @@ final class TouchWatcher: UIGestureRecognizer {
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         if let canvas, let t = touches.first { canvas.moved?(t.location(in: canvas)) }
+        guard let canvas, let start = surfaceStart, let first = surfaceTouches.first else { return }
+        if surfaceHolding {
+            canvas.onSurface?(.hold(start: start, at: first.location(in: canvas), phase: .changed))
+            return
+        }
+        let now = measure()
+        if !surfaceMoved {
+            let p = first.location(in: canvas.superview)
+            guard hypot(p.x - surfaceDown.x, p.y - surfaceDown.y) > Self.holdSlop || surfaceTouches.count > 1 else { return }
+            surfaceMoved = true
+            cancelHold()
+            // A single finger turns from where it touched down, so no movement is lost.
+            if surfaceTouches.count == 1 { surfaceLast.center = surfaceDown }
+        }
+        let by = CGSize(width: now.center.x - surfaceLast.center.x, height: now.center.y - surfaceLast.center.y)
+        if surfaceTouches.count >= 2 {
+            canvas.onSurface?(.slide(start: start, by: by))
+            if surfaceLast.spread > 1, now.spread > 1 { canvas.onSurface?(.zoom(start: start, scale: now.spread / surfaceLast.spread)) }
+        } else {
+            canvas.onSurface?(.orbit(start: start, by: by))
+        }
+        surfaceLast = now
     }
 
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { release() }
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { release() }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { lift(touches, cancelled: false) }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { lift(touches, cancelled: true) }
+
+    private func lift(_ touches: Set<UITouch>, cancelled: Bool) {
+        guard let canvas, let start = surfaceStart else { return release() }
+        surfaceTouches.removeAll { touches.contains($0) }
+        if !surfaceTouches.isEmpty {
+            surfaceLast = measure()
+            return
+        }
+        cancelHold()
+        if surfaceHolding {
+            let at = touches.first?.location(in: canvas) ?? start
+            canvas.onSurface?(.hold(start: start, at: at, phase: cancelled ? .cancelled : .ended))
+        }
+        canvas.onSurface?(.ended(start: start))
+        surfaceStart = nil
+        surfaceHolding = false
+        release()
+    }
+
+    private func beginHold() {
+        holdTimer = nil
+        guard let canvas, let start = surfaceStart, !surfaceMoved, surfaceTouches.count == 1, let t = surfaceTouches.first else { return }
+        surfaceHolding = true
+        canvas.onSurface?(.hold(start: start, at: t.location(in: canvas), phase: .began))
+    }
+
+    private func cancelHold() {
+        holdTimer?.invalidate()
+        holdTimer = nil
+    }
+
+    /// The center of the fingers on screen, and how far apart they are.
+    private func measure() -> (center: CGPoint, spread: CGFloat) {
+        let pts = surfaceTouches.map { $0.location(in: canvas?.superview) }
+        guard !pts.isEmpty else { return (.zero, 0) }
+        let c = CGPoint(x: pts.map(\.x).reduce(0, +) / CGFloat(pts.count), y: pts.map(\.y).reduce(0, +) / CGFloat(pts.count))
+        let spread = pts.count < 2 ? 0 : pts.map { hypot($0.x - c.x, $0.y - c.y) }.reduce(0, +) / CGFloat(pts.count)
+        return (c, spread)
+    }
 
     private func release() {
         if held, let canvas {
             canvas.drawingGestureRecognizer.isEnabled = true
             canvas.panGestureRecognizer.isEnabled = true
+            canvas.pinchGestureRecognizer?.isEnabled = true
         }
         held = false
         state = .failed
     }
 
     override func reset() {
+        if surfaceStart != nil, let canvas, let start = surfaceStart {
+            cancelHold()
+            if surfaceHolding { canvas.onSurface?(.hold(start: start, at: start, phase: .cancelled)) }
+            canvas.onSurface?(.ended(start: start))
+            surfaceStart = nil
+            surfaceHolding = false
+            surfaceTouches = []
+        }
         if held { release() }
         super.reset()
     }
@@ -143,6 +288,9 @@ public final class InkCanvasController: NSObject {
     @ObservationIgnored public var readOnly = false
     /// Where the pen or finger is, in Space points, as it moves (nil once it leaves), for other people's screens.
     @ObservationIgnored public var onCursor: ((CGPoint?) -> Void)?
+    /// Whether a finger at this Space point is on a surface Element (a 3D Embed); its gestures go to `onSurface`, not the canvas.
+    @ObservationIgnored public var surfaceAt: ((CGPoint) -> Bool)?
+    @ObservationIgnored public var onSurface: ((SurfaceGesture) -> Void)?
 
     /// Size of the scrollable Space, in points.
     public static let spaceSize = CGSize(width: 6000, height: 6000)
@@ -289,6 +437,14 @@ public final class InkCanvasController: NSObject {
         }
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))
         canvas.addGestureRecognizer(hover)
+        canvas.surface = { [weak self] screen in
+            guard let self else { return false }
+            return MainActor.assumeIsolated { self.surfaceAt?(self.spacePoint(screen)) == true }
+        }
+        canvas.onSurface = { [weak self] g in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.onSurface?(g.mapped(self.spacePoint)) }
+        }
         canvas.refuses = { [weak self] screen in
             guard let self else { return false }
             return MainActor.assumeIsolated {

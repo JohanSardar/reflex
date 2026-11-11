@@ -129,7 +129,7 @@ export class LanTransport implements Transport {
           const addr = server.address();
           const actual = typeof addr === "object" && addr ? addr.port : port;
           if (this.#advertise) {
-            this.#bonjour ??= new Bonjour();
+            this.#bonjour ??= this.#mdns();
             this.#bonjour.publish({
               name: `Reflex Link ${this.#device}`,
               type: SERVICE_TYPE,
@@ -145,8 +145,21 @@ export class LanTransport implements Transport {
     });
   }
 
+  /**
+   * Bonjour, whose multicast errors are logged, not thrown: a network interface that comes and
+   * goes (a VPN, a simulator's bridge) makes a send fail with EADDRNOTAVAIL, and an error thrown
+   * from that callback would take the whole Link down.
+   */
+  #mdns(): Bonjour {
+    let last = 0;
+    return new Bonjour({}, (err: Error) => {
+      if (Date.now() - last > 60_000) console.error(`lan: Bonjour: ${err.message} (discovery keeps going)`);
+      last = Date.now();
+    });
+  }
+
   discover(onCandidate: (c: Candidate) => void): void {
-    this.#bonjour ??= new Bonjour();
+    this.#bonjour ??= this.#mdns();
     const seen = (s: Service): void => {
       const dev = typeof s.txt?.dev === "string" ? s.txt.dev : null;
       if (dev === this.#device) return;

@@ -1,4 +1,5 @@
 import OSLog
+import PencilKit
 import ReflexInput
 import ReflexLink
 import ReflexRender
@@ -32,6 +33,7 @@ struct CanvasScreen: View {
                 )
                 .environment(\.assetImages, AssetImages { [link] hash in AssetImageCache.shared.image(hash, link: link) })
                 .environment(\.embedHost, open.embeds)
+                .environment(\.modelHost, open.models)
                 .ignoresSafeArea()
                 InkCanvas(controller: open.ink).ignoresSafeArea().id(open.id)
                     .onDrop(of: [.item], delegate: CanvasDrop(session: open))
@@ -132,6 +134,7 @@ struct CanvasScreen: View {
         }
         // A new role (made a viewer, removed) applies to the canvas at once, not at the next change.
         .onChange(of: open.map { link.role($0.id) } ?? "") { _, _ in open?.refresh() }
+        .onChange(of: link.assetRevision) { _, _ in open?.models.retry() }
         .onChange(of: incomingCode) { _, code in if code != nil { pairing = true } }
         // Which Space is on screen, so an Agent's request_attention knows the person is already looking at it.
         .onChange(of: open?.id, initial: true) { _, _ in reportPresence() }
@@ -290,7 +293,9 @@ final class AssetImageCache {
 /// What the screen shows in one rectangle of the Space, as a PNG.
 enum Crop {
     @MainActor
-    static func capture(space rect: CGRect, zoom: CGFloat, offset: CGPoint) -> (png: Data, bounds: CGRect)? {
+    /// `models` are pictures of 3D Embeds (Space frames), drawn where they are: a view snapshot
+    /// leaves their Metal content out. `ink` is drawn again over them.
+    static func capture(space rect: CGRect, zoom: CGFloat, offset: CGPoint, models: [(CGRect, UIImage)] = [], ink: PKDrawing? = nil) -> (png: Data, bounds: CGRect)? {
         guard !rect.isNull, rect.width >= 1, rect.height >= 1,
               let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
         else { return nil }
@@ -299,6 +304,14 @@ enum Crop {
         format.scale = 2
         let image = UIGraphicsImageRenderer(size: onScreen.size, format: format).image { _ in
             window.drawHierarchy(in: CGRect(origin: CGPoint(x: -onScreen.minX, y: -onScreen.minY), size: window.bounds.size), afterScreenUpdates: false)
+            let shown = models.filter { $0.0.intersects(rect) }
+            guard !shown.isEmpty else { return }
+            let toCrop = { (r: CGRect) in CGRect(x: (r.minX - rect.minX) * zoom, y: (r.minY - rect.minY) * zoom, width: r.width * zoom, height: r.height * zoom) }
+            for (frame, image) in shown { image.draw(in: toCrop(frame)) }
+            if let ink {
+                let img = ink.image(from: rect, scale: 2)
+                img.draw(in: toCrop(rect))
+            }
         }
         return image.pngData().map { ($0, rect) }
     }

@@ -213,6 +213,7 @@ export async function startAgentHost(o: AgentHostOptions) {
     progressEvery: Number(process.env.REFLEX_PROGRESS_S ?? 15),
     log: o.log,
     presence: o.presence,
+    localFiles: true,
   });
 
   // Behavior actions the Link runs (set, apply_recipe) as the Element's owner, for Sends that come

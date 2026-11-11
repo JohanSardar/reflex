@@ -837,6 +837,9 @@
             "model": {
               "$ref": "#/$defs/model"
             },
+            "parts": {
+              "$ref": "#/$defs/parts"
+            },
             "allow": {
               "$ref": "#/$defs/allow"
             },
@@ -1128,8 +1131,8 @@
     "model": {
       "type": "string",
       "maxLength": 4096,
-      "description": "A 3D model: an https URL or 'asset:<sha256>' of a USDZ or glTF file.",
-      "pattern": "^(https://|asset:[0-9a-f]{64}$)"
+      "description": "A 3D model, USDZ or glTF (.glb, or .gltf with its files). Give an https URL or a file path on the Link's computer: Reflex reads it once, packs a glTF into one .glb, and stores it as 'asset:<sha256>', which is what you read back. In params, camera ({yaw, pitch, zoom}) sets the first view and parts ({<part>: {position, rotation, scale, highlight, hidden}}) moves, colors or hides parts. read_me('3d') explains it.",
+      "pattern": "^(https://|asset:[0-9a-f]{64}$|file:///|/|~/)"
     },
     "name": {
       "type": "string",
@@ -1267,6 +1270,33 @@
     "parent": {
       "$ref": "#/$defs/element_id",
       "description": "When this is a fragment left by a precise erase: the stroke it came from."
+    },
+    "parts": {
+      "description": "A 3D Embed's parts, from its model's named nodes: each part's name, its position (in its parent's space, what params.parts.<name>.position sets), and the center and size of its box in model units. Read only; Reflex fills it in when you read the Element.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "position": {
+            "$ref": "#/$defs/vec3"
+          },
+          "center": {
+            "$ref": "#/$defs/vec3"
+          },
+          "size": {
+            "$ref": "#/$defs/vec3"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 500
     },
     "pending_sends": {
       "description": "How many Sends wait in this Agent's Inbox. Every tool result carries it. Drain them with wait_for_user(timeout_s: 0).",
@@ -1469,6 +1499,23 @@
     "values": {
       "type": "object",
       "description": "What the person entered in this Element's Panels: Panel ID → component ID → value (an Embed inside a Panel saves its state as its component's value). It syncs to every device and shows in the next Send's changes. Read only."
+    },
+    "vec3": {
+      "description": "[x, y, z] in a 3D model's own units.",
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "items": false,
+      "minItems": 3
     },
     "watch": {
       "type": "boolean",

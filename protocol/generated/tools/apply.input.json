@@ -1476,8 +1476,8 @@
     "model": {
       "type": "string",
       "maxLength": 4096,
-      "description": "A 3D model: an https URL or 'asset:<sha256>' of a USDZ or glTF file.",
-      "pattern": "^(https://|asset:[0-9a-f]{64}$)"
+      "description": "A 3D model, USDZ or glTF (.glb, or .gltf with its files). Give an https URL or a file path on the Link's computer: Reflex reads it once, packs a glTF into one .glb, and stores it as 'asset:<sha256>', which is what you read back. In params, camera ({yaw, pitch, zoom}) sets the first view and parts ({<part>: {position, rotation, scale, highlight, hidden}}) moves, colors or hides parts. read_me('3d') explains it.",
+      "pattern": "^(https://|asset:[0-9a-f]{64}$|file:///|/|~/)"
     },
     "new_id": {
       "$ref": "#/$defs/element_id",

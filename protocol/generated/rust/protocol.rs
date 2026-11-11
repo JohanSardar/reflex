@@ -841,7 +841,7 @@ pub struct OpAddEmbed {
     pub html: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// A 3D model: an https URL or 'asset:<sha256>' of a USDZ or glTF file.
+    /// A 3D model, USDZ or glTF (.glb, or .gltf with its files). Give an https URL or a file path on the Link's computer: Reflex reads it once, packs a glTF into one .glb, and stores it as 'asset:<sha256>', which is what you read back. In params, camera ({yaw, pitch, zoom}) sets the first view and parts ({<part>: {position, rotation, scale, highlight, hidden}}) moves, colors or hides parts. read_me('3d') explains it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Extra network hosts this Embed may reach, on top of the person's allowlist.
@@ -967,7 +967,7 @@ pub struct OpPatchSet {
     pub html: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// A 3D model: an https URL or 'asset:<sha256>' of a USDZ or glTF file.
+    /// A 3D model, USDZ or glTF (.glb, or .gltf with its files). Give an https URL or a file path on the Link's computer: Reflex reads it once, packs a glTF into one .glb, and stores it as 'asset:<sha256>', which is what you read back. In params, camera ({yaw, pitch, zoom}) sets the first view and parts ({<part>: {position, rotation, scale, highlight, hidden}}) moves, colors or hides parts. read_me('3d') explains it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Extra network hosts this Embed may reach, on top of the person's allowlist.
@@ -1687,6 +1687,26 @@ pub struct PersonRef {
     pub name: String,
 }
 
+/// part: how the person was looking at the 3D model when they drew the Mark. yaw and pitch are degrees around the model's center (yaw 0, pitch 0 looks at its front, +Z; yaw 90 from its right, +X; pitch 90 from above); zoom 1 fits the whole model. position and target are in the model's own units, and fov is the vertical field of view in degrees.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Camera {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yaw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<f64>,
+    /// [x, y, z] in a 3D model's own units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f64; 3]>,
+    /// [x, y, z] in a 3D model's own units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fov: Option<f64>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AnchorKind {
     #[serde(rename = "text")]
@@ -1717,7 +1737,7 @@ impl AnchorKind {
     }
 }
 
-/// Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x and y; dom uses selector; part uses part; line uses line; local uses bounds. label is the Embed's or recognizer's short description.
+/// Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x and y; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Anchor {
@@ -1740,6 +1760,12 @@ pub struct Anchor {
     /// part: the 3D part's name in the model's part map.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub part: Option<String>,
+    /// part: every part the Mark covers, the one in part first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts: Option<Vec<String>>,
+    /// part: how the person was looking at the 3D model when they drew the Mark. yaw and pitch are degrees around the model's center (yaw 0, pitch 0 looks at its front, +Z; yaw 90 from its right, +X; pitch 90 from above); zoom 1 fits the whole model. position and target are in the model's own units, and fov is the vertical field of view in degrees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<Camera>,
     /// line: the 1-based line of a math or text Element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<i64>,
@@ -1772,6 +1798,21 @@ impl Tool {
             Tool::Highlighter => "highlighter",
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PartsItem {
+    pub name: String,
+    /// [x, y, z] in a 3D model's own units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f64; 3]>,
+    /// [x, y, z] in a 3D model's own units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center: Option<[f64; 3]>,
+    /// [x, y, z] in a 3D model's own units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<[f64; 3]>,
 }
 
 /// Plain text or Markdown.
@@ -2099,6 +2140,21 @@ pub struct ElementRegion {
     pub snap: Option<Snap>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElementPartsItem {
+    pub name: String,
+    /// [x, y, z] in a 3D model's own units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f64; 3]>,
+    /// [x, y, z] in a 3D model's own units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center: Option<[f64; 3]>,
+    /// [x, y, z] in a 3D model's own units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<[f64; 3]>,
+}
+
 /// Web or 3D content Reflex does not natively understand, sandboxed. Use one of: template (an Embed Template, with params), html (inline HTML), url (an MCP App 'ui://' resource or an https page), or model (a USDZ or glTF asset).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2119,9 +2175,12 @@ pub struct ElementEmbed {
     pub html: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// A 3D model: an https URL or 'asset:<sha256>' of a USDZ or glTF file.
+    /// A 3D model, USDZ or glTF (.glb, or .gltf with its files). Give an https URL or a file path on the Link's computer: Reflex reads it once, packs a glTF into one .glb, and stores it as 'asset:<sha256>', which is what you read back. In params, camera ({yaw, pitch, zoom}) sets the first view and parts ({<part>: {position, rotation, scale, highlight, hidden}}) moves, colors or hides parts. read_me('3d') explains it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// A 3D Embed's parts, from its model's named nodes: each part's name, its position (in its parent's space, what params.parts.<name>.position sets), and the center and size of its box in model units. Read only; Reflex fills it in when you read the Element.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts: Option<Vec<ElementPartsItem>>,
     /// Extra network hosts this Embed may reach, on top of the person's allowlist.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow: Option<Vec<String>>,
@@ -2344,7 +2403,7 @@ pub const ELEMENT_FIELDS: &[(&str, &[&str])] = &[
     ("image", &["id", "type", "owner", "bounds", "src", "alt", "page", "data", "values", "behaviors", "draggable", "locked", "snap"]),
     ("frame", &["id", "type", "owner", "bounds", "title", "color", "data", "values", "behaviors", "draggable", "locked", "snap"]),
     ("region", &["id", "type", "owner", "bounds", "title", "ink", "agents_read_only", "watch", "send_button", "data", "values", "behaviors", "draggable", "locked", "snap"]),
-    ("embed", &["id", "type", "owner", "bounds", "template", "params", "html", "url", "model", "allow", "state", "data", "values", "behaviors", "draggable", "locked", "snap"]),
+    ("embed", &["id", "type", "owner", "bounds", "template", "params", "html", "url", "model", "parts", "allow", "state", "data", "values", "behaviors", "draggable", "locked", "snap"]),
     ("ink", &["id", "type", "owner", "bounds", "tool", "color", "width", "parent", "data", "values", "behaviors", "draggable", "locked", "snap"]),
     ("file", &["id", "type", "owner", "bounds", "name", "mime", "size", "src", "data", "values", "behaviors", "draggable", "locked", "snap"]),
     ("extension", &["id", "type", "type_version", "owner", "bounds", "props", "data", "values", "behaviors", "draggable", "locked", "snap"]),
@@ -2763,7 +2822,7 @@ pub struct RawSendEmbedAnchorsItem {
     /// A short ID the Agent chose, such as 'n-auth'. IDs are scoped to the Agent that made them, so two Agents never collide. Reflex-made IDs (Ink, user imports, generated) use the same alphabet.
     pub element: String,
     pub strokes: Vec<String>,
-    /// Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x and y; dom uses selector; part uses part; line uses line; local uses bounds. label is the Embed's or recognizer's short description.
+    /// Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x and y; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description.
     pub anchor: Anchor,
 }
 
