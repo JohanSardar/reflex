@@ -74,3 +74,4 @@ The Link runs in its terminal. Enter shows a new pairing code; when an Agent ask
 - Members meet only through the owner's Link (or the log); two members' Links don't sync directly.
 - Approval can't be given through any Reflex command, but a local process running as your OS user can still read the Link's files (`identity.json`, `link.db`) or its terminal. OS-level separation, and the platform credential stores, come later.
 - The Link only listens over peer-to-peer Wi-Fi (the iPad dials it); two Links reach each other over LAN or the Relay. The Relay is dialed only when no LAN or peer-to-peer path reaches a device.
+- On macOS, turning the Wi-Fi service off (`networksetup -setnetworkserviceenabled Wi-Fi off`) or the radio off also takes peer-to-peer Wi-Fi down. Leaving the network some other way keeps it: the Mac can be on another network, or none.
