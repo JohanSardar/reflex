@@ -70,6 +70,25 @@ claude mcp add reflex -- node /path/to/reflex/agent/bin/reflex.mjs mcp
 claude --mcp-config '{"mcpServers":{"reflex":{"type":"stdio","command":"node","args":["/path/to/reflex/agent/bin/reflex.mjs","mcp"]}}}'
 ```
 
+To have Sends pushed into a Claude Code session as new turns, so the Agent hears
+from the person without sitting in `wait_for_user`, add `--channel` and start
+Claude Code with channels on (a research preview, stdio only):
+
+```sh
+claude --dangerously-load-development-channels server:reflex \
+  --mcp-config '{"mcpServers":{"reflex":{"type":"stdio","command":"node","args":["/path/to/reflex/agent/bin/reflex.mjs","mcp","--channel"]}}}'
+```
+
+Claude Code asks once to confirm the development channel. Each Send then
+arrives as a `<channel source="reflex" space=… send=… kind=… from=…>` turn
+holding the Send Bundle (its images are PNG files, in `images[].file`). An Agent
+that is in `wait_for_user` still gets the Send there, and a Send whose push
+fails stays in the Inbox for the next `wait_for_user`. `reflex mcp --channel`
+opens no push target for other harnesses, or for a Claude Code session started
+without `--channels`/`--dangerously-load-development-channels`, because Claude
+Code would drop the push without saying so. See
+[link/adapters](../link/adapters/contract.ts) for how pushes are kept.
+
 Codex (`~/.codex/config.toml`, or the same keys as `-c` flags):
 
 ```toml
@@ -139,6 +158,7 @@ same Recipe and Embed checks. Errors reject the batch; warnings come back as lin
 | `REFLEX_HOME` | `~/.reflex/link` | The Link's profile directory: its socket, `rpc.key`, Agent credentials, `mcp.log` |
 | `REFLEX_AGENT_NAME` | From the harness | The Agent's display name; its identity is derived from it. `--agent` overrides it for the CLI |
 | `REFLEX_PROGRESS_S` | `15` | Seconds between progress notifications during `wait_for_user` |
+| `REFLEX_CHANNEL` | unset | `1` is the same as `reflex mcp --channel` |
 | `REFLEX_MAX_WAIT_S` | 280 for Codex, none otherwise | The longest `wait_for_user` the MCP surface holds, kept under the harness's hard tool timeout |
 
 Without a name, an MCP Agent is called "<harness> · <cwd basename>",

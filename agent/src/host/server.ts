@@ -6,6 +6,18 @@ import { timingSafeEqual } from "node:crypto";
 import { Core, ReflexError, type Identity } from "../capabilities/index.ts";
 import { frames, type ClientFrame, type HostFrame, type Who } from "./rpc.ts";
 
+/** A surface holding a connection open so Sends can be pushed to it (a Send Adapter's live end). */
+export type Listener = {
+  who: Identity;
+  adapter: string;
+  config: Record<string, unknown>;
+  client: string;
+  /** Sends one Send Bundle down the connection; resolves with the surface's answer, or a failure after `ms`. */
+  push(json: Record<string, any>, images: Buffer[], ms?: number): Promise<{ ok: boolean; reason?: string }>;
+  /** Resolves when the connection closes. */
+  closed: Promise<void>;
+};
+
 export type HostOptions = {
   core: Core;
   socket: string;
@@ -15,6 +27,8 @@ export type HostOptions = {
   authorize: (who: Who, signal: AbortSignal) => Promise<Identity>;
   /** `reflex dev person`: only on a Link started with --dev. */
   devPerson: boolean;
+  /** Registers a push target; returns its ID, or throws a ReflexError when it isn't accepted. */
+  listen?: (l: Listener) => string;
   log: (event: string, data?: Record<string, unknown>) => void;
 };
 
@@ -27,6 +41,11 @@ export function serveHost(o: HostOptions): Promise<Server> {
     let client = "?";
     const calls = new Map<number, AbortController>();
     const send = (f: HostFrame) => sock.writable && sock.write(JSON.stringify(f) + "\n");
+    // Pushes waiting for their answer, by push number.
+    const pushes = new Map<number, (r: { ok: boolean; reason?: string }) => void>();
+    let pushNo = 0;
+    let closed!: () => void;
+    const closedP = new Promise<void>((r) => (closed = r));
     sock.on("data", frames(async (f: ClientFrame) => {
       if (f.t === "hello") {
         const got = Buffer.from(String(f.token ?? ""));
@@ -39,6 +58,10 @@ export function serveHost(o: HostOptions): Promise<Server> {
         return;
       }
       if (!authed) return sock.destroy();
+      if (f.t === "pushed") {
+        pushes.get(f.push)?.({ ok: f.ok === true, ...(f.reason ? { reason: String(f.reason).slice(0, 300) } : {}) });
+        return;
+      }
       if (f.t === "cancel") {
         calls.get(f.id)?.abort();
         log("cancel", { client, id: f.id });
@@ -65,6 +88,35 @@ export function serveHost(o: HostOptions): Promise<Server> {
             ...(r.files?.length ? { files: r.files.map((x) => ({ id: x.id, name: x.name, mime: x.mime, data: x.data.toString("base64") })) } : {}),
             isError: r.isError,
           });
+        } else if (f.t === "listen") {
+          if (!o.listen) throw new ReflexError("unavailable", [{ code: "unavailable", msg: "This host takes no push targets.", fix: "Use wait_for_user." }]);
+          const who = await o.authorize(f.who, ac.signal);
+          const id = f.id;
+          const target = o.listen({
+            who,
+            adapter: String(f.adapter),
+            config: f.config && typeof f.config === "object" ? f.config : {},
+            client,
+            closed: closedP,
+            push: (json, images, ms = 5000) =>
+              new Promise((resolve) => {
+                if (!sock.writable) return resolve({ ok: false, reason: "connection closed" });
+                const n = ++pushNo;
+                const done = (r: { ok: boolean; reason?: string }) => {
+                  clearTimeout(timer);
+                  pushes.delete(n);
+                  resolve(r);
+                };
+                const timer = setTimeout(() => done({ ok: false, reason: `no answer within ${ms} ms` }), ms);
+                pushes.set(n, done);
+                void closedP.then(() => done({ ok: false, reason: "connection closed" }));
+                // The same deadline on both ends: a surface that gets the push late drops it, so a push the Link
+                // counted as failed (and left for wait_for_user) never also reaches the session.
+                send({ t: "push", id, push: n, json, images: images.map((b) => b.toString("base64")), deadline: Date.now() + ms - 250 });
+              }),
+          });
+          log("listening", { client, who: who.name, adapter: f.adapter, target });
+          send({ t: "listening", id, target, agent: who.agent });
         } else if (f.t === "person") {
           if (!o.devPerson)
             throw new ReflexError("unavailable", [{ code: "unavailable", msg: "Acting as the person needs a Link started with --dev.", fix: "Draw and press Send on the iPad, or restart the Link with `reflex link --dev`." }]);
@@ -95,6 +147,7 @@ export function serveHost(o: HostOptions): Promise<Server> {
     }));
     // A closed pipe aborts that client's held calls. Sends stay in the Inbox.
     sock.on("close", () => {
+      closed();
       if (calls.size) log("client_closed", { client, held: [...calls.keys()] });
       for (const ac of calls.values()) ac.abort();
     });

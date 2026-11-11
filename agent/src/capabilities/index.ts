@@ -532,15 +532,27 @@ export class Core {
   }
 
 
-  #deliver(frozen: FrozenSend, redelivered: boolean, ctx: Ctx) {
-    const { bundle, images } = this.#project(frozen, redelivered, ctx.who.agent);
+  /**
+   * A Send's Bundle for one Agent, as wait_for_user returns it, for a push Send Adapter. Building it counts
+   * as delivering it (answers are placed next to its Marks); the caller records the receipt.
+   */
+  bundleFor(who: Identity, space: string, send: string): { json: Record<string, any>; images: Buffer[] } | undefined {
+    const entry = this.spaces.get(space);
+    const frozen = entry ? (JSON.parse(entry.space.send(send)) as FrozenSend | null) : null;
+    if (!frozen) return undefined;
+    this.#names.set(who.agent, who.name);
+    return this.#deliver(frozen, false, { who }, true);
+  }
+
+  #deliver(frozen: FrozenSend, redelivered: boolean, ctx: Ctx, pushed = false) {
+    const { bundle, images } = this.#project(frozen, redelivered, ctx.who.agent, pushed);
     this.#lastSend.set(`${ctx.who.agent}|${frozen.space}`, frozen.send);
-    this.log("send_delivered", { agent: ctx.who.name, send: frozen.send, redelivered, marks: bundle.marks.map((m: any) => m.kind) });
+    this.log("send_delivered", { agent: ctx.who.name, send: frozen.send, redelivered, ...(pushed ? { pushed } : {}), marks: bundle.marks.map((m: any) => m.kind) });
     return { json: bundle, images: images.map((i) => i.png) };
   }
 
   /** Builds a Send's Bundle for one Agent and remembers its Mark IDs, which answers place things by. */
-  #project(frozen: FrozenSend, redelivered: boolean, agent: string) {
+  #project(frozen: FrozenSend, redelivered: boolean, agent: string, pushed = false) {
     const entry = this.#entry(frozen.space);
     const viewer = { agent };
     const elements: SceneElement[] = this.scene(entry, viewer, "full");
@@ -558,6 +570,7 @@ export class Core {
       personName: this.#names.get(frozen.from.person) ?? frozen.from.person,
       alsoSentTo: others.map((o) => this.#names.get(o) ?? o),
       redelivered,
+      pushed,
       pendingAfter: Math.max(0, this.inbox.pending(agent) - 1),
       renderer: this.renderer,
       asset: (hash) => this.assets?.get(hash),

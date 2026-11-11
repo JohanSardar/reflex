@@ -70,6 +70,8 @@ export function project(opts: {
   personName: string;
   alsoSentTo: string[];
   redelivered: boolean;
+  /** Pushed by a Send Adapter while the Agent wasn't waiting: it acknowledges, then ends its turn. */
+  pushed?: boolean;
   pendingAfter: number;
   renderer: Renderer;
   /** The bytes of an asset the device stored, if this Link has it. */
@@ -167,8 +169,9 @@ export function project(opts: {
     also_sent_to: opts.alsoSentTo,
     redelivered: opts.redelivered,
     pending_after: opts.pendingAfter,
-    next:
-      kind === "send"
+    next: opts.pushed
+      ? `${kind === "send" ? `Reply with apply(in_reply_to: '${s}')${refs.length ? `; what you add without at goes next to ${refs[0].id}` : ""}` : `${opts.personName}'s turn is not over. Answer with apply(in_reply_to: '${s}') if useful`}. With nothing to add, acknowledge it with wait_for_user(after: '${s}', timeout_s: 0). Then end your turn: the next Send is pushed to you the same way.`
+      : kind === "send"
         ? `Reply with apply(in_reply_to: '${s}')${refs.length ? `; what you add without at goes next to ${refs[0].id}` : ""}, then wait_for_user(after: '${s}').`
         : `${opts.personName}'s turn is not over. Answer if useful, then wait_for_user(after: '${s}').`,
   };

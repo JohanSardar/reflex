@@ -8,7 +8,7 @@
 import type { Space } from "@reflex/kernel/node";
 import { Core, ReflexError, type Identity } from "../agent/src/capabilities/index.ts";
 import { SvgRenderer } from "../agent/src/render.ts";
-import { serveHost } from "../agent/src/host/server.ts";
+import { serveHost, type Listener } from "../agent/src/host/server.ts";
 import type { Who } from "../agent/src/host/rpc.ts";
 import type { Assets, Bounds, Delivery, FrozenSend, Inbox as AgentInbox, SpaceEntry, SpaceStore as AgentSpaces, WaitFilter, WriteOrigin } from "../agent/src/store.ts";
 import type { Catalog, AgentRecord } from "./pairing/catalog.ts";
@@ -18,6 +18,11 @@ import type { Inbox } from "./storage/inbox.ts";
 import type { SpaceStore } from "./storage/journal.ts";
 
 import { recipient, route } from "./routing.ts";
+import { ClaudeChannel } from "./adapters/claude-channel.ts";
+import { Dispatcher } from "./adapters/dispatch.ts";
+import { PushStore } from "./adapters/store.ts";
+import type { PushTarget } from "./adapters/contract.ts";
+import { Ajv2020 } from "ajv/dist/2020.js";
 
 /** The Agent layer's view of the Link's Spaces. */
 class LinkSpaces implements AgentSpaces {
@@ -86,6 +91,7 @@ class LinkSpaces implements AgentSpaces {
 class LinkInbox implements AgentInbox {
   #inbox: Inbox;
   #store: SpaceStore;
+  inFlight: (space: string, send: string, recipient: string) => boolean = () => false;
 
   constructor(inbox: Inbox, store: SpaceStore) {
     this.#inbox = inbox;
@@ -104,7 +110,10 @@ class LinkInbox implements AgentInbox {
       // Sends store keys (`<agent>/<id>`); the Agent filters by its own IDs.
       const local = (k?: string) => (k?.startsWith(`${agent}/`) ? k.slice(agent.length + 1) : k);
       if (f.region && local(send.region) !== f.region) continue;
-      if (f.element && !(send.kind === "tap" && local(send.element) === f.element)) continue;
+      // A tap on that Element, whether its Behavior notifies or Sends.
+      if (f.element && local(send.element) !== f.element) continue;
+      // A push of this Send is under way; it is delivered there, or comes back here if the push fails.
+      if (this.inFlight(e.space, e.send, recipient(agent))) continue;
       this.#inbox.mark(e.space, e.send, recipient(agent), "delivered");
       return { send, redelivered: e.state === "delivered" };
     }
@@ -151,6 +160,8 @@ class LinkAssets implements Assets {
 
 export interface AgentHostOptions {
   db: DatabaseSync;
+  /** The Link's profile folder, where push targets' secrets are kept. */
+  home: string;
   store: SpaceStore;
   inbox: Inbox;
   assets: AssetStore;
@@ -177,9 +188,10 @@ export async function startAgentHost(o: AgentHostOptions) {
   const spaces = new LinkSpaces(o.store, o.db, o.inbox);
   o.inbox.recipientsFor = (space, send) => route(o.db, o.store, space, send);
   const names = Object.fromEntries(o.catalog.agents().map((a) => [a.id, a.name]));
+  const inbox = new LinkInbox(o.inbox, o.store);
   const core = new Core({
     spaces,
-    inbox: new LinkInbox(o.inbox, o.store),
+    inbox,
     assets: new LinkAssets(o.assets),
     renderer: new SvgRenderer(),
     person: { person: o.person.id, name: o.person.name },
@@ -194,10 +206,17 @@ export async function startAgentHost(o: AgentHostOptions) {
   const behaviors = (space: string) => {
     const sends: string[] = o.store.read(space, (s) => JSON.parse(s.scene(JSON.stringify({ detail: "full", ids: [] }))).sends ?? []);
     for (const send of sends) {
-      const has = o.store.read(space, (s) => JSON.parse(s.send(send))?.actions?.some((b: any) => b.do === "set" || b.do === "apply_recipe"));
+      const frozen = o.store.read(space, (s) => JSON.parse(s.send(send)));
+      const has = frozen?.actions?.some((b: any) => b.do === "set" || b.do === "apply_recipe");
+      // The actions run as the Element's owner, so only while the person approves that Agent.
+      if (has && frozen.owner?.agent && !approved(frozen.owner.agent)) {
+        o.log("behavior_skipped", { send, agent: frozen.owner.agent, why: "the Agent is not approved" });
+        continue;
+      }
       if (has) void core.runBehaviors(space, send).catch((e) => o.log("behavior_failed", { send, error: String(e) }));
     }
   };
+  const approved = (agent: string) => o.catalog.agent(agent)?.status === "approved";
   o.store.onChange((space, origin) => {
     if (origin === "send" || origin.startsWith("sync:")) behaviors(space);
   });
@@ -243,6 +262,43 @@ export async function startAgentHost(o: AgentHostOptions) {
     return { agent: a.id, name: a.name, color: a.color };
   }
 
-  const server = await serveHost({ core, socket: o.socket, token: o.token, authorize, devPerson: o.devPerson, log: o.log });
-  return { core, server };
+  // Push Send Adapters (link/adapters/): targets, secrets and attempts are kept here, outside the adapters.
+  const pushes = new PushStore(o.db, o.home);
+  const channel = new ClaudeChannel();
+  const adapters = [channel];
+  const ajv = new Ajv2020({ strict: false });
+  const validConfig = new Map(adapters.map((a) => [a.name, ajv.compile(a.config)]));
+  const dispatcher = new Dispatcher({
+    inbox: o.inbox,
+    store: pushes,
+    adapters,
+    approved,
+    bundle: (agent, space, send) => {
+      const a = o.catalog.agent(agent);
+      if (!a) return undefined;
+      const b = core.bundleFor({ agent: a.id, name: a.name, color: a.color }, space, send);
+      return b && { bundle: b.json, images: b.images };
+    },
+    log: o.log,
+  });
+  inbox.inFlight = (space, send, to) => dispatcher.inFlight(space, send, to);
+  dispatcher.start();
+
+  const listen = (l: Listener): string => {
+    if (l.adapter !== channel.name)
+      throw new ReflexError("invalid_input", [{ code: "invalid_input", msg: `No push adapter '${l.adapter}'.`, fix: `Use ${adapters.map((a) => a.name).join(", ")}.` }]);
+    const valid = validConfig.get(l.adapter)!;
+    if (!valid(l.config))
+      throw new ReflexError("invalid_input", [{ code: "invalid_input", msg: `The ${l.adapter} config is not valid: ${ajv.errorsText(valid.errors)}.`, fix: "Connect through `reflex mcp --channel`." }]);
+    const target = pushes.upsert({ agent: l.who.agent, adapter: l.adapter, instance: l.client, config: l.config, callback: "mcp" });
+    channel.attach(target, l, () => {
+      pushes.touch(target.id);
+      o.log("channel_closed", { target: target.id, agent: l.who.name });
+    });
+    o.log("channel_open", { target: target.id, agent: l.who.name, config: l.config });
+    return target.id;
+  };
+
+  const server = await serveHost({ core, socket: o.socket, token: o.token, authorize, devPerson: o.devPerson, listen, log: o.log });
+  return { core, server, pushes, dispatcher, live: (t: PushTarget) => adapters.some((a) => a.name === t.adapter && a.liveSince(t) !== undefined) };
 }

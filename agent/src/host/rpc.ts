@@ -45,7 +45,11 @@ export type ClientFrame =
   | { t: "hello"; token: string; client: string }
   | { t: "call"; id: number; tool: string; args: unknown; who: Who }
   | { t: "person"; id: number; action: string; args: Record<string, any> }
-  | { t: "cancel"; id: number };
+  | { t: "cancel"; id: number }
+  /** Opens a push target for this Agent (a Send Adapter on this connection), held until the connection closes. */
+  | { t: "listen"; id: number; who: Who; adapter: string; config: Record<string, unknown> }
+  /** The answer to a push: whether the Send reached the harness. */
+  | { t: "pushed"; push: number; ok: boolean; reason?: string };
 
 /** A file's bytes in a result, base64. */
 export type WireFile = { id: string; name: string; mime: string; data: string };
@@ -54,7 +58,12 @@ export type HostFrame =
   | { t: "ready" }
   | { t: "result"; id: number; json: Record<string, any>; images: string[]; files?: WireFile[]; isError: boolean }
   | { t: "progress"; id: number; elapsed_s: number; timeout_s: number }
-  | { t: "failed"; id: number; message: string };
+  | { t: "failed"; id: number; message: string }
+  /** The listen request was accepted: Sends for this Agent are pushed on this connection. */
+  | { t: "listening"; id: number; target: string; agent: string }
+  /** A Send Bundle pushed to a listening surface. It answers with a "pushed" frame. */
+  /** `deadline` (ms since the epoch): after it the Link has counted the push as failed, so the surface must drop it. */
+  | { t: "push"; id: number; push: number; json: Record<string, any>; images: string[]; deadline: number };
 
 /** Splits a stream into JSON frames. */
 export function frames(onFrame: (f: any) => void) {
