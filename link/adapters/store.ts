@@ -2,7 +2,7 @@
 // outside any adapter (link/adapters/contract.ts). Targets and attempts live in
 // the Link's SQLite database; secrets in 0600 files under `<home>/adapters/`.
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { PushTarget } from "./contract.ts";
@@ -82,22 +82,12 @@ export class PushStore {
     return r && this.#target(r);
   }
 
-  /** An Agent's targets, most recently seen first. */
-  forAgent(agent: string): PushTarget[] {
-    return (this.#db.prepare("SELECT * FROM push_targets WHERE agent = ? ORDER BY seen_at DESC").all(agent) as unknown as Row[]).map((r) => this.#target(r));
-  }
-
   all(): PushTarget[] {
     return (this.#db.prepare("SELECT * FROM push_targets ORDER BY seen_at DESC").all() as unknown as Row[]).map((r) => this.#target(r));
   }
 
   touch(id: string, now = Date.now()) {
     this.#db.prepare("UPDATE push_targets SET seen_at = ? WHERE id = ?").run(now, id);
-  }
-
-  remove(id: string) {
-    this.#db.prepare("DELETE FROM push_targets WHERE id = ?").run(id);
-    rmSync(this.#secretFile(id), { force: true });
   }
 
   /** Keeps a target's secret (a webhook signing key, a token) in its own 0600 file. */
