@@ -3,6 +3,7 @@ import PencilKit
 import ReflexEmbed
 import ReflexInput
 import ReflexLink
+import ReflexModel
 import ReflexRender
 import SwiftUI
 import UniformTypeIdentifiers
@@ -33,6 +34,8 @@ final class SpaceSession {
     var notice: String?
     /// The Space's live HTML Embeds, on the canvas and in Panels.
     let embeds = EmbedHost()
+    /// The Space's 3D Embeds.
+    let models = ModelHost()
 
     @ObservationIgnored private let link: LinkSync
     /// Kernel history entries made by each canvas action, so one canvas undo undoes all of them.
@@ -55,6 +58,10 @@ final class SpaceSession {
     @ObservationIgnored private var unsavedPanel: [String: Set<String>] = [:]
     /// How many times the Link made this Space start over here (it refused changes from this iPad).
     @ObservationIgnored private var seenResets = 0
+    /// What each stroke drawn over a 3D Embed pointed at when it was drawn (with the camera then), by stroke ID.
+    @ObservationIgnored private var modelAnchors: [String: (element: String, anchor: [String: Any])] = [:]
+    /// The 3D Embed whose part the person is dragging, and the part.
+    @ObservationIgnored private var grabbed: (element: String, part: String)?
 
     init(id: String, link: LinkSync) {
         self.id = id
@@ -84,6 +91,9 @@ final class SpaceSession {
         // Where the pen or finger is, for the other people in a shared Space.
         ink.onCursor = { [weak self] p in self?.link.reportCursor(p) }
         seenResets = link.resets[id] ?? 0
+        models.bytes = { [link] hash in link.asset(hash) }
+        ink.surfaceAt = { [weak self] p in self?.modelEmbed(at: p) != nil }
+        ink.onSurface = { [weak self] g in self?.surface(g) }
         refresh()
     }
 
@@ -136,6 +146,7 @@ final class SpaceSession {
             for c in p.components where c.kind == "embed" { live.insert(Self.panelKey(eid, c)) }
         }
         embeds.keep(live)
+        models.keep(Set(scene.elements.filter { $0.type == "embed" && $0.model != nil }.map(\.id)))
     }
 
     var localInk: Set<String> { Set(ink.strokes.map(\.id)) }
@@ -161,7 +172,10 @@ final class SpaceSession {
                 done.append(entries)
                 undone = []
             }
-            for case .add(let stroke) in intents where !refused.contains(stroke.id) { drewInside(stroke) }
+            for case .add(let stroke) in intents where !refused.contains(stroke.id) {
+                drewInside(stroke)
+                markModel(stroke)
+            }
         case .undo:
             guard let n = done.popLast() else { return }
             for _ in 0 ..< n { link.undo(id) }
@@ -460,9 +474,17 @@ final class SpaceSession {
 
     /// Asks each Embed a stroke was drawn on what the stroke points at, in the Embed's own pixels.
     private func embedAnchors(_ strokes: [String]) async -> [[String: Any]] {
-        let frames = scene.elements.filter { $0.type == "embed" }.compactMap { e in e.frame.map { (e.id, $0) } }
-        guard !frames.isEmpty, !strokes.isEmpty else { return [] }
         var out: [[String: Any]] = []
+        // A 3D Embed answered when the stroke was drawn, with the camera as it was then.
+        var answered = Set<String>()
+        for s in strokes {
+            guard let (eid, anchor) = modelAnchors[s] ?? resolveModel(s) else { continue }
+            out.append(["element": eid, "strokes": [s], "anchor": anchor])
+            answered.insert(s)
+        }
+        let strokes = strokes.filter { !answered.contains($0) }
+        let frames = scene.elements.filter { $0.type == "embed" && $0.model == nil }.compactMap { e in e.frame.map { (e.id, $0) } }
+        guard !frames.isEmpty, !strokes.isEmpty else { return out }
         let bounds = Dictionary(ink.strokes.map { ($0.id, $0.bounds) }) { a, _ in a }
         let points = link.strokes(id, ids: strokes)
         for s in strokes {
@@ -476,6 +498,77 @@ final class SpaceSession {
             }
         }
         return out
+    }
+
+    // MARK: 3D Embeds
+
+    /// The 3D Embed under a Space point, topmost first.
+    private func modelEmbed(at p: CGPoint) -> SceneElement? {
+        scene.elements.last { $0.type == "embed" && $0.model != nil && $0.frame?.contains(p) == true && $0.locked != true }
+    }
+
+    /// A finger gesture on a 3D Embed: turn, slide or zoom the view, or grab a part (a long press) and move it.
+    private func surface(_ g: SurfaceGesture) {
+        let start: CGPoint = switch g {
+        case .orbit(let s, _), .slide(let s, _), .zoom(let s, _), .hold(let s, _, _), .ended(let s): s
+        }
+        guard let el = modelEmbed(at: start), let frame = el.frame, let model = models.existing(el.id) else { return }
+        let local = { (p: CGPoint) in CGPoint(x: p.x - frame.minX, y: p.y - frame.minY) }
+        switch g {
+        case .orbit(_, let by):
+            if grabbed == nil { model.orbit(by: by) }
+        case .slide(_, let by):
+            if grabbed == nil { model.pan(by: by) }
+        case .zoom(_, let scale):
+            if grabbed == nil { model.zoom(by: scale) }
+        case .hold(_, let at, let phase):
+            switch phase {
+            case .began:
+                // Moving a part changes the Space, which a viewer can't do.
+                if ink.readOnly { return refusedInk() }
+                if let part = model.beginDrag(at: local(at)) { grabbed = (el.id, part) }
+            case .changed:
+                if grabbed?.element == el.id { model.drag(to: local(at)) }
+            case .ended:
+                guard let g = grabbed, g.element == el.id else { return }
+                grabbed = nil
+                if let (key, value) = model.endDrag() {
+                    // Saved like any Embed state: it syncs, survives reloads and shows in the next Send.
+                    statePatches[el.id, default: [:]][key] = value
+                    saveEmbedState()
+                    say("Moved \(g.part)")
+                }
+            case .cancelled:
+                if grabbed?.element == el.id { model.cancelDrag() }
+                grabbed = nil
+            }
+        case .ended:
+            model.interactionEnded()
+        }
+    }
+
+    /// A stroke drawn over a 3D Embed: ask it now what the stroke points at, while the camera is as the person sees it.
+    private func markModel(_ stroke: PortableStroke) {
+        if let r = resolveModel(stroke.id, points: stroke.spacePoints) { modelAnchors[stroke.id] = r }
+    }
+
+    private func resolveModel(_ strokeID: String, points: [[Double]]? = nil) -> (element: String, anchor: [String: Any])? {
+        guard let pts = points ?? link.strokes(id, ids: [strokeID])[strokeID], !pts.isEmpty else { return nil }
+        let xs = pts.map { $0[0] }, ys = pts.map { $0[1] }
+        let b = CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+        guard let el = scene.elements.last(where: { $0.type == "embed" && $0.model != nil && ($0.frame?.intersects(b.insetBy(dx: -1, dy: -1)) ?? false) }),
+              let f = el.frame, let model = models.existing(el.id) else { return nil }
+        let local = pts.map { CGPoint(x: $0[0] - f.minX, y: $0[1] - f.minY) }
+        guard let anchor = model.resolve(points: local, bounds: b.offsetBy(dx: -f.minX, dy: -f.minY)) else { return nil }
+        return (el.id, anchor)
+    }
+
+    /// Pictures of the 3D Embeds on screen, for Send crops: a view snapshot doesn't hold their Metal content.
+    var modelSnapshots: [(CGRect, UIImage)] {
+        scene.elements.compactMap { e in
+            guard e.type == "embed", e.model != nil, let f = e.frame, let img = models.existing(e.id)?.snapshot else { return nil }
+            return (f, img)
+        }
     }
 
     // MARK: Regions
@@ -602,7 +695,7 @@ final class SpaceSession {
         if !words.isEmpty { raw["words"] = words }
         raw.merge(extra) { a, _ in a }
         let marked = ink.strokes.filter { strokes.contains($0.id) }.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
-        if !marked.isNull, let crop = Crop.capture(space: marked.insetBy(dx: -60, dy: -60).intersection(view), zoom: zoom, offset: offset) {
+        if !marked.isNull, let crop = Crop.capture(space: marked.insetBy(dx: -60, dy: -60).intersection(view), zoom: zoom, offset: offset, models: modelSnapshots, ink: ink.canvasView.drawing) {
             do {
                 let hash = try link.storeAsset(crop.png)
                 raw["crops"] = [["asset": hash, "bounds": Self.ints(crop.bounds), "strokes": strokes]]
@@ -723,6 +816,17 @@ final class SpaceSession {
             } catch {
                 say("Couldn't save \(name): \(error.localizedDescription)")
             }
+        } else if let ext = name.split(separator: ".").last?.lowercased(), ["glb", "gltf", "usdz"].contains(ext) {
+            // A 3D model becomes a 3D Embed (the kernel's add_file makes it one). A .gltf is packed into one .glb first.
+            var bytes = data
+            if ext == "gltf" {
+                do { bytes = try Imports.packGLTF(data) } catch {
+                    say("Couldn't add \(name): \(error.localizedDescription)")
+                    return
+                }
+            }
+            let mime = ext == "usdz" ? "model/vnd.usdz+zip" : "model/gltf-binary"
+            addFile(name: ext == "gltf" ? String(name.dropLast(4)) + "glb" : name, mime: mime, bytes: bytes, size: CGSize(width: 560, height: 420))
         } else if type?.conforms(to: .image) == true, UIImage(data: data) != nil {
             importImage(data, name: name)
         } else {
@@ -735,7 +839,7 @@ final class SpaceSession {
         do {
             let hash = try link.storeAsset(bytes)
             let spot = nextSpot(size)
-            let r = act(["intent": "add_file", "id": Self.newID(mime.hasPrefix("image/") ? "img" : "file"), "name": String(name.prefix(255)),
+            let r = act(["intent": "add_file", "id": Self.newID(mime.hasPrefix("image/") ? "img" : mime.hasPrefix("model/") ? "model" : "file"), "name": String(name.prefix(255)),
                          "mime": mime, "size": bytes.count, "src": "asset:\(hash)",
                          "at": ["x": Int(spot.x), "y": Int(spot.y)], "w": Int(size.width.rounded()), "h": Int(size.height.rounded())])
             if r?["ok"] as? Bool != false { show(CGRect(origin: spot, size: size)) }

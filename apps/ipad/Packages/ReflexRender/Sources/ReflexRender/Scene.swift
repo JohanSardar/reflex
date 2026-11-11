@@ -62,6 +62,8 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
     public var params: JSONValue?
     public var html: String?
     public var url: String?
+    /// embed: a 3D model, `asset:<sha256>` of a GLB or USDZ.
+    public var model: String?
     public var allow: [String]?
     public var state: JSONValue?
     /// What the person entered in this Element's Panels: Panel ID → component ID → value.
@@ -86,7 +88,7 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, type, owner, bounds, text, markdown, size, color, align, shape, fill, stroke, from, to, arrow, points
-        case src, alt, latex, title, name, template, params, html, url, allow, state, values, data, mime, page, width, behaviors, draggable, locked
+        case src, alt, latex, title, name, template, params, html, url, model, allow, state, values, data, mime, page, width, behaviors, draggable, locked
         case ink, watch, agentsReadOnly = "agents_read_only", sendButton = "send_button"
     }
 
@@ -119,6 +121,7 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
         params = try? c.decodeIfPresent(JSONValue.self, forKey: .params)
         html = try? c.decodeIfPresent(String.self, forKey: .html)
         url = try? c.decodeIfPresent(String.self, forKey: .url)
+        model = try? c.decodeIfPresent(String.self, forKey: .model)
         allow = try? c.decodeIfPresent([String].self, forKey: .allow)
         state = try? c.decodeIfPresent(JSONValue.self, forKey: .state)
         values = try? c.decodeIfPresent(JSONValue.self, forKey: .values)

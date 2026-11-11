@@ -32,6 +32,65 @@ enum Imports {
         return CGSize(width: (size.width * s).rounded(), height: (size.height * s).rounded())
     }
 
+    enum ModelImport: Error, LocalizedError {
+        case unreadable, external
+        var errorDescription: String? {
+            switch self {
+            case .unreadable: "it isn't a glTF 2.0 file"
+            case .external: "its buffers or images are separate files; export it as .glb"
+            }
+        }
+    }
+
+    /// A .gltf whose buffers and images are inside it (data: URIs) packed into one .glb, as the Link packs one.
+    static func packGLTF(_ data: Data) throws -> Data {
+        guard var gltf = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (gltf["asset"] as? [String: Any])?["version"] as? String == "2.0" else { throw ModelImport.unreadable }
+        func decode(_ uri: String) throws -> Data {
+            guard uri.hasPrefix("data:"), let comma = uri.firstIndex(of: ","), uri[..<comma].hasSuffix(";base64"),
+                  let d = Data(base64Encoded: String(uri[uri.index(after: comma)...])) else { throw ModelImport.external }
+            return d
+        }
+        let pad4 = { (n: Int) in (n + 3) & ~3 }
+        var bin = Data()
+        var offsets: [Int] = []
+        for b in gltf["buffers"] as? [[String: Any]] ?? [] {
+            guard let uri = b["uri"] as? String else { throw ModelImport.external }
+            offsets.append(bin.count)
+            bin.append(try decode(uri))
+            bin.append(Data(count: pad4(bin.count) - bin.count))
+        }
+        var views = gltf["bufferViews"] as? [[String: Any]] ?? []
+        for i in views.indices {
+            let buf = views[i]["buffer"] as? Int ?? 0
+            views[i]["byteOffset"] = (views[i]["byteOffset"] as? Int ?? 0) + (buf < offsets.count ? offsets[buf] : 0)
+            views[i]["buffer"] = 0
+        }
+        var images = gltf["images"] as? [[String: Any]] ?? []
+        for i in images.indices {
+            guard let uri = images[i]["uri"] as? String else { continue }
+            let d = try decode(uri)
+            views.append(["buffer": 0, "byteOffset": bin.count, "byteLength": d.count])
+            bin.append(d)
+            bin.append(Data(count: pad4(bin.count) - bin.count))
+            images[i]["bufferView"] = views.count - 1
+            images[i]["mimeType"] = uri.hasPrefix("data:image/png") ? "image/png" : "image/jpeg"
+            images[i]["uri"] = nil
+        }
+        gltf["bufferViews"] = views
+        if !images.isEmpty { gltf["images"] = images }
+        gltf["buffers"] = bin.isEmpty ? [] : [["byteLength": bin.count]]
+        var json = try JSONSerialization.data(withJSONObject: gltf)
+        json.append(Data(repeating: 0x20, count: pad4(json.count) - json.count))
+        var out = Data("glTF".utf8)
+        func u32(_ v: Int) { withUnsafeBytes(of: UInt32(v).littleEndian) { out.append(contentsOf: $0) } }
+        u32(2)
+        u32(12 + 8 + json.count + (bin.isEmpty ? 0 : 8 + bin.count))
+        u32(json.count); out.append(Data("JSON".utf8)); out.append(json)
+        if !bin.isEmpty { u32(bin.count); out.append(Data([0x42, 0x49, 0x4E, 0x00])); out.append(bin) }
+        return out
+    }
+
     /// Every page of a PDF, rendered on white at up to `maxPixels` (at most 100 pages).
     static func pdfPages(_ data: Data) -> [UIImage]? {
         guard let doc = PDFDocument(data: data), doc.pageCount > 0 else { return nil }
