@@ -382,5 +382,6 @@ Found while building earlier tickets. Each goes into the named ticket's brief.
 - **T8:** `read_me` and `recipe` aren't built, but the server instructions tell Agents to call `read_me` first.
 - **T8:** the CLI adds a `file` path to images that the schema has no field for. Agent Element IDs show to other Agents as `agent:id`, because the protocol's ID pattern doesn't allow `/`.
 - **T2 follow-ups for the kernel owner (T8):** the state digest covers Send IDs but not their contents; moving a connector is accepted but changes nothing; undo, redo, undo in the same millisecond can hide a restored Element; concurrent undo and a new action on two of one person's devices can make redo replay an older entry. Text measurement, Mark grouping, revert planning and migrations aren't built.
+- **T16:** Embed state changes don't sync yet (T10). **T20:** Library entries can't be renamed or deleted yet; `read_me(<type>)` returns `unknown_topic` for Element types listed in the index; example values for a number with maximum below 1 come out as 1; the web viewer says "Offline, retrying" after a 401 (T10).
 - **T9:** check the kernel WASM (3.77 MB) against Workers' 128 MB with a real Space.
 - **Real iPad pass:** three-finger redo, Pencil double-tap and squeeze. Native WWDC26 stroke IDs need Xcode 27 (the app targets iPadOS 26 for now).
