@@ -7,6 +7,7 @@ import type { Renderer, SceneElement } from "../render.ts";
 import type { Assets, Bounds, FrozenSend, Inbox, SpaceEntry, SpaceStore } from "../store.ts";
 import { project, type MarkRef } from "./bundle.ts";
 import { normalizeOps } from "./normalize.ts";
+import * as library from "../library.ts";
 
 export type Identity = { agent: string; name: string; color: string };
 export type Person = { person: string; name: string };
@@ -129,6 +130,8 @@ export class Core {
         return this.apply(a, ctx);
       case "wait_for_user":
         return this.waitForUser(a, ctx);
+      case "read_me":
+        return this.readMe(a, ctx);
       default:
         throw fail("unavailable", `${tool} is not available yet.`, "Use open_space, read, look, apply and wait_for_user.");
     }
@@ -393,6 +396,9 @@ export class Core {
       }
       return op;
     });
+    // define saves to the Library: each one is checked like any extension first, so a bad one rejects the whole batch.
+    const checked = library.checkDefines(ops.map((op, index) => ({ op, index })).filter((x) => x.op.op === "define"));
+    errors.push(...checked.errors);
     if (errors.length) throw new ReflexError(errors.length === 1 ? errors[0].code : "batch_rejected", errors);
 
     // define saves to the Library, which is its own Space.
@@ -415,7 +421,7 @@ export class Core {
       }
     }
     if (defines.length) {
-      const lib = this.spaces.get("library") ?? this.spaces.create("library", { kind: "library" });
+      const lib = this.spaces.get(library.LIBRARY) ?? this.spaces.create(library.LIBRARY, { kind: "library" });
       const r = JSON.parse(this.spaces.write(lib, "agent", (s) => s.applyAgentBatch(agent, `${request}.define`, JSON.stringify({ ops: defines }), now)));
       if (!r.ok) throw new ReflexError(r.reason, r.errors);
       result ??= r;
@@ -426,7 +432,7 @@ export class Core {
       batch: result!.batch,
       ...(Object.keys(result!.ids ?? {}).length ? { ids: result!.ids } : {}),
       repaired: [...norm.repaired, ...(result!.repaired ?? [])],
-      lints: result!.lints ?? [],
+      lints: [...(result!.lints ?? []), ...checked.lints],
       pending_sends: this.inbox.pending(agent),
     };
     const images: Buffer[] = [];
@@ -444,6 +450,18 @@ export class Core {
       images.push(png);
     }
     return { json, images };
+  }
+
+  readMe(a: Record<string, any>, ctx: Ctx) {
+    const name = (id: string) => this.#names.get(id) ?? id;
+    const pending_sends = this.inbox.pending(ctx.who.agent);
+    if (a.topic === "index") return { json: { topic: "index", text: library.index(this.spaces, name), source: "builtin", pending_sends }, images: [] };
+    const found = library.topic(this.spaces, a.topic, name);
+    if (!found) {
+      const known = library.topics(this.spaces);
+      throw fail("unknown_topic", `No Guide, Recipe or Embed Template '${a.topic}'.`, `Call read_me("index") for what there is${known.length > 1 ? `: ${known.slice(1, 20).join(", ")}` : ""}.`, ['read_me(topic: "index")']);
+    }
+    return { json: { topic: a.topic, text: found.text, source: found.source, pending_sends }, images: [] };
   }
 
   async waitForUser(a: Record<string, any>, ctx: Ctx) {
@@ -569,10 +587,17 @@ export class Core {
   }
 
   /** Presses Send: freezes the person's strokes and changes and delivers the Send. */
-  personSend(space: string, o: { said?: string; trigger?: string } = {}) {
+  personSend(space: string, o: { said?: string; trigger?: string; embedAnchors?: Record<string, unknown>[] } = {}) {
     const entry = this.#entry(space);
     const send = `s_${randomBytes(5).toString("hex")}`;
-    const raw = { send, trigger: o.trigger ?? (o.said ? "voice" : "button"), viewport: entry.viewport, ...(o.said ? { said: o.said } : {}) };
+    const raw = {
+      send,
+      trigger: o.trigger ?? (o.said ? "voice" : "button"),
+      viewport: entry.viewport,
+      ...(o.said ? { said: o.said } : {}),
+      // What Embeds answered about the Marks on them (`reflex dev` asks them in the browser).
+      ...(o.embedAnchors?.length ? { embed_anchors: o.embedAnchors } : {}),
+    };
     // Freezing it makes it durable and puts it in the Inbox of every Agent on this Space.
     const frozen = JSON.parse(this.spaces.write(entry, "send", (s) => s.freezeSend(this.person.person, "dev-person", JSON.stringify(raw), Date.now()))) as FrozenSend;
     if ((frozen as any).ok === false) throw new ReflexError((frozen as any).reason, (frozen as any).errors);

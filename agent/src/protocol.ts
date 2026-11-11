@@ -25,8 +25,8 @@ export const TOOLS = [
 ] as const;
 export type Tool = (typeof TOOLS)[number];
 
-/** The tools this build implements (T4). The rest answer `unavailable`. */
-export const IMPLEMENTED: ReadonlySet<Tool> = new Set(["list_spaces", "open_space", "read", "look", "apply", "wait_for_user"]);
+/** The tools this build implements (T4; read_me from T10). The rest answer `unavailable`. */
+export const IMPLEMENTED: ReadonlySet<Tool> = new Set(["list_spaces", "open_space", "read", "look", "apply", "wait_for_user", "read_me"]);
 
 export const instructions = read("tool-text/instructions.md").trim();
 export const description = (tool: Tool) => read(`tool-text/${tool}.md`).trim();
