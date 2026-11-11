@@ -60,7 +60,7 @@ export class Watcher {
   #inbox: Inbox;
   #log: (event: string, data?: Record<string, unknown>) => void;
   #writing: (space: string) => boolean | undefined;
-  #hints: (space: string) => { strokes: string[]; text: string; confidence: number }[];
+  #hints: (space: string, region: string) => { strokes: string[]; text: string; confidence: number }[];
   /** `<space>|<region>` → state. */
   #regions = new Map<string, State>();
   #stopped = false;
@@ -71,7 +71,7 @@ export class Watcher {
     inbox: Inbox;
     log: (event: string, data?: Record<string, unknown>) => void;
     writing?: (space: string) => boolean | undefined;
-    hints?: (space: string) => { strokes: string[]; text: string; confidence: number }[];
+    hints?: (space: string, region: string) => { strokes: string[]; text: string; confidence: number }[];
   }) {
     this.#core = o.core;
     this.#writing = o.writing ?? (() => undefined);
@@ -154,7 +154,7 @@ export class Watcher {
     const stillWriting = live ?? now - st.lastChange < QUIET_MS;
     let send: string;
     try {
-      send = this.#core.watchSnapshot(space, region, { stillWriting, hints: this.#hints(space) }).send;
+      send = this.#core.watchSnapshot(space, region, { stillWriting, hints: this.#hints(space, region) }).send;
     } catch (e) {
       this.#log("watch_failed", { space, region, error: String((e as Error).message ?? e) });
       return;

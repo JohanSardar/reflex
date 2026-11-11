@@ -79,9 +79,9 @@ export class Presence {
     return here.some(([, d]) => d.pen || now - d.penUpAt < BETWEEN_STROKES_MS);
   }
 
-  /** Every connected device's latest recognized lines for the watched Regions of a Space. */
-  hints(space: string): Hint[] {
+  /** Every connected device's latest recognized lines for one watched Region. */
+  hints(space: string, region: string): Hint[] {
     const on = this.#connected();
-    return [...(this.#hints.get(space)?.values() ?? [])].flatMap((byDevice) => [...byDevice].filter(([d]) => on.has(d)).flatMap(([, h]) => h));
+    return [...(this.#hints.get(space)?.get(region) ?? [])].filter(([d]) => on.has(d)).flatMap(([, h]) => h);
   }
 }

@@ -175,8 +175,8 @@ export interface AgentHostOptions {
   presence?: () => { devices: number; viewing?: string[] };
   /** Whether the person is writing in a Space now, from a device's live pen signal; undefined when no device shows it. */
   writing?: (space: string) => boolean | undefined;
-  /** The devices' recognized handwriting lines for the watched Regions of a Space. */
-  deviceHints?: (space: string) => { strokes: string[]; text: string; confidence: number }[];
+  /** The devices' recognized handwriting lines for one watched Region. */
+  deviceHints?: (space: string, region: string) => { strokes: string[]; text: string; confidence: number }[];
   /** Asks the person to approve a new Agent (on the Link's terminal and on paired iPads). */
   announce: (a: AgentRecord) => void;
   /** Resolves once the person decides about this Agent, or after `ms`. */

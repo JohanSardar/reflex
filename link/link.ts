@@ -198,7 +198,7 @@ export class Link {
         viewing: presence.viewing(),
       }),
       writing: (space) => presence.writing(space),
-      deviceHints: (space) => presence.hints(space),
+      deviceHints: (space, region) => presence.hints(space, region),
       announce: (a) => this.#announce(a),
       decision: (id, ms, signal) => this.#waitDecision(id, ms, signal),
       log: (event, data = {}) => this.#log(`agent layer: ${event} ${JSON.stringify(data)}`),

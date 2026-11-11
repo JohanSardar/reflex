@@ -44,7 +44,7 @@ enum Handwriting {
         var out: [[String: Any]] = []
         for g in groups(strokes) {
             guard let image = render(g) else { continue }
-            guard let read = await recognize(image, correct: false) else { continue }
+            guard let read = await recognize(image) else { continue }
             // A lone stroke that reads as one character is a circle, a line or an arrow far more often than a letter.
             if g.ids.count == 1 && read.text.count < 2 { continue }
             out.append(["strokes": g.ids, "text": read.text, "confidence": (read.confidence * 100).rounded() / 100])
@@ -57,7 +57,8 @@ enum Handwriting {
     /// Splits handwriting into lines, as working in a Region is written: a stroke
     /// joins the line its vertical middle sits in, or that it overlaps by half its
     /// height (a minus sign or the bars of = join the digits beside them). Taller
-    /// strokes form the lines first. Lines come top to bottom.
+    /// strokes form the lines first, and very tall ones (over 120 points, such as
+    /// brackets around several lines) join last, as the kernel does. Lines come top to bottom.
     static func lines(_ strokes: [(id: String, stroke: PKStroke)]) -> [Group] {
         var out: [Group] = []
         let tall = { (s: PKStroke) in s.renderBounds.height > 120 }
