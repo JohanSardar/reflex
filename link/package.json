@@ -1,0 +1,18 @@
+{
+  "name": "@reflex/link",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reflex Link: the companion process that keeps every Space durable and in sync with your other devices.",
+  "type": "module",
+  "bin": {
+    "reflex-link": "./bin/reflex-link.ts"
+  },
+  "dependencies": {
+    "@reflex/kernel": "0.1.0",
+    "bonjour-service": "1.4.4",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "@types/qrcode": "1.5.6"
+  }
+}
