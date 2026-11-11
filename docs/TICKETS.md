@@ -242,6 +242,134 @@ This is the first time the whole product works end to end. Every scenario after 
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
 
+## Step 4 tickets
+
+```md
+# Plan review on the iPad: arrows, strikethrough, writing, voice and Behaviors
+
+## Goal
+Make the iPad capture everything scenario 1 (the coding plan review in SPEC §16) needs from the person, and show everything Agents and other devices put in the Space. When this is done, on the iPad:
+- Arrows, strikethroughs and handwriting next to an Element are captured with the stroke evidence and Apple's on-device handwriting hint that the Link needs to recognize them.
+- Holding the mic button records speech, transcribed on the iPad with on-device recognition and word timings; releasing it sends the voice and the Ink together.
+- Each Agent has a color chip that reverts its last change, and each Space has a history timeline showing who did what.
+- Behavior triggers fire from the iPad: tap, long-press, drag end, Ink drawn inside, and a Panel value changing.
+- The person can add photos, camera captures, PDFs and files (Photos, Files, the camera, drag and drop). Photos and PDF pages become image Elements the person can write on; other files become file Elements.
+- Ink drawn on other devices is drawn on this iPad too (T6 only drew the iPad's own Ink).
+
+## Context
+- Read docs/SPEC.md §5, §6, §9, §10 and §16 (scenario 1); docs/ARCHITECTURE.md §4.3, §7.5 and §8.2; docs/adr/0006 (its amendment) and 0008.
+- What exists on main: `protocol/` (T1), `kernel/` (T2), `apps/ipad/` (T3), `agent/` (T4), `link/` (T5) and the working round trip (T6): an Agent draws, the person circles an Element on the iPad and presses Send, and the Agent gets the circled Element's ID and a crop. Read the READMEs in each folder and docs/harness-notes.md.
+- T8 runs at the same time and owns the Link and Agent side: recognizing these Marks, the interleaved transcript in the Send Bundle, revert, Behavior actions and added files in the Bundle. You own `apps/ipad/`. Agree on shapes through `protocol/`.
+- Scenario 1 must work end to end once both T7 and T8 land; prove your half by running the real app against a real `reflex link`.
+- Drive the Simulator with T3 Code's device tools so the user can watch. A real iPad (iPad13,6, paired) is connected over USB; use it for anything the Simulator can't show, such as the microphone or the camera. T6 added a debug-only `reflex://debug/ellipse` link because the automation tool only drags in straight lines; use debug links only for stroke shapes the tool can't draw, and say so.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
+```md
+# Plan review core: Marks, transcript, revert, headless look and CLI parity
+
+## Goal
+Make scenario 1 (the coding plan review in SPEC §16) work end to end for Agents, in Claude Code and Codex, through both MCP and the CLI. When this is done:
+- The Link groups strokes into Marks and resolves their Anchors: circles, arrows from one Element to another, strikethroughs, and writing next to an Element with its recognized text and confidence.
+- The Send Bundle interleaves the voice transcript with the Marks it refers to ("merge these [m1] [m2]"), as in ARCHITECTURE §4.3.
+- `revert` undoes an Agent's own batches through the kernel's revert planning.
+- `look` works without the iPad: the Link renders the Space headlessly.
+- Every capability is reachable from the CLI as well as MCP, including `read_me` and `recipe`, so all eleven tools work.
+- Behavior actions run: open a Panel, notify, Send, set a field, apply a Recipe.
+- Files the person added appear in the Send Bundle (photos and PDF pages as images, other files by reference, read with `read`).
+
+## Context
+- Read docs/SPEC.md §7–§9, §11, §12 and §16; docs/ARCHITECTURE.md §3, §4, §5, §7 and §8; docs/adr/0003, 0006 and 0007.
+- What exists on main: `protocol/` (T1), `kernel/` (T2), `apps/ipad/` (T3), `agent/` (T4), `link/` (T5) and the working round trip (T6): an Agent draws, the person circles an Element on the iPad and presses Send, and the Agent gets the circled Element's ID and a crop. Read the READMEs in each folder and docs/harness-notes.md.
+- Carried over (docs/TICKETS.md, "Follow-ups"): T4's open review items S3, S5, S7 and S8; `read_me` and `recipe` aren't built though the server instructions point Agents at `read_me`; the CLI's image `file` path has no schema field; Agent Element IDs show as `agent:id`; T2's kernel follow-ups (the digest skips Send contents, connector moves do nothing, two undo/redo edge cases); and from T6, an Agent turned away isn't throttled when it keeps asking.
+- T7 runs at the same time and owns `apps/ipad/`: capturing these Marks, voice and imports on the iPad. You own `agent/`, `link/` and `kernel/` for this work. Agree on shapes through `protocol/`.
+- T9 (Relay) and T10 (web viewer and author kit) also run now. T10 adds its own CLI command group; whichever of you merges second rebases.
+- If Codex's usage limit runs out, prove the Codex half in Claude Code only and say so (the user decided this).
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
+```md
+# Relay: reach a Space from anywhere, with an encrypted log
+
+## Goal
+Build the Relay, the hosted service that lets Agents and devices outside the local network reach a Space. When this is done:
+- A Cloudflare Worker with Durable Objects stores each Space as an encrypted log it cannot read, plus encrypted assets in R2, and routes encrypted changes between a person's devices.
+- Remote MCP over OAuth lets a cloud Agent connect. A device issues a scoped, expiring grant for one Space; only under that grant does a cloud session decrypt and materialize the Space and run the same `kernel` and `agent` code.
+- The Link and the iPad can sync through the Relay over WebSocket, as a second path next to the LAN.
+- A self-hosted Node Relay runs the same code outside Cloudflare.
+- A real materialized Space runs inside the Durable Object within Workers' 128 MB. If it runs out of memory there, cloud execution moves to a separate service and the Durable Object stays the encrypted router and log.
+
+Run everything locally (`wrangler dev` and Node). Deploying to relay.eilmer.si is T14.
+
+## Context
+- Read docs/adr/0001, 0004 and 0008; docs/SPEC.md §3 and §13; docs/ARCHITECTURE.md §2 (the `relay` unit), §6 (transport, storage, identity), §8.4 and §13 (the Relay row).
+- What exists on main: `protocol/` (T1), `kernel/` (T2), `apps/ipad/` (T3), `agent/` (T4), `link/` (T5) and the working round trip (T6): an Agent draws, the person circles an Element on the iPad and presses Send, and the Agent gets the circled Element's ID and a crop. Read the READMEs in each folder and docs/harness-notes.md.
+- The kernel's WASM build is about 3.8 MB.
+- T8 (core), T7 (iPad), T10 (web) and T11 (peer-to-peer) run at the same time. You own `relay/` and the Relay transport behind the interface in ARCHITECTURE §6. T11 adds another transport; keep yours in its own module.
+- Never deploy to Cloudflare in this ticket.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
+```md
+# Web viewer, author kit and the Library
+
+## Goal
+Build the web viewer and the tools for people and Agents who extend Reflex. When this is done:
+- A web viewer opens a Space from the Link in a browser and draws it, live.
+- `reflex create guide|recipe|embed|adapter <name>` writes a working example; `reflex test` runs that kind's contract checks; `reflex dev` opens the viewer on an in-memory Space with hot reload and three panes (what the Agent reads, what a Send produces when you draw with the mouse in dev mode, and live lints and Anchors), with a "save example" button.
+- An Agent saves a Recipe or Embed Template it invented with `apply`'s `define` op. It lands in the person's Library (an ordinary Space of kind `library`), is checked like any extension, and appears in `read_me("index")` for every Agent in every Space.
+
+## Context
+- Read docs/SPEC.md §7 ("Agents save what they invent"), §12 and §14; docs/ARCHITECTURE.md §3 (the Library), §4.2 (`define`), §5 (the extension ladder and author kit) and §10; docs/adr/0006 and its amendment.
+- What exists on main: `protocol/` (T1), `kernel/` (T2), `apps/ipad/` (T3), `agent/` (T4), `link/` (T5) and the working round trip (T6): an Agent draws, the person circles an Element on the iPad and presses Send, and the Agent gets the circled Element's ID and a crop. Read the READMEs in each folder and docs/harness-notes.md.
+- T8 runs at the same time and builds `read_me` and `recipe` and CLI parity in `agent/`. Add your CLI commands as their own group and keep `define`'s Library storage separate from T8's files where you can; whichever of you merges second rebases.
+- None of this needs an iPad or Xcode.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
+```md
+# Peer-to-peer: a second path between the iPad and the Mac
+
+## Goal
+Add a second real transport between the iPad and the Link: Apple peer-to-peer Wi-Fi, so they stay connected with no shared Wi-Fi network. When this is done:
+- The iPad and the Mac find each other and connect over peer-to-peer Wi-Fi (Network.framework), with the Mac side as a small Apple-only Swift helper the Link talks to.
+- With both LAN and peer-to-peer up, each change takes the fastest live path, chosen with hysteresis, and moves to the other path when one drops.
+- The same change arriving over both paths is harmless.
+- A fault-injection transport exists for dropping, delaying and duplicating frames.
+
+## Context
+- Read docs/SPEC.md §3 and §13; docs/ARCHITECTURE.md §6 (the transport interface and build order) and §7; docs/adr/0001.
+- What exists on main: `protocol/` (T1), `kernel/` (T2), `apps/ipad/` (T3), `agent/` (T4), `link/` (T5) and the working round trip (T6): an Agent draws, the person circles an Element on the iPad and presses Send, and the Agent gets the circled Element's ID and a crop. Read the READMEs in each folder and docs/harness-notes.md.
+- A real iPad (iPad13,6) is paired and connected to this Mac over USB, and the user has an Apple Developer account. Peer-to-peer Wi-Fi only works on real hardware, so prove it on that iPad with the Mac. Build and install with Xcode's command-line tools; don't run anything that triggers macOS password or keychain prompts.
+- T9 (Relay) adds a WebSocket transport at the same time; T7 edits the iPad app's screens. Keep your networking in its own module on both sides.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
