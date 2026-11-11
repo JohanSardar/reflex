@@ -19,6 +19,13 @@ Usage
   reflex link agents                  List Agents and their approval
   reflex link deny <agent>            Deny an Agent waiting to connect
   reflex link revoke <agent>          Take an approved Agent's access away
+  reflex link relay                   The Relay: connection and the grants you gave cloud Agents
+  reflex link relay revoke <grant>    End a cloud Agent's grant now
+
+Through a Relay (--relay), your devices sync when they aren't on the same network, and each
+Space is kept there as an encrypted log the Relay can't read. A cloud Agent signs in on the
+Relay's page, which shows a code: type it into this Link's terminal to pick one Space and how
+long it may use it. Nothing else can grant one.
 
 Agents are approved by you: tap Allow on your iPad, or answer y in the Link's terminal.
 
@@ -39,6 +46,8 @@ Options
   --dev           Allow acting as the person without an iPad
   --web-port <n>  The web viewer's port on 127.0.0.1 (default 7421; any free one if taken)
   --no-web        Don't serve the web viewer
+  --relay <url>   Sync through this Reflex Relay (ws://… or wss://…); remembered. --relay off forgets it
+  --no-lan        Don't listen or look for devices on the local network (Relay only)
   --json          Machine-readable output
   --no-prompt     Don't use this terminal for pairing codes or questions
   -h, --help      Show this help
@@ -55,6 +64,8 @@ const { values: flags, positionals: args } = parseArgs({
     dev: { type: "boolean", default: false },
     "web-port": { type: "string" },
     "no-web": { type: "boolean", default: false },
+    relay: { type: "string" },
+    "no-lan": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -71,8 +82,33 @@ async function admin<T>(method: string, params: Record<string, unknown> = {}): P
   }
 }
 
+/** The Relay this profile uses: --relay sets it and it is remembered, --relay off forgets it. */
+function relayUrl(): string | undefined {
+  const file = join(dir, "relay.json");
+  if (flags.relay === "off") {
+    if (existsSync(file)) writeFileSync(file, "{}\n");
+    return undefined;
+  }
+  if (flags.relay) {
+    if (!/^wss?:\/\/[^/]+/.test(flags.relay)) throw new LinkError("usage", `'${flags.relay}' is not a ws:// or wss:// URL.`, "For example: --relay wss://relay.eilmer.si");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(file, JSON.stringify({ url: flags.relay }) + "\n");
+    return flags.relay;
+  }
+  return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")).url ?? undefined) : process.env.REFLEX_RELAY;
+}
+
 async function start(): Promise<void> {
-  const link = new Link({ dir, name: flags.name, port: flags.port ? Number(flags.port) : undefined, prompt: !flags["no-prompt"], dev: flags.dev, webPort: flags["no-web"] ? null : flags["web-port"] ? Number(flags["web-port"]) : undefined });
+  const link = new Link({
+    dir,
+    name: flags.name,
+    port: flags.port ? Number(flags.port) : undefined,
+    prompt: !flags["no-prompt"],
+    dev: flags.dev,
+    webPort: flags["no-web"] ? null : flags["web-port"] ? Number(flags["web-port"]) : undefined,
+    relay: relayUrl(),
+    lan: !flags["no-lan"],
+  });
   await link.start();
   const stop = async (sig: string): Promise<void> => {
     console.log(`link: ${sig}, stopping`);
@@ -98,7 +134,7 @@ interface Status {
 }
 
 function showStatus(s: Status): string {
-  const lines = [`${s.name} (${s.device}) · ${s.person.name} · LAN :${s.lan_port}`, ""];
+  const lines = [`${s.name} (${s.device}) · ${s.person.name} · ${s.lan_port === undefined ? "no LAN" : `LAN :${s.lan_port}`}`, ""];
   lines.push(`Spaces (${s.spaces.length}), journal ${s.journal.entries} entries, ${s.assets} assets`);
   for (const x of s.spaces) lines.push(`  ${x.id.padEnd(20)} ${x.kind.padEnd(8)} ${String(x.elements).padStart(3)} elements  ${x.sends.length} sends  digest ${x.digest.slice(0, 12)}`);
   lines.push(`Paired devices (${s.paired.length})`);
@@ -205,6 +241,19 @@ async function main(): Promise<void> {
       const status = { approve: "approved", deny: "denied", revoke: "revoked" }[cmd];
       const a = await admin<{ id: string; name: string; status: string }>("agents.decide", { id: args[1], status });
       return out(`${a.name} (${a.id}) ${a.status}.`, a);
+    }
+    case "relay": {
+      if (args[1] === "revoke") {
+        if (!args[2]) throw new LinkError("usage", "Which grant? reflex link relay revoke <grant>", "Run reflex link relay to see them.");
+        const g = await admin<{ gid: string; name: string; space: string; status: string }>("relay.revoke", { grant: args[2] });
+        return out(`${g.name}'s grant on '${g.space}' (${g.gid}) is ${g.status}.`, g);
+      }
+      const s = await admin<{ relay: null | { url: string; connected: boolean; logs: number; grants: { gid: string; space: string; name: string; agent: string; expires: number; status: string }[] } }>("status");
+      if (!s.relay) return out("This Link isn't using a Relay. Start it with --relay <url>.", s.relay);
+      const r = s.relay;
+      const lines = [`${r.url} · ${r.connected ? "connected" : "not connected"} · ${r.logs} Spaces in its encrypted log`, `Grants (${r.grants.length})`];
+      for (const g of r.grants) lines.push(`  ${g.gid}  ${g.status.padEnd(8)} ${g.space.padEnd(16)} ${g.name} (${g.agent}) until ${new Date(g.expires).toLocaleString()}`);
+      return out(lines.join("\n"), r);
     }
     case "dev":
       return dev();
