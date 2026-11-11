@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://reflex.eilmer.si/protocol/v0/read.output.schema.json",
   "title": "read result",
-  "description": "Exactly one of outline, elements or strokes is set, matching the requested detail.",
+  "description": "Exactly one of outline, elements or strokes is set, matching the requested detail. With detail full, files carries the contents of the file Elements read.",
   "type": "object",
   "properties": {
     "space": { "$ref": "common.schema.json#/$defs/space_name" },
@@ -37,6 +37,26 @@
         "additionalProperties": false
       },
       "maxItems": 2000
+    },
+    "files": {
+      "description": "detail full: the contents of the file Elements among ids. A text file comes as text; any other file is named by its mime and size, and the CLI writes its bytes to file.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "$ref": "common.schema.json#/$defs/element_id" },
+          "name": { "type": "string", "maxLength": 255 },
+          "mime": { "type": "string", "maxLength": 255 },
+          "size": { "$ref": "common.schema.json#/$defs/count" },
+          "text": { "description": "The file's text, cut at 100,000 characters (truncated says so).", "type": "string", "maxLength": 100000 },
+          "truncated": { "type": "boolean" },
+          "missing": { "description": "true when this Link doesn't have the file's bytes yet. Read again once the device has synced it.", "type": "boolean" },
+          "file": { "description": "CLI only: where the file's bytes were written.", "type": "string", "maxLength": 4096 }
+        },
+        "required": ["id", "name", "mime", "size"],
+        "additionalProperties": false
+      },
+      "maxItems": 100
     },
     "elsewhere": {
       "description": "outline only: what matched nothing in this read.",

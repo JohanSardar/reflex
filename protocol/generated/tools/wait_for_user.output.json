@@ -261,6 +261,11 @@
         "bounds": {
           "description": "What part of the Space the image covers, in your coordinates.",
           "$ref": "#/$defs/bounds"
+        },
+        "file": {
+          "description": "CLI only: where the image was written, because a shell can't receive image blocks.",
+          "type": "string",
+          "maxLength": 4096
         }
       },
       "required": [
