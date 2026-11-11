@@ -179,7 +179,10 @@ async function main(): Promise<void> {
     case "start":
       return start();
     case "status":
-      return out(showStatus(await admin<Status>("status")), await admin("status"));
+    {
+      const s = await admin<Status>("status");
+      return out(showStatus(s), s);
+    }
     case "pair": {
       if (args[1]) {
         const d = await admin<{ device: string; name: string }>("pair.join", { uri: args[1] });

@@ -202,7 +202,11 @@ export class Session {
     const head = Buffer.from(JSON.stringify(h));
     const len = Buffer.alloc(4);
     len.writeUInt32BE(head.length);
-    return this.path.send(this.#tx.seal(Buffer.concat([len, head, body])), priority);
+    const plain = Buffer.concat([len, head, body]);
+    // Refuse before sealing: a frame that is sealed but never sent would put the nonces out of step.
+    if (plain.length + 16 > this.path.limits.maxFrameBytes)
+      return Promise.reject(new Error(`a ${h.t} message of ${plain.length} bytes is over the ${this.path.limits.maxFrameBytes}-byte frame limit`));
+    return this.path.send(this.#tx.seal(plain), priority);
   }
 
   async next(): Promise<Message | null> {
