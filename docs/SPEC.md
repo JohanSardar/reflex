@@ -25,6 +25,7 @@ Reflex is **free and open source**, for everybody. There is no moat to protect; 
 - **Ultrafast locally, reachable from anywhere.** Every connection stays live, and each change takes the fastest available one (ADR-0001).
 - **One capability model.** MCP and the CLI are two equal interfaces over the same core (ADR-0003).
 - **Agent output is data, not instructions.** This applies to text, Embeds, and anything an Agent produces.
+- **Open-ended.** Reflex can't predict how Agents and users will use it, so every surface is general rather than built for one use. Any Element can carry the Agent's own data. Embeds run any web code and keep their state. Behaviors combine any trigger with any action. Panels can host Embeds. Agents can save what they invent for every Agent to reuse. A new use needs new data, never a new tool or an app release (ADR-0006).
 
 ## 3. System architecture
 
@@ -58,7 +59,7 @@ Reflex is **free and open source**, for everybody. There is no moat to protect; 
 
 ## 5. Content model
 
-The content model has four layers. Every Element has a stable ID, an owner (the user or an Agent), and lives on the owner's layer.
+The content model has four layers. Every Element has a stable ID, an owner (the user or an Agent), and lives on the owner's layer. Every Element can also carry a free-form `data` map that its Agent defines, such as a task ID, a test case or a score. Reflex stores it, syncs it and returns it in reads and Sends, but never interprets it.
 
 1. **Native core.** These Elements are fast, Pencil-aware, and fully understood by Agents:
    - Ink
@@ -71,21 +72,28 @@ The content model has four layers. Every Element has a stable ID, an owner (the 
 2. **Embeds.**
    - **HTML**, a must-have: a sandboxed WKWebView that can run three.js, Mermaid, D3, Excalidraw, live dashboards, or custom code. MCP Apps `ui://` resources are accepted as-is.
    - **3D**: RealityKit with USDZ, and glTF converted on import. Users can rotate a model and grab its parts.
-3. **Panels.** Native SwiftUI interface declared as JSON (A2UI-style): sidebars, forms, buttons, choice chips. Tapping an Element to get a detail sidebar opens a Panel.
+3. **Panels.** Native SwiftUI interface declared as JSON (A2UI-style): sidebars, forms, buttons, choice chips. Tapping an Element to get a detail sidebar opens a Panel. A Panel can also host an Embed, so a sidebar can show anything web code can.
 4. **Behaviors and Regions.**
-   - **Behaviors** say what happens on interaction: tap opens a Panel, tap notifies the Agent, draggable or locked, snap rules.
+   - **Behaviors** say what happens on interaction. Each one pairs a trigger with an action, and an Element can have several:
+     - triggers: tap, long-press, drag end, Ink drawn inside, a Panel value changing, an event from an Embed
+     - actions: open a Panel, notify the Agent, Send, set a field, apply a Recipe
+     - flags: draggable, locked, snap rules
+
+     The lists are fixed, but their combinations give interactions nobody designed in advance.
    - **Regions** set rules for an area: whether Ink is allowed, whether Agents are read-only, whether watch mode is on, and a scoped Send button.
    - **Space size**: infinite, fixed pages, or a set width.
 
 **Interop.** Reflex imports formats Agents already write well rather than inventing its own:
 - **Import:** Mermaid, draw.io XML, Excalidraw JSON, SVG, LaTeX, glTF/USDZ, Markdown. These convert to native Elements where possible and become Embeds otherwise.
+- **User imports:** the user can add photos, camera captures, PDFs and other files from the iPad (Photos, Files, the camera, drag and drop). Photos and PDF pages become image Elements the user can write on. Other files become file Elements the Agent can read. New imports travel with the next Send.
 - **Export:** PDF, PNG, JSON Canvas.
 - **Out of scope for v1:** a live Blender link. Blender's glTF export already covers this.
 
 **HTML Embed sandbox.**
 - Each Embed reaches the rest of Reflex only through a small bridge API, which lets it:
   - read its own Element's data
-  - emit "notify agent" events
+  - save its own state (`reflex.element.setState`), such as a slider value, a game move or a simulation setting. The state syncs to every device, survives reloads, and appears in the next Send's changes.
+  - emit "notify agent" events, and events that trigger the Element's Behaviors
   - open Panels
   - **register Anchors** (`reflex.anchors.register({ resolve(region) })`): at Send time, Reflex gives the Embed each Mark's geometry in the Embed's local pixels, and the Embed answers with what that Mark refers to, such as data rows, a DOM node or a plate well. Without that registration, Reflex can only report pixel coordinates within the Embed.
 - Network access is limited to a user-editable allowlist. Approved CDNs are allowed by default.
@@ -103,7 +111,7 @@ The goal is to match Goodnotes.
 
 ## 7. How Agents act on the canvas
 
-- **`apply`** is the main tool. It takes one declarative batch of operations: `add`, `patch`, `remove`, `arrange`, `focus`. Agents choose the stable IDs. A batch is one undo or revert unit, can be replayed, and syncs cleanly.
+- **`apply`** is the main tool. It takes one declarative batch of operations: `add`, `patch`, `remove`, `arrange`, `focus`, `define`. Agents choose the stable IDs. A batch is one undo or revert unit, can be replayed, and syncs cleanly.
 - **`exec`** is the power-user escape hatch. It runs JavaScript against a simplified Space API, for things like laying out 40 nodes as a force graph.
 - **Coordinates.** Each Agent has one stable integer coordinate space per Space, and every `look` image is labeled with the bounds it covers. Placement is relative by default (`at: {right_of: "n-gateway"}`, `near` a user's Mark), and Reflex computes the geometry. Reflex repairs common model mistakes, such as duplicate or missing IDs, and reports each repair (ADR-0007).
 - **Lints.** Every write returns warnings such as "text overlaps Ink" or "arrow endpoint unattached".
@@ -114,6 +122,7 @@ The goal is to match Goodnotes.
 - **Server instructions.** A short guide, always loaded.
 - **`read_me(topic)`.** Full guides loaded on demand: math tutoring, code maps, 3D, grading, charts, and so on.
 - **Recipes.** Ready-made patterns built from the scenarios. For example, `recipe("check-my-work")` places a problem, a writing Region, and a "Check my work" Send button in one call.
+- **Agents save what they invent.** An Agent that comes up with a useful pattern or Embed saves it to the user's **Library** with `apply`'s `define` operation. It is checked like any other extension, appears in `read_me("index")` for every Agent in every Space, and the user can rename or delete it.
 
 ## 8. What Agents see
 
@@ -132,12 +141,12 @@ Agents receive both an **image and structured data**:
 - a floating Send button
 - Pencil Pro squeeze or double-tap
 - hold the mic button and talk; releasing sends the voice and the Ink together
-- tapping an Element whose Behavior is "notify agent"
+- any Behavior whose action is "notify agent" or "Send"
 - a Send button the Agent placed for one Region, such as "Check my work"
 
 **The Send Bundle** reads like a set of review comments:
 - **Marks.** Each new group of Ink strokes, anchored to what it refers to. Reflex recognizes the gesture (a circle, a strikethrough, an arrow from A to B, writing next to X), attaches the target Element IDs, and maps the mark into the target's own coordinates: data coordinates on a chart, drawing coordinates on a plan, DOM nodes in HTML. It adds a recognized-text hint with a confidence score. Raw strokes are always kept, because handwriting recognition alone is not reliable.
-- **Changes.** Elements the user moved, erased, or edited, and anything entered into a Panel.
+- **Changes.** Elements the user moved, erased, or edited, anything entered into a Panel, state saved by Embeds, and files the user added.
 - **Images and scene** as described in §8.
 - **Voice.** A transcript produced on the iPad (see §10).
 - **Context.** Which trigger was used, the viewport, and the selection.
@@ -224,7 +233,7 @@ The **Reflex Protocol** is a versioned, documented spec covering Elements, opera
 - **Space kernel:** Rust, sans-IO, built next to the CRDT crate. It binds to Swift through UniFFI and to TypeScript through WASM (ADR-0005).
 - **iPad:** Swift, PencilKit, RealityKit, WKWebView, SwiftUI.
 - **Agent layer, Link, CLI, MCP, Relay, web viewer:** TypeScript. The Relay runs on Cloudflare Workers with Durable Objects, or self-hosted on Node.
-- **CRDT:** Automerge first, with Loro as the fallback. The final choice depends on the first-milestone Ink benchmark.
+- **CRDT:** Automerge. Loro is the fallback, used only if Automerge visibly fails while building and using the kernel.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design.
 
@@ -252,26 +261,20 @@ These were judged weaker and are not in the suite: legal redlines, incident resp
 
 ## 17. Build order
 
-Development proceeds in vertical milestones, defined in [ARCHITECTURE.md §12](./ARCHITECTURE.md):
+Development proceeds in vertical steps, defined in [ARCHITECTURE.md §12](./ARCHITECTURE.md) and broken into tickets in [TICKETS.md](./TICKETS.md). Each piece is proven by using it for real, in the iPad Simulator or a real harness. There are no separate benchmark, eval or test-only phases.
 
-0. Spikes:
-   - Ink on a real iPad
-   - the Rust kernel bound to both Swift and TypeScript
-   - the CRDT Ink benchmark
-   - real harness timeouts
-   - the Agent eval harness
-1. One round trip: an Agent writes, the user circles, the Agent reads the circle.
-2. The coding plan review demo.
-3. The math tutor demo.
-4. Prove each extension seam with a real second implementation.
-5. 3D, and scenarios 3–5.
-6. The Relay and the web viewer.
-7. Push Send Adapters.
-8. The remaining scenarios, and Reflex Protocol v1.
+1. The protocol, the Rust kernel and the iPad canvas, in parallel.
+2. The Agent layer and the Link.
+3. One round trip: an Agent writes, the user circles, the Agent reads the circle.
+4. The coding plan review, the Relay, the web viewer and author kit, and a second transport.
+5. The math tutor, deploying the Relay, and Claude Code channel push.
+6. The chart Embed, and the remaining push Send Adapters.
+7. 3D.
+8. The remaining scenarios.
+9. Reflex Protocol v1.
 
 ## 18. Open items
 
-- Which CRDT library to use: compare Swift and TypeScript binding quality and performance on large Ink.
 - How to recognize mark gestures (circle, strikethrough, arrow): heuristics, an on-device model, or a mix.
-- The exact behavior of `wait_for_user` keepalives under each harness's tool timeout. Measure this per harness.
+- The exact behavior of `wait_for_user` keepalives under each harness's tool timeout. Recorded from one real run in each harness while building the Agent layer.
 - Whether the MCP App adapter can render a live Space view inside chat hosts, or only a read-only one.

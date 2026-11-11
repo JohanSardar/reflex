@@ -8,4 +8,4 @@ The kernel is sans-IO: events and bytes go in, effects and bytes come out. It ow
 
 - **Duplicate the semantics in Swift and TypeScript, checked by trace tests.** Rejected: permanent drift in the most dangerous code.
 - **Run a TypeScript kernel in JavaScriptCore on the iPad.** Rejected: there's no JIT in-process on iOS, WASM support there is uncertain, and it puts a chatty bridge on the hot path.
-- **Fallback if the first-milestone spike fails or no one will own Rust:** a thin iPad that commits raw user intents and raw Sends, a TypeScript-only core, and a CRDT mapping generated for both languages from one declarative table.
+- **Fallback if the first kernel ticket (T2) finds the bindings don't work or the Swift and TypeScript copies don't converge, or no one will own Rust:** a thin iPad that commits raw user intents and raw Sends, a TypeScript-only core, and a CRDT mapping generated for both languages from one declarative table.

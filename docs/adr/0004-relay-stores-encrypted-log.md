@@ -4,4 +4,4 @@ Without a key, the Relay can't run merges, queries or rendering, so it can't be 
 
 ## Consequences
 
-- Cloudflare Workers cap memory at 128 MB per isolate, including WASM. Before we place cloud execution inside a Durable Object, we benchmark a representative materialized Space there. If it doesn't fit, cloud execution moves to a separate service, and the Durable Object stays the encrypted router and store.
+- Cloudflare Workers cap memory at 128 MB per isolate, including WASM. Cloud execution runs inside a Durable Object first. If a real materialized Space runs out of memory there, cloud execution moves to a separate service, and the Durable Object stays the encrypted router and store.

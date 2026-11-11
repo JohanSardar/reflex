@@ -86,3 +86,7 @@ _Avoid_: template, macro, snippet
 A reusable Embed, packaged with its parameters, Guide and Anchor registration, that anyone can add without an app release.
 _Avoid_: widget, plugin, component
 
+**Library**:
+The user's collection of saved Recipes and Embed Templates, including the ones Agents saved, available to every Agent in every Space.
+_Avoid_: store, catalog, marketplace
+
