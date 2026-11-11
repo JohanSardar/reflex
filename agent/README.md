@@ -100,6 +100,9 @@ reflex wait --timeout 300                # an Agent waiting for the person: circ
 Without an iPad, start the Link with `reflex link --dev`; then
 `reflex dev person circle demo "Auth service"` and
 `reflex dev person send demo --said "what's missing here?"` play the person.
+For a Region, `reflex dev person write-line demo work "3x - 7 = 2x + 5"` writes
+one line of working below the last, and `reflex dev person send demo --region work`
+presses that Region's Send button.
 
 ## Author kit
 
@@ -139,6 +142,10 @@ same Recipe and Embed checks. Errors reject the batch; warnings come back as lin
 | `REFLEX_HOME` | `~/.reflex/link` | The Link's profile directory: its socket, `rpc.key`, Agent credentials, `mcp.log` |
 | `REFLEX_AGENT_NAME` | From the harness | The Agent's display name; its identity is derived from it. `--agent` overrides it for the CLI |
 | `REFLEX_PROGRESS_S` | `15` | Seconds between progress notifications during `wait_for_user` |
+| `REFLEX_WATCH_QUIET_S` | `4` | Watch mode: a snapshot once the person pauses this long |
+| `REFLEX_WATCH_MAX_S` | `20` | Watch mode: at most this long after the first new stroke while they keep writing (`user_still_writing`) |
+| `REFLEX_WATCH_MIN_S` | `8` | Watch mode: never two snapshots of one Region closer than this |
+| `REFLEX_WATCH_PER_HOUR` | `60` | Watch mode: snapshots per Region per hour |
 | `REFLEX_MAX_WAIT_S` | 280 for Codex, none otherwise | The longest `wait_for_user` the MCP surface holds, kept under the harness's hard tool timeout |
 
 Without a name, an MCP Agent is called "<harness> · <cwd basename>",
