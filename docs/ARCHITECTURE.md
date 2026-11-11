@@ -65,7 +65,7 @@ A state machine: events and bytes go in; new state, effects and bytes come out. 
 // Coarse API, sketched. JSON or bytes cross the boundary.
 open(snapshot: Bytes, journal: Iter<Change>) -> Space
 apply_agent_batch(space, agent: AgentId, batch: NormalizedBatch, at: Frontier) -> Commit | Rejection
-apply_user_intent(space, device: DeviceId, intent: UserIntent) -> Commit   // finished strokes, erase, move, undo
+apply_user_intent(space, person: PersonId, device: DeviceId, intent: UserIntent) -> Commit   // finished strokes, erase, move, undo
 receive(space, change: VerifiedChange) -> Delta
 sync_step(space, peer: PeerId, msg: Option<Bytes>) -> SyncOutput
 scene(space, query: SceneQuery) -> Scene                    // outline / full / clusters, provenance (`by`)
@@ -73,14 +73,15 @@ group_marks(space, strokes: [StrokeId], hints: [RecognizerHint]) -> [Mark]
 resolve_anchors(space, marks: [Mark], embed_answers: [EmbedAnchor]) -> [Anchor]
 freeze_send(space, raw: RawSend) -> FrozenSend               // pins frontier, claims unsent edits
 plan_revert(space, agent: AgentId, batches: [BatchId]) -> RevertPlan
-undo(space, device: DeviceId) -> Commit                      // the user's own actions only
+undo(space, person: PersonId) -> Commit                      // that person's own actions only, on any of their devices
 migrate(space, to: SchemaVersion) -> Commit
 measure_text(spec: TextSpec) -> Size                         // bundled shaper + fonts: same bounds everywhere
 checkpoint(space) -> Bytes
 ```
 
 **What the kernel guarantees:**
-- Agents can never change user Ink.
+- Agents can never change a person's Ink.
+- Every owner is a principal: a person or an Agent, each with a stable ID. A single-person Space already works this way, so sharing it later needs no migration.
 - IDs and owners are immutable.
 - Owners come from the authenticated context, never from arguments.
 - A batch is one atomic, revertable unit.
@@ -146,7 +147,7 @@ The format is flat and typed. Agents name things; Reflex computes geometry. Each
 The stored, frozen Send is the source of truth. The Bundle is a projection of it, about 2,000 text tokens plus at most four images by default.
 
 ```json
-{ "kind": "send", "send": "s_12", "space": "auth-plan", "trigger": "voice",
+{ "kind": "send", "send": "s_12", "space": "auth-plan", "from": { "person": "p_ana", "name": "Ana" }, "trigger": "voice",
   "said": "merge these [m1] [m2] into one service",
   "marks": [
     { "id": "m1", "kind": "circle", "on": ["n-auth"], "image": 1 },
@@ -160,7 +161,7 @@ The stored, frozen Send is the source of truth. The Bundle is a projection of it
                { "kind": "removed", "id": "n-cache", "was": "Redis cache" },
                { "kind": "embed_state", "id": "sim-1", "state": { "gravity": 4.2 } },
                { "kind": "added_file", "id": "f-1", "file": "whiteboard.jpg", "image": 4 } ],
-  "scene": [ { "id": "n-auth", "type": "shape", "text": "Auth service", "by": "you", "bounds": [400, 200, 160, 80] } ],
+  "scene": [ { "id": "n-auth", "type": "shape", "text": "Auth service", "by": "Ana", "bounds": [400, 200, 160, 80] } ],
   "elsewhere": { "on_screen": 14, "off_screen": 31 },
   "images": [ { "n": 1, "shows": "m1, m2 and their targets", "bounds": [380, 160, 520, 180] } ],
   "also_sent_to": [], "redelivered": false, "pending_after": 0,
@@ -170,6 +171,7 @@ The stored, frozen Send is the source of truth. The Bundle is a projection of it
 - **The voice transcript is interleaved with the Marks**, using on-device word timings and stroke timestamps.
 - **Anchors are frozen when the Mark is drawn.** If the target moves before the Send, the Bundle shows both the original and the current position, plus a `moved_since_marked` flag.
 - **`kind`** is one of `send`, `watch` (carries `user_still_writing`), or `tap`.
+- **`from` names the person who sent it.** In a shared Space the Bundle carries only that person's Marks, and `by` names each Element's person or Agent.
 - **`by` appears on every scene Element.** Text from other Agents and from Embeds is data, never instructions.
 - **`changes` also carries** Embed state saved with `setState`, values entered in Panels, and files the user added. Photos and PDF pages come as images; other files come by reference and are read with `read`.
 - **Raw strokes are passed by reference.** `read({ids:["m3"], detail:"strokes"})` returns them, for the kanji and sketch scenarios.
@@ -240,15 +242,17 @@ These exist so the code stays testable and replaceable. They carry no manifest, 
 - **Identity.** Three separate things:
   - **device pairing:** a QR key exchange
   - **remote principal verification:** OAuth tokens, checked for issuer, audience and scopes
-  - **Reflex grants:** Agent approval, Space access and effects, kept in a signed control catalog
+  - **people:** a person ID and display name, with each device bound to one person
+  - **Reflex grants:** Agent approval, Space membership and roles (owner, editor, viewer), Space access and effects, kept in a signed control catalog
 
   OAuth never approves an Agent by itself.
+- **Presence.** Live cursors, names and selections travel over the same Paths as changes, but as short-lived messages that are never written into the Space or its history.
 - **Send delivery.** The Inbox and `wait_for_user` ship first. The push adapter contract (config, secrets, callback endpoint, durably persisted attempts outside the adapter) is extracted with the first push adapter, the Claude Code channel, and validated against the second, a webhook.
 
 ## 7. Correctness rules (specified before the protocol is called stable)
 
 1. **Invariants that span fields.** Related values (a `min`/`max` pair, an axis domain, a connector's endpoints) are stored as one atomic register. Two writes that are each valid can still merge into an invalid state. When that happens the kernel renders it safely and reports an explicit conflict. It never picks a winner silently in a way that depends on order.
-2. **Authorization** is checked at the writer's causal frontier, and the check is recorded in the commit. User Ink ownership is immutable and stronger than any mutable Region policy. A Region rule never retroactively deletes accepted writes. It applies to writes made after the frontier where the rule became visible.
+2. **Authorization** is checked at the writer's causal frontier, and the check is recorded in the commit. Ink ownership is immutable and stronger than any mutable Region policy. Membership and roles are checked the same way: removing a person applies to their writes after the frontier where the removal became visible. A Region rule never retroactively deletes accepted writes. It applies to writes made after the frontier where the rule became visible.
 3. **Idempotency.** Each Agent request has a request ID and a payload hash. Logical IDs come from (Agent, request, op index). If a retry with the same ID carries a different payload, it is rejected. When the same request is accepted on both the Link and the Relay, the two copies converge to one logical Element deterministically. This is checked once by sending the same request over both paths.
 4. **The Send state machine is persisted:**
 
@@ -293,7 +297,14 @@ These exist so the code stays testable and replaceable. They carry no manifest, 
 3. The raw Send syncs to the Link. There the kernel groups the Marks and resolves the Anchors, and the `agent` unit projects the Send Bundle (§4.3). A `wait_for_user` call waiting on the Inbox is released with it.
 4. The Agent replies with `apply(in_reply_to: "s_12")`, which also acknowledges the Send. If the stdio pipe dies first, the Send is redelivered, flagged `redelivered`.
 
-### 8.3 A cloud Agent through the Relay
+### 8.3 Inviting a person to a shared Space
+
+1. The Space's owner creates an invite with a role (editor or viewer). It travels as a link or QR code.
+2. The invited person's device presents the invite to an existing member's device, directly or through the Relay. That device checks it, records the membership in the signed control catalog, and wraps the Space key for the new device. The Relay only ever carries the wrapped key.
+3. The new device syncs the Space. Its strokes commit locally first, tagged with its person, then go out over the fastest live path.
+4. Removing a person records the removal and rotates the Space key. Later changes are encrypted with the new key, which the removed person's devices never receive.
+
+### 8.4 A cloud Agent through the Relay
 
 1. claude.ai or ChatGPT calls remote MCP at `relay.eilmer.si` over OAuth.
 2. You approve the Agent, and a device issues a scoped, expiring grant for one Space (ADR-0004).
@@ -369,7 +380,7 @@ Each step's tickets run at the same time, one agent each. The full list, with wh
 | **4** | T7 Plan review iPad · T8 Plan review core · T9 Relay · T10 Web + author kit · T11 Peer-to-peer | Scenario 1 works in Claude Code and Codex through MCP and the CLI; composable Behaviors and user imports; the Relay with its encrypted log; the web viewer, `reflex create/test/dev` and Agent-saved Recipes; a second transport |
 | **5** | T12 Math tutor iPad · T13 Math tutor core · T14 Deploy Relay · T15 Claude channel | Scenario 2 works; the Relay runs at relay.eilmer.si; Claude Code receives Sends by push |
 | **6** | T16 Chart Embed · T17 Webhook, MCP App | The anchor bridge, Embed state, Embeds inside Panels and the HTML sandbox; the remaining push adapters, falling back to the Inbox |
-| **7** | T18 3D Embed | RealityKit with glTF/USDZ part maps |
+| **7** | T18 3D Embed · T22 Shared Spaces | RealityKit with glTF/USDZ part maps; several people drawing on one Space from their own devices, with invites, roles, presence and key rotation |
 | **8** | T19 Scenarios 3–5 · T20 Scenarios 6–13 | Every scenario works |
 | **9** | T21 Protocol v1 | The protocol and conformance profiles are published |
 
@@ -400,3 +411,4 @@ The Simulator covers every iPad ticket except T11's peer-to-peer Wi-Fi and one f
 8. Key recovery after losing every paired device. An OAuth login alone must never be presented as recovering end-to-end encrypted data.
 9. Which default CDNs are allowed, how they're pinned, and how redirects are handled.
 10. The UI for showing recipients when a Send fans out to several Agents.
+11. How a removed person's already-synced copy is handled. Key rotation protects later changes, but a copy they already hold can't be taken back.

@@ -20,7 +20,7 @@ Reflex is **free and open source**, for everybody. There is no moat to protect; 
 ## 2. Principles
 
 - **Any harness, day one.** Anything that can call an MCP tool or run a shell command can use Reflex fully. Push to specific harnesses is an add-on (ADR-0002).
-- **The user owns their work.** Agents never edit or erase user Ink. Users can erase, move, or delete anything.
+- **People own their work.** Agents never edit or erase a person's Ink. People who can edit a Space can erase, move, or delete anything in it.
 - **The user owns their attention.** Agents can ask for it, but can never switch the user's current Space.
 - **Ultrafast locally, reachable from anywhere.** Every connection stays live, and each change takes the fastest available one (ADR-0001).
 - **One capability model.** MCP and the CLI are two equal interfaces over the same core (ADR-0003).
@@ -56,10 +56,15 @@ Reflex is **free and open source**, for everybody. There is no moat to protect; 
 - **Attention.** A new Space created by an Agent appears with a badge. When an Agent writes into a Space the user isn't viewing, that Space gets an unread badge. Agents can call `request_attention`, which shows a banner the user can tap to switch. Agents can never force a switch.
 - **Routing Sends.** A Send goes to the Agent that owns the Region or Element involved. If ownership is ambiguous, every Agent attached to the Space gets it.
 - **Multiple devices.** Several iPads and web viewers can be on one Space at the same time.
+- **Shared Spaces** (ADR-0008). The person who owns a Space can invite other people, each as an editor or a viewer. Everyone draws on the same Space at once, from their own devices, and sees each other's live cursors and names.
+  - Each person's own drawing never waits for the network. Other people's strokes arrive over the local network when they're nearby and through the Relay otherwise.
+  - Each person's Sends carry who sent them, go to the Agents that person's Send is about, and contain only that person's Marks.
+  - The Space's owner approves which Agents may join it. An Agent approved in one person's Reflex can only join a shared Space after the owner approves it there too.
+  - Removing a person rotates the Space's encryption key, so they can't read anything written afterwards.
 
 ## 5. Content model
 
-The content model has four layers. Every Element has a stable ID, an owner (the user or an Agent), and lives on the owner's layer. Every Element can also carry a free-form `data` map that its Agent defines, such as a task ID, a test case or a score. Reflex stores it, syncs it and returns it in reads and Sends, but never interprets it.
+The content model has four layers. Every Element has a stable ID, an owner (a person or an Agent), and lives on the owner's layer. Every Element can also carry a free-form `data` map that its Agent defines, such as a task ID, a test case or a score. Reflex stores it, syncs it and returns it in reads and Sends, but never interprets it.
 
 1. **Native core.** These Elements are fast, Pencil-aware, and fully understood by Agents:
    - Ink
@@ -105,7 +110,7 @@ The goal is to match Goodnotes.
 
 - **Pens.** Pressure and tilt sensitive, and low latency through PencilKit.
 - **Eraser.** A stroke eraser, a precise eraser, and a lasso to erase or select. It can be switched to with Pencil double-tap or squeeze.
-- **Undo and redo.** Use the toolbar buttons, a two-finger tap to undo, or a three-finger tap to redo. Undo is linear and covers only **the user's own actions**.
+- **Undo and redo.** Use the toolbar buttons, a two-finger tap to undo, or a three-finger tap to redo. Undo is linear and covers only **that person's own actions**, even in a shared Space.
 - **Agent changes.** Each Agent's batches can be reverted separately from its color chip ("Revert Claude Code's last change"). A history timeline for each Space shows who did what.
 - **User Ink.** Agents never edit user Ink. They annotate on their own layer: margin marks, underlines, hints placed next to the Ink.
 
@@ -149,7 +154,7 @@ Agents receive both an **image and structured data**:
 - **Changes.** Elements the user moved, erased, or edited, anything entered into a Panel, state saved by Embeds, and files the user added.
 - **Images and scene** as described in §8.
 - **Voice.** A transcript produced on the iPad (see §10).
-- **Context.** Which trigger was used, the viewport, and the selection.
+- **Context.** Who sent it, which trigger was used, the viewport, and the selection.
 
 **Delivery** (ADR-0002):
 1. **`wait_for_user(timeout, filter?)`** is the guaranteed path, and the first one built. It holds the call open with progress keepalives and returns either the Send Bundle or `{status: "still_waiting"}`. The tool description tells the Agent to call it again. Optional filters wait only for a given Region, or for a tap on a given Element.
@@ -219,14 +224,15 @@ The CLI follows https://vercel.com/design/cli (ADR-0003). It is a full Agent int
 ## 13. Security and privacy
 
 - **Pairing.** Scanning a QR code exchanges keys between the iPad and the Link. After that, Bonjour rediscovers the Link automatically.
-- **Approval.** The user approves every new Agent the first time it connects.
+- **Approval.** The user approves every new Agent the first time it connects. In a shared Space, the Space's owner approves it.
 - **Encryption.** The Relay stores an encrypted log and passes along encrypted updates it cannot read. It decrypts a Space only under a scoped, expiring grant that the user gives a cloud Agent session (ADR-0004). The E2E guarantee covers storage and device-to-device traffic; cloud Agents necessarily see the Spaces they're granted.
+- **Shared Spaces.** Each Space has one encryption key that every member's devices hold. An invite hands the key to the new person's device through an existing member's device, never through the Relay in readable form. Removing a person rotates the key (ADR-0008).
 - **Remote MCP** uses OAuth, which claude.ai connectors require.
 - **Embeds** are sandboxed (see §5).
 
 ## 14. Open protocol
 
-The **Reflex Protocol** is a versioned, documented spec covering Elements, operations, Send Bundles, Agent identity, and transports, with conformance tests. Anyone can use it to build clients (Android, Vision Pro, others) or new Send Adapters. The scenario suite doubles as the conformance suite.
+The **Reflex Protocol** is a versioned, documented spec covering Elements, operations, Send Bundles, people and Agent identity, shared Space membership, and transports, with conformance tests. Anyone can use it to build clients (Android, Vision Pro, others) or new Send Adapters. The scenario suite doubles as the conformance suite.
 
 ## 15. Tech stack and repo layout
 
@@ -269,7 +275,7 @@ Development proceeds in vertical steps, defined in [ARCHITECTURE.md §12](./ARCH
 4. The coding plan review, the Relay, the web viewer and author kit, and a second transport.
 5. The math tutor, deploying the Relay, and Claude Code channel push.
 6. The chart Embed, and the remaining push Send Adapters.
-7. 3D.
+7. 3D, and shared Spaces for several people.
 8. The remaining scenarios.
 9. Reflex Protocol v1.
 

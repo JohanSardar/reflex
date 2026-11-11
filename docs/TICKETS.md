@@ -1,17 +1,17 @@
 # Reflex tickets
 
-The build is split into 21 tickets, one agent each. [ticket-map.html](./ticket-map.html) shows which can run at the same time. Steps and their outcomes are summarized in [ARCHITECTURE.md §12](./ARCHITECTURE.md).
+The build is split into 22 tickets, one agent each. [ticket-map.html](./ticket-map.html) shows which can run at the same time. Steps and their outcomes are summarized in [ARCHITECTURE.md §12](./ARCHITECTURE.md).
 
 Every ticket is proven by using the real thing: the app in the iPad Simulator, a real Claude Code or Codex session, or the real CLI. No ticket builds benchmarks, eval harnesses or test suites.
 
 ## All tickets
 
-There are 50 work items (H1–H50), and each one is in exactly one ticket.
+There are 55 work items (H1–H55), and each one is in exactly one ticket.
 
 | Ticket | What's in it | Can start |
 |---|---|---|
-| T1 Protocol v0 | H9 schemas for every message, including `data`, Behaviors, `define`, Embed state and added files, with a few correct examples · H10 hand-written tool text and server instructions | Now |
-| T2 Kernel | H5 Element types · H6 `apply`, `scene`, `freeze_send` · H7 Swift and WASM bindings, with a stop-and-report if they don't work or the copies don't converge · H8 Automerge mapping · H43 the `data` map on every Element | Now |
+| T1 Protocol v0 | H9 schemas for every message, including `data`, Behaviors, `define`, Embed state and added files, with a few correct examples · H10 hand-written tool text and server instructions · H51 owners as people or Agents, and `from` on every Send | Now |
+| T2 Kernel | H5 Element types · H6 `apply`, `scene`, `freeze_send` · H7 Swift and WASM bindings, with a stop-and-report if they don't work or the copies don't converge · H8 Automerge mapping · H43 the `data` map on every Element · H52 person IDs on every owner and undo per person | Now |
 | T3 iPad canvas | H1 PencilKit Ink, Goodnotes-style eraser and undo, reload, stable IDs · H2 minimum iPadOS · H3 drawing Elements · H4 Send button | Now |
 | T4 Agent layer | H11 `open_space`, `apply`, `read`, `look`, `wait_for_user` over MCP and the CLI · H12 one real wait in Claude Code and one in Codex, recording each one's timeout and MCP version | After T1, T2 |
 | T5 Link | H13 journal, LAN, pairing, approval | After T2 |
@@ -30,6 +30,7 @@ There are 50 work items (H1–H50), and each one is in exactly one ticket.
 | T18 3D Embed | H39 RealityKit, glTF/USDZ part maps | After T16 |
 | T19 Scenarios 3–5 | H40 CAD, chart and grading Recipes | After T18, T13 |
 | T20 Scenarios 6–13 | H41 the remaining Recipes and Guides | After T18 |
+| T22 Shared Spaces | H53 invites, roles and membership checks · H54 Space key sharing and rotation on removal · H55 live presence, and each person's Sends carrying only their Marks | After T17 and T12 |
 | T21 Protocol v1 | H42 publish the protocol and conformance profiles | Last |
 
 Tickets for later steps are written when their step is next, so they can build on what earlier tickets found.
@@ -45,14 +46,15 @@ Write the first version of Reflex's public contract: the JSON Schemas for every 
 - schemas for errors with `fix` hints
 - schemas for the Send Bundle
 - schemas for the other tools' inputs and outputs
+- owners as principals: a person or an Agent, each with a stable ID, and `from` on every Send naming the person who sent it
 - one correct, hand-written example for each message type
 
 Next to them sit the descriptions of the eleven tools and server instructions of about 400 tokens or fewer, all written by hand.
 
-Everything else in Reflex builds on these shapes, and the Agent is Reflex's real user. The shapes must also leave room for uses nobody designed: every Element has a free `data` map, Behaviors pair a trigger with an action, `define` saves an Agent's Recipe or Embed Template to the Library, and the Send Bundle carries Embed state and files the user added.
+Everything else in Reflex builds on these shapes, and the Agent is Reflex's real user. The shapes must also leave room for uses nobody designed: every Element has a free `data` map, Behaviors pair a trigger with an action, `define` saves an Agent's Recipe or Embed Template to the Library, and the Send Bundle carries Embed state and files the user added. Owners are people or Agents from the start, so shared Spaces can come later without migrating anyone's Spaces (ADR-0008).
 
 ## Context
-- Read docs/ARCHITECTURE.md §4 (the Agent contract, with example `apply` and Send Bundle JSON), §5 (the Embed bridge) and §9 (schema rules); docs/SPEC.md §2, §5, §7, §9 and §11; docs/adr/0003, 0006 (including its amendment) and 0007; and docs/architecture/review-fable.md §2, the source of the tool list, the op and Bundle shapes, and ten ways models get confused.
+- Read docs/ARCHITECTURE.md §4 (the Agent contract, with example `apply` and Send Bundle JSON), §5 (the Embed bridge) and §9 (schema rules); docs/SPEC.md §2, §4, §5, §7, §9 and §11; docs/adr/0003, 0006 (including its amendment), 0007 and 0008; and docs/architecture/review-fable.md §2, the source of the tool list, the op and Bundle shapes, and ten ways models get confused.
 - The user decided:
   - The eleven tools are fixed, and plugins never add tools.
   - The Inbox is reached through `wait_for_user(timeout_s: 0)`.
@@ -78,6 +80,7 @@ When you are done, use it yourself the way a user would: run the real app and go
 Build the Rust Space kernel and bind it to both Swift and TypeScript. When this is done:
 - The kernel crate maps Reflex's Elements onto Automerge.
 - It covers the Element envelope (ID, owner, layer, the free `data` map), Ink, text, shapes and connectors.
+- Every owner is a person or an Agent with a stable ID, and undo covers one person's own actions across all their devices (ADR-0008).
 - It applies `apply_agent_batch`, projects `scene`, and freezes a Send with `freeze_send`.
 - Swift calls it through UniFFI in an app running in the iPad Simulator.
 - TypeScript calls it through WASM, in Node and in Cloudflare Workers.
@@ -87,7 +90,7 @@ A Swift copy and a TypeScript copy of the same Space must still agree after edit
 If the bindings don't work, or the copies don't converge, stop and report what failed. ADR-0005's fallback then applies. That go/no-go is the point of building the kernel first: a disagreement here would be a malformed document copied to every device.
 
 ## Context
-- Read docs/adr/0001, 0004 and 0005; docs/ARCHITECTURE.md §3 (the kernel API and guarantees), §7 (correctness rules), §9, §11 and §13; and docs/architecture/gpt-sol.md §1.2 for the data model.
+- Read docs/adr/0001, 0004, 0005 and 0008; docs/ARCHITECTURE.md §3 (the kernel API and guarantees), §7 (correctness rules), §9, §11 and §13; and docs/architecture/gpt-sol.md §1.2 for the data model.
 - The kernel is sans-IO. Events and bytes go in; new state, effects and bytes come out. It contains no sockets, files, clocks or threads, and callers inject time and random seeds.
 - The engine is Automerge. Loro is the fallback only if Automerge visibly fails while you build and use the kernel.
 - Pencil samples never cross into the kernel. A finished stroke crosses once.
@@ -121,7 +124,7 @@ Ink is how users talk to Reflex. Every Mark, Send and Anchor is built on stroke 
 - Read docs/SPEC.md §5 and §6 (Ink, eraser and undo); docs/ARCHITECTURE.md §3, §7.5, §8.2 and §13 (the Ink row); and docs/architecture/gpt-sol.md §1.2 and §10.2.
 - The user decided:
   - The eraser and undo work like Goodnotes. Pencil double-tap or squeeze switches to the eraser.
-  - Undo covers only the user's own actions.
+  - Undo covers only that person's own actions.
   - Agents never edit or erase user Ink.
 - From the architecture:
   - A precise erase records new fragments or a mask that point back to the parent stroke, not a rewrite of the whole drawing.

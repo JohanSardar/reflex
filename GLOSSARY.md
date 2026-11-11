@@ -8,6 +8,10 @@ A Pencil-first canvas on iPad that any AI agent can draw on, build on, and read 
 One named shared surface, with its own Elements, that the user and one or more Agents work on together; a user has many Spaces and switches between them.
 _Avoid_: canvas (as a countable noun), board, whiteboard, page, document
 
+**Person**:
+A human who works in Spaces, from one or more devices; a shared Space has several people as members.
+_Avoid_: user (in protocol and code), account, member
+
 **Agent**:
 One approved writer from an agent harness, with a stable name and color that persist across reconnects.
 _Avoid_: harness, bot, client, session
