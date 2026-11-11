@@ -48,6 +48,7 @@ export class Core {
   progressEvery: number;
   log: (event: string, data?: Record<string, unknown>) => void;
   #names = new Map<string, string>();
+  #extensions: library.Extension[];
   /** Mark IDs are per Send: agent -> send -> marks, for placement and read. */
   #marks = new Map<string, Map<string, MarkRef[]>>();
   #lastSend = new Map<string, string>();
@@ -62,7 +63,10 @@ export class Core {
     names?: Record<string, string>;
     progressEvery?: number;
     log?: Core["log"];
+    /** Extensions read_me also answers for, beyond the installed ones and the Library (the one `reflex dev` is authoring). */
+    extensions?: library.Extension[];
   }) {
+    this.#extensions = o.extensions ?? [];
     this.spaces = o.spaces;
     this.inbox = o.inbox;
     this.assets = o.assets;
@@ -455,10 +459,10 @@ export class Core {
   readMe(a: Record<string, any>, ctx: Ctx) {
     const name = (id: string) => this.#names.get(id) ?? id;
     const pending_sends = this.inbox.pending(ctx.who.agent);
-    if (a.topic === "index") return { json: { topic: "index", text: library.index(this.spaces, name), source: "builtin", pending_sends }, images: [] };
-    const found = library.topic(this.spaces, a.topic, name);
+    if (a.topic === "index") return { json: { topic: "index", text: library.index(this.spaces, name, this.#extensions), source: "builtin", pending_sends }, images: [] };
+    const found = library.topic(this.spaces, a.topic, name, this.#extensions);
     if (!found) {
-      const known = library.topics(this.spaces);
+      const known = library.topics(this.spaces, this.#extensions);
       throw fail("unknown_topic", `No Guide, Recipe or Embed Template '${a.topic}'.`, `Call read_me("index") for what there is${known.length > 1 ? `: ${known.slice(1, 20).join(", ")}` : ""}.`, ['read_me(topic: "index")']);
     }
     return { json: { topic: a.topic, text: found.text, source: found.source, pending_sends }, images: [] };

@@ -42,14 +42,17 @@ export async function deliverDry(ext: AdapterExt, bundle: unknown, ms = 5000): P
     requests.push({ url: String(url), method: init.method ?? "GET", headers, ...(typeof init.body === "string" ? { body: init.body.slice(0, 20_000) } : {}) });
     return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
   };
+  let timer: NodeJS.Timeout | undefined;
   try {
     const mod = await importFresh(ext.entry);
     if (typeof mod.deliver !== "function") throw new Error("the module's default export has no deliver function");
     const run = (mod.deliver as (b: unknown, c: unknown) => unknown)(structuredClone(bundle), { config: ext.config, fetch: fakeFetch, log: (m: unknown) => logs.push(String(m)) });
-    const result = await Promise.race([run, new Promise((_, rej) => setTimeout(() => rej(new Error(`deliver did not finish within ${ms} ms`)), ms))]);
+    const result = await Promise.race([run, new Promise((_, rej) => (timer = setTimeout(() => rej(new Error(`deliver did not finish within ${ms} ms`)), ms)))]);
     return { result, requests, logs, ms: Date.now() - started };
   } catch (e) {
     return { result: undefined, requests, logs, error: (e as Error).message, ms: Date.now() - started };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -13,6 +13,8 @@ import type { SpaceStore } from "./store.ts";
 import { checkEmbed, checkRecipe, type Problem } from "./extensions/checks.ts";
 import { load, type Extension } from "./extensions/files.ts";
 
+export type { Extension };
+
 export const LIBRARY = "library";
 
 const CODES = new Set(["invalid_input", "invalid_params", "too_large", "unknown_id", "duplicate_id", "unknown_type", "invalid_props", "invalid_placement"]);
@@ -58,10 +60,10 @@ export function entries(spaces: SpaceStore): LibraryEntry[] {
   return ((scene.library ?? []) as LibraryEntry[]).sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
 }
 
-/** Extensions installed as files: the repo's extensions/ folder (guides and recipes). */
-function installed(): Extension[] {
+/** Extensions installed as files: the repo's extensions/ folder, after any the caller adds (the one `reflex dev` is authoring). */
+function installed(extra: Extension[] = []): Extension[] {
   const root = new URL("../../extensions/", import.meta.url).pathname;
-  const out: Extension[] = [];
+  const out: Extension[] = [...extra];
   for (const sub of ["guides", "recipes", "embeds"]) {
     const dir = join(root, sub);
     if (!existsSync(dir)) continue;
@@ -79,9 +81,9 @@ function installed(): Extension[] {
 const by = (e: LibraryEntry, names: (id: string) => string) => (e.by?.agent ? `saved by ${names(e.by.agent)}` : e.by?.person ? `saved by ${names(e.by.person)}` : "saved");
 
 /** read_me("index"): every Element type, Recipe, Embed Template and Guide, including the Library's. */
-export function index(spaces: SpaceStore, names: (id: string) => string): string {
+export function index(spaces: SpaceStore, names: (id: string) => string, extra: Extension[] = []): string {
   const lib = entries(spaces);
-  const ext = installed();
+  const ext = installed(extra);
   const line = (name: string, summary: string, where?: string) => `- ${name}${where ? ` (${where})` : ""}: ${summary}`;
   const recipes = [...ext.filter((e) => e.kind === "recipe").map((e) => line(e.name, e.summary)), ...lib.filter((e) => e.kind === "recipe").map((e) => line(e.name, e.summary, `Library, ${by(e, names)}`))];
   const embeds = [...ext.filter((e) => e.kind === "embed").map((e) => line(e.name, e.summary)), ...lib.filter((e) => e.kind === "embed").map((e) => line(e.name, e.summary, `Library, ${by(e, names)}`))];
@@ -107,7 +109,7 @@ export function index(spaces: SpaceStore, names: (id: string) => string): string
 }
 
 /** read_me(name) for a Library entry or an installed extension, or undefined. */
-export function topic(spaces: SpaceStore, name: string, names: (id: string) => string): { text: string; source: "library" | "extension" } | undefined {
+export function topic(spaces: SpaceStore, name: string, names: (id: string) => string, extra: Extension[] = []): { text: string; source: "library" | "extension" } | undefined {
   const e = entries(spaces).find((x) => x.name === name);
   if (e) {
     const use =
@@ -118,7 +120,7 @@ export function topic(spaces: SpaceStore, name: string, names: (id: string) => s
     const text = [`# ${e.name}`, "", `${e.kind === "recipe" ? "Recipe" : "Embed Template"} in the person's Library, ${by(e, names)}. ${e.summary}`, "", use, "", ...(e.guide ? [e.guide.trim(), ""] : []), "## Parameters", "", "```json", JSON.stringify(e.params, null, 2), "```", "", body].join("\n");
     return { text: text.slice(0, 100_000), source: "library" };
   }
-  const x = installed().find((x) => x.name === name);
+  const x = installed(extra).find((x) => x.name === name);
   if (!x) return undefined;
   if (x.kind === "guide") return { text: x.text, source: "extension" };
   if (x.kind === "recipe") return { text: [`# ${x.name}`, "", x.summary, "", x.guide ?? "", "", "## Parameters", "", "```json", JSON.stringify(x.params, null, 2), "```", "", "## Template", "", "```json", JSON.stringify(x.template, null, 2), "```"].join("\n"), source: "extension" };
@@ -127,6 +129,6 @@ export function topic(spaces: SpaceStore, name: string, names: (id: string) => s
 }
 
 /** Every name read_me answers, for "closest" suggestions. */
-export function topics(spaces: SpaceStore): string[] {
-  return ["index", ...entries(spaces).map((e) => e.name), ...installed().map((e) => e.name)];
+export function topics(spaces: SpaceStore, extra: Extension[] = []): string[] {
+  return ["index", ...entries(spaces).map((e) => e.name), ...installed(extra).map((e) => e.name)];
 }

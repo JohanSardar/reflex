@@ -3,9 +3,9 @@
 // what a Send produces when you draw with the mouse, and live lints and
 // Anchors. "Save example" turns the last Send into a conformance example that
 // `reflex test` replays. It needs no iPad, no Xcode and no Link.
-import { existsSync, mkdirSync, readdirSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { spawn } from "node:child_process";
-import { join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import type { Space } from "@reflex/kernel/node";
 import { json, serveWeb, type WebSource } from "../web/server.ts";
 import { load } from "../extensions/files.ts";
@@ -94,15 +94,16 @@ export async function dev(o: { path?: string; port: number; open: boolean; log: 
 
   // Hot reload: rebuild on every save of the extension's files, and tell the page.
   const watchers: FSWatcher[] = [];
-  if (o.path && box.loaded) {
+  if (o.path) {
     let timer: NodeJS.Timeout | undefined;
-    const examplesDir = box.loaded.examples;
-    const w = watch(box.loaded.dir, { recursive: true }, (_e, f) => {
-      if (f && join(box.loaded?.dir ?? "", String(f)).startsWith(examplesDir)) return; // saving an example isn't an edit
+    // Watched even when the extension doesn't load yet, so saving the fix reloads it.
+    const dir = box.loaded?.dir ?? (existsSync(o.path) && statSync(o.path).isDirectory() ? resolve(o.path) : dirname(resolve(o.path)));
+    const w = watch(dir, { recursive: true }, (_e, f) => {
+      if (f && box.loaded && join(dir, String(f)).startsWith(box.loaded.examples)) return; // saving an example isn't an edit
       clearTimeout(timer);
       timer = setTimeout(async () => {
         await build();
-        o.log(`reloaded ${f ?? ""}: ${box.checks.filter((c) => c.level === "error").length} errors, ${box.checks.filter((c) => c.level === "warning").length} warnings`);
+        o.log(`reloaded ${f ?? ""}: ${loadError ? loadError.msg : `${box.checks.filter((c) => c.level === "error").length} errors, ${box.checks.filter((c) => c.level === "warning").length} warnings`}`);
         web.broadcast({ t: "reload", reason: String(f ?? "change") });
       }, 120);
     });

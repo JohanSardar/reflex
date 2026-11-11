@@ -38,7 +38,7 @@ export class Sandbox {
 
   constructor(loaded?: Loaded) {
     this.loaded = loaded;
-    this.core = new Core({ spaces: this.spaces, inbox: this.inbox, renderer: new SvgRenderer(), person: PERSON, progressEvery: 1 });
+    this.core = new Core({ spaces: this.spaces, inbox: this.inbox, renderer: new SvgRenderer(), person: PERSON, progressEvery: 1, extensions: loaded && loaded.ext.kind !== "adapter" ? [loaded.ext] : [] });
   }
 
   async #call(tool: string, args: Record<string, unknown>) {
@@ -73,7 +73,7 @@ export class Sandbox {
     }
     // What an Agent would read to learn the extension.
     if (ext.kind !== "adapter") await this.#call("read_me", { topic: "index" });
-    if (ext.kind === "embed" || ext.kind === "guide") await this.#call("read_me", { topic: ext.name }).catch(() => undefined);
+    if (ext.kind !== "adapter") await this.#call("read_me", { topic: ext.name }).catch(() => undefined);
     await this.#call("read", { space: SPACE });
     return this;
   }
