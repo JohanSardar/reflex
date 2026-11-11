@@ -100,7 +100,7 @@ function relayUrl(): string | undefined {
     writeFileSync(file, JSON.stringify({ url: flags.relay }) + "\n");
     return flags.relay;
   }
-  return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")).url ?? undefined) : (process.env.REFLEX_RELAY ?? DEFAULT_RELAY);
+  return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")).url ?? undefined) : (process.env.REFLEX_RELAY || DEFAULT_RELAY);
 }
 
 async function start(): Promise<void> {

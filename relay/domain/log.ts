@@ -138,7 +138,7 @@ export class SpaceLog {
     const page = this.#d.sql
       .all<{ seq: number; data: ArrayBuffer | Uint8Array }>(
         // Picks the page by lengths alone, then reads only its entries.
-        "SELECT seq, data FROM entries WHERE seq IN (SELECT seq FROM (SELECT seq, sum(length(data)) OVER (ORDER BY seq) - length(data) AS before FROM entries WHERE seq > ?) WHERE before < ? ORDER BY seq LIMIT ?) ORDER BY seq",
+        "SELECT seq, data FROM entries WHERE seq IN (SELECT seq FROM (SELECT seq, sum(length(data)) OVER (ORDER BY seq) AS upto, length(data) AS len FROM entries WHERE seq > ?) WHERE upto = len OR upto <= ? ORDER BY seq LIMIT ?) ORDER BY seq",
         after,
         READ_BYTES,
         limit,
