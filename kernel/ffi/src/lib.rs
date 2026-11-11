@@ -53,12 +53,16 @@ impl Space {
 impl Space {
     #[uniffi::constructor]
     pub fn create(space_id: String, kind: String, actor_hex: String) -> R<Arc<Self>> {
-        Ok(Arc::new(Space(Mutex::new(reflex_kernel::Space::create(&space_id, &kind, &actor_hex)?))))
+        Ok(Arc::new(Space(Mutex::new(reflex_kernel::Space::create(
+            &space_id, &kind, &actor_hex,
+        )?))))
     }
 
     #[uniffi::constructor]
     pub fn load(bytes: Vec<u8>, actor_hex: String) -> R<Arc<Self>> {
-        Ok(Arc::new(Space(Mutex::new(reflex_kernel::Space::load(&bytes, &actor_hex)?))))
+        Ok(Arc::new(Space(Mutex::new(reflex_kernel::Space::load(
+            &bytes, &actor_hex,
+        )?))))
     }
 
     pub fn space_id(&self) -> String {
@@ -69,12 +73,28 @@ impl Space {
         self.lock().kind()
     }
 
-    pub fn apply_agent_batch(&self, agent: String, request_id: String, batch_json: String, now_ms: i64) -> R<String> {
-        Ok(self.lock().apply_agent_batch(&agent, &request_id, &batch_json, now_ms)?)
+    pub fn apply_agent_batch(
+        &self,
+        agent: String,
+        request_id: String,
+        batch_json: String,
+        now_ms: i64,
+    ) -> R<String> {
+        Ok(self
+            .lock()
+            .apply_agent_batch(&agent, &request_id, &batch_json, now_ms)?)
     }
 
-    pub fn apply_user_intent(&self, person: String, device: String, intent_json: String, now_ms: i64) -> R<String> {
-        Ok(self.lock().apply_user_intent(&person, &device, &intent_json, now_ms)?)
+    pub fn apply_user_intent(
+        &self,
+        person: String,
+        device: String,
+        intent_json: String,
+        now_ms: i64,
+    ) -> R<String> {
+        Ok(self
+            .lock()
+            .apply_user_intent(&person, &device, &intent_json, now_ms)?)
     }
 
     pub fn undo(&self, person: String, device: String, now_ms: i64) -> R<String> {
@@ -93,8 +113,16 @@ impl Space {
         self.lock().digest()
     }
 
-    pub fn freeze_send(&self, person: String, device: String, raw_json: String, now_ms: i64) -> R<String> {
-        Ok(self.lock().freeze_send(&person, &device, &raw_json, now_ms)?)
+    pub fn freeze_send(
+        &self,
+        person: String,
+        device: String,
+        raw_json: String,
+        now_ms: i64,
+    ) -> R<String> {
+        Ok(self
+            .lock()
+            .freeze_send(&person, &device, &raw_json, now_ms)?)
     }
 
     pub fn save(&self) -> Vec<u8> {

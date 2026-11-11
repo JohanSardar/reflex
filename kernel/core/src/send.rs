@@ -43,7 +43,12 @@ fn summarize(e: &Edit) -> Option<Value> {
             let (id, typ, text) = label(snapshot)?;
             json!({ "kind": "removed", "id": id, "type": typ, "was": text })
         }
-        Edit::Field { key, field, old, new } if field == "bounds" => {
+        Edit::Field {
+            key,
+            field,
+            old,
+            new,
+        } if field == "bounds" => {
             let o: Vec<i64> = serde_json::from_str(old.as_deref()?).ok()?;
             let n: Vec<i64> = serde_json::from_str(new.as_deref()?).ok()?;
             if o[2..] == n[2..] {
@@ -53,8 +58,12 @@ fn summarize(e: &Edit) -> Option<Value> {
             }
         }
         Edit::Field { key, field, .. } => json!({ "kind": "edited", "id": key, "field": field }),
-        Edit::Text { key, new, .. } => json!({ "kind": "edited", "id": key, "field": "text", "text": new }),
-        Edit::Data { key, name, .. } => json!({ "kind": "edited", "id": key, "field": format!("data.{name}") }),
+        Edit::Text { key, new, .. } => {
+            json!({ "kind": "edited", "id": key, "field": "text", "text": new })
+        }
+        Edit::Data { key, name, .. } => {
+            json!({ "kind": "edited", "id": key, "field": format!("data.{name}") })
+        }
         Edit::Library { .. } => return None,
     })
 }
@@ -99,7 +108,12 @@ pub fn freeze(
                         strokes.push(s.to_string());
                     }
                 }
-                _ => errs.push(OpError::new(0, "unknown_id", format!("'{s}' is not one of your strokes."), "Pass the IDs of strokes you drew.")),
+                _ => errs.push(OpError::new(
+                    0,
+                    "unknown_id",
+                    format!("'{s}' is not one of your strokes."),
+                    "Pass the IDs of strokes you drew.",
+                )),
             }
         }
         if !errs.is_empty() {
@@ -112,7 +126,10 @@ pub fn freeze(
         .into_iter()
         .filter(|e| e.state == "done" && !claimed(tx, &format!("entry:{}", e.id)))
         .collect();
-    let changes: Vec<Value> = entries.iter().flat_map(|e| e.edits.iter().filter_map(summarize)).collect();
+    let changes: Vec<Value> = entries
+        .iter()
+        .flat_map(|e| e.edits.iter().filter_map(summarize))
+        .collect();
 
     let mut record = json!({
         "send": send_id,
@@ -126,7 +143,15 @@ pub fn freeze(
         "at": now_ms,
         "state": "ready",
     });
-    for k in ["said", "viewport", "selection", "words", "hints", "crops", "embed_anchors"] {
+    for k in [
+        "said",
+        "viewport",
+        "selection",
+        "words",
+        "hints",
+        "crops",
+        "embed_anchors",
+    ] {
         if let Some(v) = raw.get(k) {
             record[k] = v.clone();
         }

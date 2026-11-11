@@ -1,0 +1,14 @@
+{
+  "name": "@reflex/kernel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Reflex Space kernel for TypeScript, as WASM. One entry for Node, one for Cloudflare Workers.",
+  "type": "module",
+  "exports": {
+    "./node": "./js/node.ts",
+    "./workers": "./js/workers.ts"
+  },
+  "scripts": {
+    "build": "sh ./build.sh"
+  }
+}
