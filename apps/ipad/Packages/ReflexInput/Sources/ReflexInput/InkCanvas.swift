@@ -16,6 +16,25 @@ public enum InkTool: String, CaseIterable, Sendable {
     public var isEraser: Bool { self == .strokeEraser || self == .preciseEraser }
 }
 
+/// One finished change to the person's Ink, as the kernel takes it
+/// (`apply_user_intent`). Coordinates are Space points.
+public enum InkIntent: Sendable {
+    case add(PortableStroke)
+    /// Whole strokes removed by the stroke eraser, or deleted with the lasso.
+    case erase([String])
+    /// A precise erase cut `target`; `fragments` are what is left of it, each with its own ID.
+    case cut(target: String, fragments: [PortableStroke])
+    /// A lasso move.
+    case move([String], dx: Int, dy: Int)
+}
+
+/// What one drawing change did: new actions, or an undo or redo of one.
+public enum InkEdit: Sendable {
+    case action([InkIntent])
+    case undo
+    case redo
+}
+
 /// A stroke on screen with its Reflex ID, for the stroke-ID overlay.
 public struct InkStrokeInfo: Identifiable, Sendable {
     public var id: String
@@ -42,6 +61,9 @@ public final class InkCanvasController: NSObject {
     /// Strokes added since the last Send, by ID.
     public private(set) var unsent: [String] = []
 
+    /// Called for every finished change to the Ink, so it can be committed to the Space.
+    @ObservationIgnored public var onEdit: ((InkEdit) -> Void)?
+
     /// Size of the scrollable Space, in points.
     public static let spaceSize = CGSize(width: 6000, height: 6000)
 
@@ -52,6 +74,8 @@ public final class InkCanvasController: NSObject {
     @ObservationIgnored private var toolBeforeEraser: InkTool = .pen
     @ObservationIgnored private var undoObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var undoGestures: [UITapGestureRecognizer] = []
+    /// Set while an undo or redo replays, so the drawing change it causes is reported as that.
+    @ObservationIgnored private var replaying: InkEdit?
 
     public init(space: String) {
         store = InkStore(space: space)
@@ -119,12 +143,18 @@ public final class InkCanvasController: NSObject {
     private var undoManager: UndoManager? { canvasView.undoManager }
 
     public func undo() {
+        guard undoManager?.canUndo == true else { return }
+        replaying = .undo
         undoManager?.undo()
+        replaying = nil
         refreshUndo()
     }
 
     public func redo() {
+        guard undoManager?.canRedo == true else { return }
+        replaying = .redo
         undoManager?.redo()
+        replaying = nil
         refreshUndo()
     }
 
@@ -161,10 +191,31 @@ public final class InkCanvasController: NSObject {
         canRedo = undoManager?.canRedo ?? false
     }
 
+    #if DEBUG
+    /// Draws one pen stroke through `screen` points, as if the person drew it:
+    /// the change goes through the same delegate path as a real stroke. For
+    /// driving the Simulator, whose automation has no freeform path gesture.
+    public func debugDraw(screen: [CGPoint]) {
+        let zoom = canvasView.zoomScale, offset = canvasView.contentOffset
+        let points = screen.enumerated().map { i, p in
+            PKStrokePoint(
+                location: CGPoint(x: (p.x + offset.x) / zoom, y: (p.y + offset.y) / zoom),
+                timeOffset: Double(i) * 0.012, size: CGSize(width: 3, height: 3),
+                opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2
+            )
+        }
+        let stroke = PKStroke(ink: PKInk(.pen, color: penColor), path: PKStrokePath(controlPoints: points, creationDate: Date()))
+        var drawing = canvasView.drawing
+        drawing.strokes.append(stroke)
+        canvasView.drawing = drawing
+    }
+    #endif
+
     // MARK: Send
 
     /// Hands over the strokes added since the last Send and starts a new batch.
-    /// Freezing a real Send in the kernel comes with the round-trip ticket.
+    /// The kernel claims the same strokes when the Send is frozen; these say
+    /// which part of the screen to crop.
     public func takeUnsent() -> [String] {
         let live = Set(ledger.records.map(\.id))
         let taken = unsent.filter(live.contains)
@@ -176,9 +227,11 @@ public final class InkCanvasController: NSObject {
 
     private func drawingChanged() {
         let drawing = canvasView.drawing
+        let before = portableCache
         let change = ledger.reconcile(drawing.strokes)
         refreshUndo()
         guard !change.isEmpty else { return }
+        report(change, drawing: drawing, before: before)
         inkLog.debug("""
             Ink change: +\(change.added.map(\.id), privacy: .public) \
             -\(change.removed, privacy: .public) \
@@ -208,6 +261,43 @@ public final class InkCanvasController: NSObject {
         }
         portableCache = cache
         store.save(drawing, portable: portable, retired: Array(ledger.retired.values))
+    }
+
+    /// Turns one drawing change into the intents the kernel takes.
+    private func report(_ change: InkChange, drawing: PKDrawing, before: [String: PortableStroke]) {
+        guard let onEdit else { return }
+        if let replaying {
+            onEdit(replaying)
+            return
+        }
+        var stroke: [String: (StrokeRecord, PKStroke)] = [:]
+        for (record, s) in zip(ledger.records, drawing.strokes) { stroke[record.id] = (record, s) }
+        let removed = Set(change.removed)
+        var intents: [InkIntent] = []
+        var fragments: [String: [PortableStroke]] = [:]
+        for record in change.added {
+            guard let (r, s) = stroke[record.id] else { continue }
+            if let parent = r.parent, removed.contains(parent) {
+                fragments[parent, default: []].append(PortableStroke(record: r, stroke: s))
+            } else {
+                intents.append(.add(PortableStroke(record: r, stroke: s)))
+            }
+        }
+        for target in change.removed where fragments[target] != nil {
+            intents.append(.cut(target: target, fragments: fragments[target]!))
+        }
+        let erased = change.removed.filter { fragments[$0] == nil }
+        if !erased.isEmpty { intents.append(.erase(erased)) }
+        // A lasso move shifts every selected stroke by the same amount; group them by it.
+        var moves: [[Int]: [String]] = [:]
+        for id in change.moved {
+            guard let old = before[id]?.bounds, let (_, s) = stroke[id] else { continue }
+            let b = s.renderBounds
+            let delta = [Int((b.minX - old[0]).rounded()), Int((b.minY - old[1]).rounded())]
+            if delta != [0, 0] { moves[delta, default: []].append(id) }
+        }
+        for (delta, ids) in moves { intents.append(.move(ids, dx: delta[0], dy: delta[1])) }
+        if !intents.isEmpty { onEdit(.action(intents)) }
     }
 
     private func publishStrokes() {
