@@ -56,6 +56,8 @@ public struct InkStrokeInfo: Identifiable, Sendable {
 final class ReflexCanvasView: PKCanvasView {
     /// Whether the touch at this point (in the canvas's content coordinates) is the Element's, not the canvas's.
     var claims: ((CGPoint) -> Bool)?
+    /// Whether a pen stroke starting at this point (content coordinates) is refused, as in a Region with `ink: false`.
+    var refuses: ((CGPoint) -> Bool)?
 }
 
 /// Watches every touch on the canvas without recognizing anything. When a
@@ -67,6 +69,11 @@ final class TouchWatcher: UIGestureRecognizer {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let canvas, let t = touches.first, !held else { return }
+        if (event.allTouches?.count ?? 1) == 1, canvas.refuses?(t.location(in: canvas)) == true {
+            held = true
+            canvas.drawingGestureRecognizer.isEnabled = false
+            return
+        }
         if t.type == .direct, (event.allTouches?.count ?? 1) == 1, canvas.claims?(t.location(in: canvas)) == true {
             held = true
             canvas.drawingGestureRecognizer.isEnabled = false
@@ -120,9 +127,16 @@ public final class InkCanvasController: NSObject {
     /// A finger drag that started on an Element that claims touch: where it
     /// started, how far it went (Space points), and whether it ended.
     @ObservationIgnored public var onDrag: ((CGPoint, CGSize, Bool) -> Void)?
+    /// The pen went down (true) or lifted (false): a live signal that the person is writing.
+    @ObservationIgnored public var onPen: ((Bool) -> Void)?
+    /// Whether a pen stroke may not start at this Space point (a Region with `ink: false`); `onRefused` is told when one is stopped.
+    @ObservationIgnored public var refusesInk: ((CGPoint) -> Bool)?
+    @ObservationIgnored public var onRefused: (() -> Void)?
 
     /// Size of the scrollable Space, in points.
     public static let spaceSize = CGSize(width: 6000, height: 6000)
+    /// Scroll room before the Space's origin, in points.
+    static let margin = CGSize(width: 40, height: 140)
 
     @ObservationIgnored private let store: InkStore
     @ObservationIgnored private var ledger: StrokeLedger
@@ -133,6 +147,8 @@ public final class InkCanvasController: NSObject {
     @ObservationIgnored private var undoGestures: [UITapGestureRecognizer] = []
     /// Set while an undo or redo replays, so the drawing change it causes is reported as that.
     @ObservationIgnored private var replaying: InkEdit?
+    /// Set while strokes the kernel refused are taken back off the canvas, so that isn't reported as an erase.
+    @ObservationIgnored private var withdrawing = false
 
     public init(space: String) {
         store = InkStore(space: space)
@@ -156,6 +172,10 @@ public final class InkCanvasController: NSObject {
         canvasView.minimumZoomScale = 0.25
         canvasView.maximumZoomScale = 4
         canvasView.contentInsetAdjustmentBehavior = .never
+        // Room above and left of the Space's origin, so what Agents place at (0, 0) isn't under the toolbar.
+        canvasView.contentInset = UIEdgeInsets(top: Self.margin.height, left: Self.margin.width, bottom: 0, right: 0)
+        canvasView.contentOffset = CGPoint(x: -Self.margin.width, y: -Self.margin.height)
+        contentOffset = canvasView.contentOffset
         canvasView.showsVerticalScrollIndicator = false
         canvasView.showsHorizontalScrollIndicator = false
         canvasView.accessibilityIdentifier = "ink-canvas"
@@ -252,6 +272,14 @@ public final class InkCanvasController: NSObject {
                 return [ElementTouch.tap, .longPress, .drag].contains { self.claimsTouch?($0, p) == true }
             }
         }
+        canvas.refuses = { [weak self] screen in
+            guard let self else { return false }
+            return MainActor.assumeIsolated {
+                guard !self.tool.isEraser, self.tool != .lasso, self.refusesInk?(self.spacePoint(screen)) == true else { return false }
+                self.onRefused?()
+                return true
+            }
+        }
         let watcher = TouchWatcher(target: nil, action: nil)
         watcher.canvas = canvas
         watcher.cancelsTouchesInView = false
@@ -327,7 +355,38 @@ public final class InkCanvasController: NSObject {
         canRedo = undoManager?.canRedo ?? false
     }
 
+    // MARK: Refused Ink
+
+    /// Takes strokes the Space refused (Ink in a Region with `ink: false`) back off
+    /// the canvas. They never reached the kernel, so nothing is reported for them.
+    public func withdraw(_ ids: [String]) {
+        let drop = Set(ids)
+        let keep = zip(ledger.records, canvasView.drawing.strokes).filter { !drop.contains($0.0.id) }.map(\.1)
+        guard keep.count < canvasView.drawing.strokes.count else { return }
+        withdrawing = true
+        canvasView.drawing = PKDrawing(strokes: keep)
+        withdrawing = false
+    }
+
     #if DEBUG
+    /// Draws one pen stroke through Space points, as the person would, with the pen
+    /// going down and up around it.
+    public func debugDraw(space points: [CGPoint]) {
+        guard points.count >= 2 else { return }
+        onPen?(true)
+        let strokePoints = points.enumerated().map { i, p in
+            PKStrokePoint(
+                location: p, timeOffset: Double(i) * 0.008, size: CGSize(width: 2.4, height: 2.4),
+                opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2
+            )
+        }
+        let stroke = PKStroke(ink: PKInk(.pen, color: penColor), path: PKStrokePath(controlPoints: strokePoints, creationDate: Date()))
+        var drawing = canvasView.drawing
+        drawing.strokes.append(stroke)
+        canvasView.drawing = drawing
+        onPen?(false)
+    }
+
     /// Draws one pen stroke through `screen` points, as if the person drew it:
     /// the change goes through the same delegate path as a real stroke. For
     /// driving the Simulator, whose automation has no freeform path gesture.
@@ -367,6 +426,14 @@ public final class InkCanvasController: NSObject {
         return taken
     }
 
+    /// Hands over only the unsent strokes among `ids` (a Region's Send); the rest stay unsent.
+    public func takeUnsent(among ids: Set<String>) -> [String] {
+        let live = Set(ledger.records.map(\.id))
+        let taken = unsent.filter { live.contains($0) && ids.contains($0) }
+        unsent.removeAll { ids.contains($0) }
+        return taken
+    }
+
     // MARK: Identity and saving
 
     private func drawingChanged() {
@@ -375,7 +442,7 @@ public final class InkCanvasController: NSObject {
         let change = ledger.reconcile(drawing.strokes)
         refreshUndo()
         guard !change.isEmpty else { return }
-        report(change, drawing: drawing, before: before)
+        if !withdrawing { report(change, drawing: drawing, before: before) }
         inkLog.debug("""
             Ink change: +\(change.added.map(\.id), privacy: .public) \
             -\(change.removed, privacy: .public) \
@@ -454,6 +521,14 @@ public final class InkCanvasController: NSObject {
 extension InkCanvasController: PKCanvasViewDelegate {
     public func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         drawingChanged()
+    }
+
+    public func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+        onPen?(true)
+    }
+
+    public func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+        onPen?(false)
     }
 
     public func scrollViewDidScroll(_ scrollView: UIScrollView) {

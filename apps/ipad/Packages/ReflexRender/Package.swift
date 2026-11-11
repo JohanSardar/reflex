@@ -7,7 +7,11 @@ let package = Package(
     products: [
         .library(name: "ReflexRender", targets: ["ReflexRender"]),
     ],
+    dependencies: [
+        // Native LaTeX typesetting (CoreText and OpenType math fonts), MIT.
+        .package(url: "https://github.com/mgriebling/SwiftMath", exact: "1.7.3"),
+    ],
     targets: [
-        .target(name: "ReflexRender"),
+        .target(name: "ReflexRender", dependencies: [.product(name: "SwiftMath", package: "SwiftMath")]),
     ]
 )

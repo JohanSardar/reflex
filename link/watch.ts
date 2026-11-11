@@ -12,6 +12,11 @@
 // - A newer snapshot supersedes an older one the Agent hasn't taken yet, so a
 //   slow Agent gets the latest work, not a backlog.
 //
+// `user_still_writing` comes from the iPad's live pen signal when a device is
+// showing the Space (presence.ts), else from timing (the person changed the
+// Region's Ink within QUIET). The handwriting text comes from the iPad's
+// recognizer, which reads a watched Region's lines as they are written.
+//
 // A snapshot claims nothing: the Region's own Send button still carries the
 // work when the person is done.
 import type { Core } from "../agent/src/capabilities/index.ts";
@@ -54,12 +59,23 @@ export class Watcher {
   #store: SpaceStore;
   #inbox: Inbox;
   #log: (event: string, data?: Record<string, unknown>) => void;
+  #writing: (space: string) => boolean | undefined;
+  #hints: (space: string, region: string) => { strokes: string[]; text: string; confidence: number }[];
   /** `<space>|<region>` → state. */
   #regions = new Map<string, State>();
   #stopped = false;
 
-  constructor(o: { core: Core; store: SpaceStore; inbox: Inbox; log: (event: string, data?: Record<string, unknown>) => void }) {
+  constructor(o: {
+    core: Core;
+    store: SpaceStore;
+    inbox: Inbox;
+    log: (event: string, data?: Record<string, unknown>) => void;
+    writing?: (space: string) => boolean | undefined;
+    hints?: (space: string, region: string) => { strokes: string[]; text: string; confidence: number }[];
+  }) {
     this.#core = o.core;
+    this.#writing = o.writing ?? (() => undefined);
+    this.#hints = o.hints ?? (() => []);
     this.#store = o.store;
     this.#inbox = o.inbox;
     this.#log = o.log;
@@ -134,10 +150,11 @@ export class Watcher {
       return;
     }
     st.overBudget = false;
-    const stillWriting = now - st.lastChange < QUIET_MS;
+    const live = this.#writing(space);
+    const stillWriting = live ?? now - st.lastChange < QUIET_MS;
     let send: string;
     try {
-      send = this.#core.watchSnapshot(space, region, { stillWriting }).send;
+      send = this.#core.watchSnapshot(space, region, { stillWriting, hints: this.#hints(space, region) }).send;
     } catch (e) {
       this.#log("watch_failed", { space, region, error: String((e as Error).message ?? e) });
       return;
@@ -147,7 +164,7 @@ export class Watcher {
     st.lastSnapshot = now;
     st.recent.push(now);
     this.#supersede(space, send);
-    this.#log("watch_snapshot", { space, region, send, user_still_writing: stillWriting, strokes: ink ? ink.split(",").length : 0 });
+    this.#log("watch_snapshot", { space, region, send, user_still_writing: stillWriting, from: live === undefined ? "timing" : "pen", strokes: ink ? ink.split(",").length : 0 });
   }
 
   /** Older snapshots of this Region that an Agent hasn't taken yet are replaced by the new one. */

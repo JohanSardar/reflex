@@ -31,7 +31,9 @@ public struct AgentInfo: Codable, Identifiable, Sendable, Equatable {
 /// (`link/sync/coordinator.ts`): `spaces`, `sync` (one Automerge sync
 /// conversation per Space), `assets_have` / `asset_want` / `asset`,
 /// `ping` / `pong`, `agent_request` / `agent_decision`, and `agents` (each
-/// Agent's name and color, for the chips).
+/// Agent's name and color, for the chips). The iPad also sends `presence`
+/// (which Space is on screen and whether the pen is down) and `hints` (its
+/// handwriting recognizer's lines for the person's Ink in a watched Region).
 @MainActor @Observable
 public final class LinkSync {
     public enum State: Equatable {
@@ -297,6 +299,32 @@ public final class LinkSync {
         ((try? FileManager.default.contentsOfDirectory(atPath: Self.assetsDir.path(percentEncoded: false))) ?? []).filter { $0.count == 64 }
     }
 
+    // MARK: Presence and handwriting
+
+    /// What this iPad shows and does now, sent again on every new session.
+    @ObservationIgnored private var presence: (space: String?, pen: Bool) = (nil, false)
+    /// The latest recognized lines per watched Region, by Space and Region.
+    @ObservationIgnored private var watchHints: [String: [String: [[String: Any]]]] = [:]
+
+    /// The Space on screen (nil when none is, or the app is in the background) and
+    /// whether the pen is down, for `request_attention` and watch mode's `user_still_writing`.
+    public func reportPresence(space: String?, pen: Bool) {
+        guard presence.space != space || presence.pen != pen else { return }
+        presence = (space, pen)
+        if let session { sendPresence(session) }
+    }
+
+    private func sendPresence(_ s: Session) {
+        s.send(["t": "presence", "space": presence.space ?? NSNull(), "pen": presence.pen])
+    }
+
+    /// The recognizer's lines for the person's Ink in a watched Region, so the
+    /// Link's watch snapshots carry real recognized text. Replaces what was sent before for that Region.
+    public func reportHints(space: String, region: String, hints: [[String: Any]]) {
+        watchHints[space, default: [:]][region] = hints
+        session?.send(["t": "hints", "space": space, "region": region, "hints": hints])
+    }
+
     // MARK: Agent approval
 
     public func decide(_ agent: String, allow: Bool) {
@@ -404,6 +432,10 @@ public final class LinkSync {
         s.send(["t": "spaces", "spaces": replicas.map { ["id": $0.key, "kind": $0.value.kind()] }])
         s.send(["t": "assets_have", "hashes": assetHashes()])
         for id in replicas.keys { pump(id, s) }
+        sendPresence(s)
+        for (space, regions) in watchHints {
+            for (region, hints) in regions { s.send(["t": "hints", "space": space, "region": region, "hints": hints]) }
+        }
         Task { await loop(s) }
     }
 

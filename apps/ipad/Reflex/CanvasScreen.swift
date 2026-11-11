@@ -18,6 +18,7 @@ struct CanvasScreen: View {
     @State private var voice = VoiceCapture()
     /// Spaces changed since the person last looked at them (SPEC §4, Attention).
     @State private var lastSeen: [String: Int] = [:]
+    @Environment(\.scenePhase) private var scenePhase
     @Binding var incomingCode: String?
 
     var body: some View {
@@ -32,6 +33,7 @@ struct CanvasScreen: View {
                 .ignoresSafeArea()
                 InkCanvas(controller: open.ink).ignoresSafeArea().id(open.id)
                     .onDrop(of: [.item], delegate: CanvasDrop(session: open))
+                RegionButtons(session: open).ignoresSafeArea()
                 if showStrokeIDs {
                     StrokeIDOverlay(strokes: open.ink.strokes, offset: open.ink.contentOffset, zoom: open.ink.zoomScale)
                         .ignoresSafeArea()
@@ -111,6 +113,9 @@ struct CanvasScreen: View {
             if let open { lastSeen[open.id] = link.revision[open.id] ?? 0 }
         }
         .onChange(of: incomingCode) { _, code in if code != nil { pairing = true } }
+        // Which Space is on screen, so an Agent's request_attention knows the person is already looking at it.
+        .onChange(of: open?.id, initial: true) { _, _ in reportPresence() }
+        .onChange(of: scenePhase) { _, _ in reportPresence() }
         #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .debugInk)) { note in
             guard let url = note.object as? URL, let open,
@@ -127,6 +132,12 @@ struct CanvasScreen: View {
                 }
                 return
             }
+            if url.path == "/write", let region = q.first(where: { $0.name == "region" })?.value {
+                let text = q.first { $0.name == "text" }?.value ?? ""
+                let pause = Double(q.first { $0.name == "pause" }?.value ?? "") ?? 0.05
+                Task { await open.debugWrite(region: region, text: text, pause: pause) }
+                return
+            }
             let v = { (k: String) in CGFloat(Double(q.first { $0.name == k }?.value ?? "") ?? 0) }
             let points = (0 ... 72).map { i in
                 let a = Double(i) / 72 * 2 * .pi
@@ -136,6 +147,10 @@ struct CanvasScreen: View {
         }
         #endif
         .preferredColorScheme(.light)
+    }
+
+    private func reportPresence() {
+        link.reportPresence(space: scenePhase == .active ? open?.id : nil, pen: false)
     }
 
     private var emptyState: some View {

@@ -59,7 +59,7 @@ export class Core {
   /** The last Send each Agent got in each Space: `<agent>|<space>` -> send. */
   #lastSend = new Map<string, string>();
   #colors = new Map<string, string>();
-  presence: () => { devices: number };
+  presence: () => { devices: number; viewing?: string[] };
 
   constructor(o: {
     spaces: SpaceStore;
@@ -73,8 +73,8 @@ export class Core {
     log?: Core["log"];
     /** Extensions read_me also answers for, beyond the installed ones and the Library (the one `reflex dev` is authoring). */
     extensions?: library.Extension[];
-    /** How many of the person's devices are connected now, for request_attention. */
-    presence?: () => { devices: number };
+    /** How many of the person's devices are connected now, and the Spaces on their screens, for request_attention. */
+    presence?: () => { devices: number; viewing?: string[] };
   }) {
     this.#extensions = o.extensions ?? [];
     this.spaces = o.spaces;
@@ -675,7 +675,8 @@ export class Core {
     }
     const r = JSON.parse(this.spaces.write(entry, "agent", (s) => s.requestAttention(ctx.who.agent, JSON.stringify({ message: a.message, ids: a.ids }), Date.now())));
     if (!r.ok) throw new ReflexError(r.reason, r.errors);
-    const status = this.presence().devices > 0 ? "shown" : "queued";
+    const p = this.presence();
+    const status = p.viewing?.includes(entry.name) ? "already_viewing" : p.devices > 0 ? "shown" : "queued";
     this.log("attention", { agent: ctx.who.name, space: entry.name, status });
     return { json: { status, pending_sends: this.inbox.pending(ctx.who.agent) }, images: [] };
   }
@@ -902,13 +903,13 @@ export class Core {
   /**
    * A watch snapshot of one Region (SPEC §9): all of the person's Ink in it now, claiming
    * nothing, so their turn goes on and the Region's own Send still carries the work. The Link's
-   * watcher decides when (debounce and budgets, link/watch.ts). Handwriting hints are the dev
-   * person's; an iPad's come with its Sends.
+   * watcher decides when (debounce and budgets, link/watch.ts). Handwriting hints are the iPad
+   * recognizer's lines for the Region (`o.hints`, newest first) and the dev person's.
    */
-  watchSnapshot(space: string, region: string, o: { stillWriting: boolean }) {
+  watchSnapshot(space: string, region: string, o: { stillWriting: boolean; hints?: { strokes: string[]; text: string; confidence: number }[] }) {
     const entry = this.#entry(space);
     const send = `s_${randomBytes(5).toString("hex")}`;
-    const hints = this.#hints.get(entry.name) ?? [];
+    const hints = [...(o.hints ?? []), ...(this.#hints.get(entry.name) ?? [])];
     const raw = { send, trigger: "watch", region, user_still_writing: o.stillWriting, viewport: entry.viewport, ...(hints.length ? { hints } : {}) };
     const frozen = JSON.parse(this.spaces.write(entry, "send", (s) => s.freezeSend(this.person.person, "link-watch", JSON.stringify(raw), Date.now())));
     if (frozen.ok === false) throw new ReflexError(frozen.reason, frozen.errors);

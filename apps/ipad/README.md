@@ -25,7 +25,7 @@ xcodebuild -project Reflex.xcodeproj -scheme Reflex \
 - `Reflex/`: the app. `CanvasScreen` stacks the Elements, the Ink canvas, the toolbar, the Send button, the Spaces menu and the connection status. `SpaceSession` turns each finished Ink change into a kernel intent (`add_stroke`, `erase`, `erase_precise`, `move`) and canvas undo into the kernel's per-person undo. `PairSheet` pairs.
 - `Packages/ReflexLink`: the Link connection. The same handshake and encrypted framing as the Link (Ed25519, X25519, HKDF, ChaCha20-Poly1305 over length-prefixed TCP), Bonjour discovery, reconnects, the kernel's sync per Space, assets, and Agent approval. When the Link uses a Relay it tells the iPad where (`relay.json`), and if no LAN address answers, the iPad reaches the Link through the Relay (`RelayConnection`) with the same handshake inside. Each Space is a kernel replica (UniFFI, `kernel/swift`) saved to `space.automerge`.
 - `Packages/ReflexInput`: Ink. The PencilKit canvas, tools, eraser, undo gestures, Pencil double-tap and squeeze, stroke identity and local saving.
-- `Packages/ReflexRender`: draws Protocol v0 Elements (text, Markdown, shapes, sticky notes, math, frames, regions, connectors, images) from the kernel's scene JSON. Unknown types draw as a labelled placeholder.
+- `Packages/ReflexRender`: draws Protocol v0 Elements (text, Markdown, shapes, sticky notes, math, frames, regions, connectors, images) from the kernel's scene JSON. Unknown types draw as a labelled placeholder. LaTeX (`math`) is typeset natively with [SwiftMath](https://github.com/mgriebling/SwiftMath) (MIT), drawn at the screen's scale times the zoom so it stays crisp when zoomed in; LaTeX that doesn't parse shows as its source.
 
 `ReflexEmbed` joins with the Embed ticket.
 
@@ -63,6 +63,14 @@ Send claims the strokes drawn since the last Send in the kernel (`freeze_send`),
 - **Photos and files.** The + menu adds photos, a camera photo, or files; files and pictures can also be dropped on the canvas. Each becomes one `add_file` intent: a picture an image Element, each rendered PDF page an image Element, anything else a file Element. The bytes are stored as assets first, and the Elements go in the nearest free spot on screen.
 - **Ink from other devices** is drawn from its raw points under this iPad's own Ink.
 
+## Math tutor: Regions
+
+- **Regions** show their rules: a tinted writing area with its title; hatched grey with "No writing here" where `ink: false`; an "Agent is watching" badge while watch mode is on; a lock badge where Agents are read-only.
+- **No Ink where `ink: false`.** A pen stroke that starts there doesn't draw, and the person is told why. A stroke the kernel refuses anyway (its center is inside) is taken back off the canvas.
+- **A Region's Send button** ("Check my work", the Region's `send_button`) sits at its bottom-right corner, above the Ink. It sends only the work inside that Region (`trigger: "region"`), with a crop of the part of the Region on screen and one handwriting hint per line: the strokes are grouped into lines top to bottom and Vision reads each line, without language correction, so `3x - 7 = 2x + 5` stays an equation.
+- **Watch mode.** While a Region is watched, the iPad reads its lines again each time the person pauses (lines it already read are cached) and sends them to the Link (`hints`), so the Link's watch snapshots carry the recognizer's text.
+- **Presence.** The iPad tells the Link which Space is on screen (none in the background) and when the pen goes down and up (`presence`). `request_attention` answers `already_viewing` when the person is in that Space, and a watch snapshot's `user_still_writing` comes from the pen.
+
 ## Not yet
 
 - The device key and pairing are files in Application Support, not the Keychain.
@@ -75,3 +83,5 @@ Debug builds have a `#` button on the toolbar that draws each stroke's ID, and i
 Debug builds also take `reflex://debug/voice?file=<name>`, which transcribes an audio file in the app's Documents through the same on-device recognizer and sends it as a voice Send. The Simulator has no on-device speech model, so there it shows "Speech recognition failed"; use a real iPad.
 
 Debug builds also take `reflex://debug/ellipse?cx=&cy=&rx=&ry=` (screen points), which draws one closed pen stroke through the same PencilKit path as a finger. Simulator automation has no freeform gesture, so this is how a circle is drawn there.
+
+Debug builds also take `reflex://debug/write?region=<id>&text=<line>[&pause=<s>]`, which writes one line by hand below the person's lines in that Region: each glyph's outline in a handwriting font becomes pen strokes, drawn one after another (`pause` seconds apart, 0.05 by default) with the pen going down and up, through the same PencilKit path. Encode `+` as `%2B`.
