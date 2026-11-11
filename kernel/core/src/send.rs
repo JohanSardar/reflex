@@ -91,13 +91,85 @@ pub fn freeze(
         return Err(FreezeError::Existing(existing));
     }
     let me = Principal::Person(person.to_string());
+
+    // A Behavior trigger (`element` + `on`) runs the Behaviors the Element's
+    // owner attached for it. A `send` action makes this a full Send; a
+    // `notify` makes it a tap, which leaves the person's turn open and claims
+    // nothing; anything else (set, apply_recipe, open_panel) is an action the
+    // Link runs and nobody receives.
+    let mut kind = "send";
+    let mut extra = serde_json::Map::new();
+    if let Some(el) = raw.get("element").and_then(Value::as_str) {
+        let Some(rec) = crate::apply::resolve(tx, &me, el).and_then(|k| doc::live_record(tx, &k))
+        else {
+            return Err(FreezeError::Rejected(vec![OpError::new(
+                0,
+                Code::UnknownId,
+                format!("No Element '{el}'."),
+                "Pass the ID of the Element that was interacted with.",
+            )]));
+        };
+        extra.insert("element".into(), json!(rec.key));
+        extra.insert("owner".into(), rec.owner.to_json());
+        if let Some(on) = raw.get("on").and_then(Value::as_str) {
+            let event = raw.get("event").and_then(Value::as_str);
+            let fired: Vec<Value> = rec
+                .field_json("behaviors")
+                .and_then(|b| b.as_array().cloned())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|b| {
+                    b["on"].as_str() == Some(on)
+                        && (on != "embed_event" || b["event"].as_str() == event)
+                })
+                .collect();
+            if fired.is_empty() {
+                return Err(FreezeError::Rejected(vec![OpError::new(
+                    0,
+                    Code::InvalidInput,
+                    format!("'{el}' has no Behavior for {on}."),
+                    "Fire only the triggers the Element's Behaviors name.",
+                )]));
+            }
+            let does = |d: &str| fired.iter().any(|b| b["do"].as_str() == Some(d));
+            kind = if does("send") {
+                "send"
+            } else if does("notify") {
+                "tap"
+            } else {
+                "action"
+            };
+            if let Some(p) = fired
+                .iter()
+                .find(|b| matches!(b["do"].as_str(), Some("send" | "notify")))
+                .and_then(|b| b.get("payload"))
+            {
+                extra.insert("payload".into(), p.clone());
+            }
+            extra.insert("on".into(), json!(on));
+            extra.insert("actions".into(), Value::Array(fired));
+        }
+    }
+    if let Some(r) = raw.get("region").and_then(Value::as_str) {
+        if let Some(rec) = crate::apply::resolve(tx, &me, r).and_then(|k| doc::live_record(tx, &k))
+        {
+            extra.insert("region".into(), json!(rec.key));
+            extra.insert("owner".into(), rec.owner.to_json());
+        }
+    }
     let claims = doc::root(tx, "claims");
     let claimed = |tx: &Transaction, k: &str| doc::get_str(tx, &claims, k).is_some();
 
     // Unsent strokes: this person's live Ink no earlier Send has claimed.
+    let claiming = kind == "send";
     let mut strokes: Vec<String> = doc::live_records(tx)
         .into_iter()
-        .filter(|r| r.typ == "ink" && r.owner == me && !claimed(tx, &format!("stroke:{}", r.key)))
+        .filter(|r| {
+            claiming
+                && r.typ == "ink"
+                && r.owner == me
+                && !claimed(tx, &format!("stroke:{}", r.key))
+        })
         .map(|r| r.key)
         .collect();
     if let Some(extra) = raw.get("strokes").and_then(|v| v.as_array()) {
@@ -125,11 +197,21 @@ pub fn freeze(
     // Unsent changes: this person's done actions no earlier Send has claimed.
     let entries: Vec<_> = crate::history_entries(tx, person)
         .into_iter()
-        .filter(|e| e.state == "done" && !claimed(tx, &format!("entry:{}", e.id)))
+        .filter(|e| claiming && e.state == "done" && !claimed(tx, &format!("entry:{}", e.id)))
         .collect();
     let changes: Vec<Value> = entries
         .iter()
-        .flat_map(|e| e.edits.iter().filter_map(summarize))
+        .flat_map(|e| match (&e.info, e.kind.as_str()) {
+            // An import is one change, whatever Elements it made.
+            (Some(info), "add_file") => {
+                let mut c = json!({ "kind": "added_file", "id": info["id"], "file": info["file"], "mime": info["mime"] });
+                if let Some(n) = info.get("pages") {
+                    c["pages"] = n.clone();
+                }
+                vec![c]
+            }
+            _ => e.edits.iter().filter_map(summarize).collect(),
+        })
         .collect();
 
     let mut record = json!({
@@ -143,7 +225,11 @@ pub fn freeze(
         "changes": changes,
         "at": now_ms,
         "state": "ready",
+        "kind": kind,
     });
+    for (k, v) in extra {
+        record[k] = v;
+    }
     for k in [
         "said",
         "viewport",
@@ -152,10 +238,16 @@ pub fn freeze(
         "hints",
         "crops",
         "embed_anchors",
+        "event",
+        "values",
+        "panel",
     ] {
         if let Some(v) = raw.get(k) {
             record[k] = v.clone();
         }
+    }
+    if let Some(p) = raw.get("payload").filter(|p| p.is_object()) {
+        record["payload"] = p.clone();
     }
     let text = record.to_string();
     tx.put(&sends, send_id, text.as_str())?;

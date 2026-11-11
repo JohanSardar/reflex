@@ -13,6 +13,8 @@
 mod apply;
 mod auth;
 mod doc;
+mod history;
+mod marks;
 pub mod model;
 mod ops;
 #[allow(dead_code, clippy::large_enum_variant, clippy::enum_variant_names)]
@@ -29,7 +31,7 @@ use automerge::sync::{self, SyncDoc};
 use automerge::transaction::{CommitOptions, Transactable};
 use automerge::{ActorId, Automerge, ChangeHash, ObjType, ReadDoc};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::str::FromStr;
 
@@ -263,8 +265,13 @@ impl Space {
             Some("redo") => return self.redo(person, device, now_ms),
             _ => {}
         }
-        let op = match ops::parse_intent(&intent) {
-            Ok(op) => op,
+        let parsed = if intent.get("intent").and_then(|v| v.as_str()) == Some("add_file") {
+            ops::parse_add_file(&intent).map(|(ops, info)| (ops, Some(info)))
+        } else {
+            ops::parse_intent(&intent).map(|op| (vec![op], None))
+        };
+        let (ops, info) = match parsed {
+            Ok(x) => x,
             Err(errs) => return Ok(reject(errs)),
         };
         let kind_name = intent
@@ -293,14 +300,22 @@ impl Space {
                     actor_hex: &actor_hex,
                     space_kind: &kind,
                 };
-                let out = apply::run(tx, &ctx, &[Some(op)], vec![])?;
+                let ops: Vec<Option<ops::Op>> = ops.iter().cloned().map(Some).collect();
+                let out = apply::run(tx, &ctx, &ops, vec![])?;
                 let ids: serde_json::Map<String, Value> =
                     out.ids.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
                 if out.edits.is_empty() {
                     return Ok(json!({ "ok": true, "entry": null, "ids": ids }));
                 }
                 history_push(
-                    tx, person, device, &entry_id, &kind_name, &out.edits, now_ms,
+                    tx,
+                    person,
+                    device,
+                    &entry_id,
+                    &kind_name,
+                    &out.edits,
+                    info.as_ref(),
+                    now_ms,
                 )
                 .map_err(|e| vec![OpError::new(0, Code::Internal, e.to_string(), "Retry.")])?;
                 Ok::<_, Vec<OpError>>(
@@ -329,12 +344,10 @@ impl Space {
         check_id("person id", person)?;
         check_id("device id", device)?;
         let entries = history_entries(&self.doc, person);
-        let last_done = entries.iter().rposition(|e| e.state == "done");
         let pick = if undo {
-            last_done
+            entries.iter().rposition(|e| e.state == "done")
         } else {
-            let start = last_done.map(|i| i + 1).unwrap_or(0);
-            (start..entries.len()).find(|&i| entries[i].state == "undone")
+            history::redo_pick(&entries)
         };
         let what = if undo { "undone" } else { "redone" };
         let Some(idx) = pick else {
@@ -344,7 +357,14 @@ impl Space {
         let principal = Principal::Person(person.to_string());
         let kind = self.kind();
         let actor_hex = self.actor_hex.clone();
-        let tag = format!("{}:{}:{now_ms}", entry.id, if undo { "u" } else { "r" });
+        // The heads make the tag unique even for undo, redo, undo in one millisecond,
+        // so a restored Element always gets a fresh incarnation.
+        let tag = format!(
+            "{}:{}:{now_ms}:{}",
+            entry.id,
+            if undo { "u" } else { "r" },
+            sha_hex(&[self.heads_hex().join(",").as_bytes()])
+        );
         let res = self.doc.transact_with(
             |_| {
                 commit(
@@ -378,6 +398,11 @@ impl Space {
                 let history = doc::root(tx, "history");
                 let m = doc::obj(tx, &history, &entry.slot).expect("entry");
                 tx.put(&m, "state", if undo { "undone" } else { "done" })?;
+                if undo {
+                    tx.put(&m, "undone_at", now_ms)?;
+                } else {
+                    tx.delete(&m, "undone_at")?;
+                }
                 Ok::<_, automerge::AutomergeError>(applied)
             },
         );
@@ -403,6 +428,8 @@ impl Space {
     pub fn digest(&self) -> String {
         let mut s = scene::scene(&self.doc, &json!({ "detail": "full" }), &[]);
         s.as_object_mut().expect("scene").remove("heads");
+        // Each Send's frozen contents, not just its ID.
+        s["sends"] = json!(doc::str_map(&self.doc, &doc::root(&self.doc, "sends")));
         sha_hex(&[s.to_string().as_bytes()])
     }
 
@@ -430,6 +457,273 @@ impl Space {
                 send::FreezeError::Existing(s) => Ok(s),
                 send::FreezeError::Am(e) => Err(KernelError::BadBytes(e.to_string())),
             },
+        }
+    }
+
+    /// Groups a frozen Send's strokes into Marks and resolves their Anchors,
+    /// against the Send's pinned frontier. `query_json`: `{viewer?: {agent} |
+    /// {person}}`. Returns `{send, marks: [...]}`: each Mark in the Send
+    /// Bundle's shape plus its `strokes`, and `at`/`end` (when its strokes were
+    /// drawn, in the device's ms since the epoch), or `null` for no such Send.
+    pub fn marks(&self, send_id: &str, query_json: &str) -> Result<String> {
+        let q = if query_json.trim().is_empty() {
+            json!({})
+        } else {
+            parse_json(query_json)?
+        };
+        let Some(text) = doc::get_str(&self.doc, &doc::root(&self.doc, "sends"), send_id) else {
+            return Ok("null".into());
+        };
+        let send = parse_json(&text)?;
+        let viewer = scene::viewer_of(&q);
+        Ok(marks::marks(&self.doc, &send, viewer.as_ref()).to_string())
+    }
+
+    /// Reverts Agent batches (SPEC §6). `by_json` is who reverts, from the
+    /// authenticated context: `{"agent": id}` (an Agent reverting its own
+    /// batches) or `{"person": id, "device": id}` (a person reverting an
+    /// Agent's, from its color chip). `selector_json`: `{agent?, batch? |
+    /// last?, names?}`; `agent` is whose batches, and defaults to the Agent
+    /// reverting. Returns `{ok, batch, reverted, kept}`, or a rejection.
+    pub fn revert(
+        &mut self,
+        by_json: &str,
+        request_id: &str,
+        selector_json: &str,
+        now_ms: i64,
+    ) -> Result<String> {
+        let by = parse_json(by_json)?;
+        let sel = parse_json(selector_json)?;
+        let person = by.get("person").and_then(Value::as_str).map(String::from);
+        let device = by
+            .get("device")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let principal = match (&person, by.get("agent").and_then(Value::as_str)) {
+            (Some(p), None) => {
+                check_id("person id", p)?;
+                check_id("device id", &device)?;
+                Principal::Person(p.clone())
+            }
+            (None, Some(a)) => {
+                check_id("agent id", a)?;
+                Principal::Agent(a.to_string())
+            }
+            _ => {
+                return Err(KernelError::BadArgument(
+                    "by must be {\"agent\"} or {\"person\", \"device\"}".into(),
+                ))
+            }
+        };
+        let agent = match (&principal, sel.get("agent").and_then(Value::as_str)) {
+            (Principal::Agent(a), Some(x)) if x != a => {
+                return Ok(reject(vec![OpError::new(
+                    0,
+                    Code::NotYours,
+                    "An Agent can revert only its own batches.",
+                    "Leave agent out to revert your own work.",
+                )]))
+            }
+            (Principal::Agent(a), _) => a.clone(),
+            (Principal::Person(_), Some(x)) => x.to_string(),
+            (Principal::Person(_), None) => {
+                return Ok(reject(vec![OpError::new(
+                    0,
+                    Code::InvalidInput,
+                    "Say whose batches to revert.",
+                    "Pass agent: the Agent's ID.",
+                )]))
+            }
+        };
+        let pick = match (
+            sel.get("batch").and_then(Value::as_str),
+            sel.get("last").and_then(Value::as_i64),
+        ) {
+            (Some(b), None) => history::Pick::Batch(b.to_string()),
+            (None, Some(n)) if (1..=100).contains(&n) => history::Pick::Last(n as usize),
+            (None, None) => history::Pick::Last(1),
+            _ => {
+                return Ok(reject(vec![OpError::new(
+                    0,
+                    Code::InvalidInput,
+                    "Set batch or last (1 to 100), not both.",
+                    "Pass batch: \"b_…\" or last: 1.",
+                )]))
+            }
+        };
+        let plan = match history::plan(&self.doc, &agent, &pick) {
+            Ok(p) => p,
+            Err(e) => {
+                let (code, msg, fix) = match e {
+                    history::PlanError::Unknown(b) => (
+                        Code::UnknownBatch,
+                        format!("No batch '{b}' in this Space."),
+                        "Use a batch ID from an apply result.".to_string(),
+                    ),
+                    history::PlanError::NotYours(b) => (
+                        Code::NotYours,
+                        format!("Batch '{b}' is another Agent's."),
+                        "Revert only your own batches.".to_string(),
+                    ),
+                    history::PlanError::Already(b) => (
+                        Code::InvalidInput,
+                        format!("Batch '{b}' is already reverted."),
+                        "Nothing to do; apply again to redo it.".to_string(),
+                    ),
+                    history::PlanError::Nothing => (
+                        Code::InvalidInput,
+                        "There are no batches to revert in this Space.".to_string(),
+                        "Nothing to do.".to_string(),
+                    ),
+                };
+                return Ok(reject(vec![OpError::new(0, code, msg, fix)]));
+            }
+        };
+        let names: BTreeMap<String, String> = sel
+            .get("names")
+            .and_then(Value::as_object)
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let reverted: Vec<String> = plan.iter().map(|b| b.id.clone()).collect();
+        let tag = match &principal {
+            Principal::Agent(a) => format!(
+                "b_{}",
+                &sha_hex(&[a.as_bytes(), request_id.as_bytes()])[..12]
+            ),
+            Principal::Person(_) => format!(
+                "h_{}",
+                &sha_hex(&[
+                    self.actor_hex.as_bytes(),
+                    self.heads_hex().join(",").as_bytes(),
+                    &now_ms.to_le_bytes()
+                ])[..12]
+            ),
+        };
+        // An Agent's retry of the same request returns the first result.
+        if let Principal::Agent(_) = &principal {
+            let batches = doc::root(&self.doc, "batches");
+            if let Some(b) = doc::obj(&self.doc, &batches, &tag) {
+                let mut r = doc::get_str(&self.doc, &b, "result")
+                    .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+                    .unwrap_or(json!({ "ok": true, "batch": tag }));
+                r["duplicate"] = json!(true);
+                return Ok(r.to_string());
+            }
+        }
+        let kind = self.kind();
+        let actor_hex = self.actor_hex.clone();
+        let viewer = principal.clone();
+        let res = self.doc.transact_with(
+            |_| commit(now_ms, format!("revert {}", reverted.join(","))),
+            |tx| {
+                let ctx = Ctx {
+                    principal: &principal,
+                    tag: &tag,
+                    now_ms,
+                    actor_hex: &actor_hex,
+                    space_kind: &kind,
+                };
+                let (edits, kept) = history::apply_revert(tx, &ctx, &plan, Some(&viewer), &names)?;
+                let mut result =
+                    json!({ "ok": true, "batch": tag, "reverted": reverted, "kept": kept });
+                match &principal {
+                    Principal::Agent(a) => {
+                        let batches = doc::root(tx, "batches");
+                        let b = tx.put_object(&batches, tag.as_str(), ObjType::Map)?;
+                        tx.put(&b, "agent", a.as_str())?;
+                        tx.put(&b, "request", request_id)?;
+                        tx.put(&b, "hash", sha_hex(&[selector_json.as_bytes()]))?;
+                        tx.put(&b, "at", now_ms)?;
+                        tx.put(&b, "edits", serde_json::to_string(&edits).expect("edits"))?;
+                        tx.put(&b, "reverts", json!(reverted).to_string())?;
+                        tx.put(&b, "result", result.to_string())?;
+                    }
+                    Principal::Person(p) => {
+                        let info = json!({ "agent": agent, "reverts": reverted });
+                        history_push(tx, p, &device, &tag, "revert", &edits, Some(&info), now_ms)?;
+                        result["entry"] = json!(tag);
+                    }
+                }
+                Ok::<_, automerge::AutomergeError>(result)
+            },
+        );
+        match res {
+            Ok(s) => Ok(s.result.to_string()),
+            Err(f) => Err(KernelError::BadBytes(f.error.to_string())),
+        }
+    }
+
+    /// Who did what in this Space, oldest first: Agent batches (and whether
+    /// they are reverted), people's actions (and whether they are undone),
+    /// and Sends. `query_json`: `{viewer?, names?, limit? (default 200)}`.
+    pub fn timeline(&self, query_json: &str) -> Result<String> {
+        let q = if query_json.trim().is_empty() {
+            json!({})
+        } else {
+            parse_json(query_json)?
+        };
+        let viewer = scene::viewer_of(&q);
+        let names = scene::names_of(&q);
+        let limit = q
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(200)
+            .clamp(1, 10_000) as usize;
+        Ok(history::timeline(&self.doc, viewer.as_ref(), &names, limit).to_string())
+    }
+
+    /// An Agent asks the person to come to this Space (`request_attention`).
+    /// `json`: `{message, ids?}`. Devices show it as a banner the person can
+    /// tap; it never switches their screen. Returns `{ok, at}`.
+    pub fn request_attention(&mut self, agent: &str, json_in: &str, now_ms: i64) -> Result<String> {
+        check_id("agent id", agent)?;
+        let v = parse_json(json_in)?;
+        let message: String = v
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .chars()
+            .take(120)
+            .collect();
+        if message.trim().is_empty() {
+            return Ok(reject(vec![OpError::new(
+                0,
+                Code::InvalidInput,
+                "request_attention needs a message.",
+                "Pass a short message.",
+            )]));
+        }
+        let p = Principal::Agent(agent.to_string());
+        let ids: Vec<String> = v
+            .get("ids")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|i| i.as_str())
+                    .filter_map(|i| apply::resolve(&self.doc, &p, i))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let res = self.doc.transact_with(
+            |_| commit(now_ms, format!("attention {agent}")),
+            |tx| {
+                let agents = doc::root(tx, "agents");
+                let mut rec = doc::get_str(tx, &agents, agent)
+                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                    .unwrap_or(json!({}));
+                rec["attention"] = json!({ "message": message, "ids": ids, "at": now_ms });
+                tx.put(&agents, agent, rec.to_string())?;
+                Ok::<_, automerge::AutomergeError>(())
+            },
+        );
+        match res {
+            Ok(_) => Ok(json!({ "ok": true, "at": now_ms }).to_string()),
+            Err(f) => Err(KernelError::BadBytes(f.error.to_string())),
         }
     }
 
@@ -548,17 +842,26 @@ pub(crate) struct HistoryEntry {
     pub kind: String,
     pub state: String,
     pub edits: Vec<Edit>,
+    /// When the action was made (the device's clock).
+    pub at: i64,
+    /// When it was last undone, if it is undone.
+    pub undone_at: Option<i64>,
+    /// Extra facts about the action, such as the file an import added or the
+    /// Agent batches a revert undid. JSON.
+    pub info: Option<Value>,
 }
 
 /// History lives in one flat map, keyed `<person>|<order>|<entry>`, so two
 /// devices never race to create a per-person container.
-fn history_push(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn history_push(
     tx: &mut automerge::transaction::Transaction,
     person: &str,
     device: &str,
     entry_id: &str,
     kind: &str,
     edits: &[Edit],
+    info: Option<&Value>,
     now_ms: i64,
 ) -> std::result::Result<(), automerge::AutomergeError> {
     let history = doc::root(tx, "history");
@@ -581,6 +884,9 @@ fn history_push(
     tx.put(&m, "state", "done")?;
     tx.put(&m, "at", now_ms)?;
     tx.put(&m, "edits", serde_json::to_string(edits).expect("edits"))?;
+    if let Some(info) = info {
+        tx.put(&m, "info", info.to_string())?;
+    }
     Ok(())
 }
 
@@ -597,6 +903,9 @@ pub(crate) fn history_entries<R: ReadDoc>(d: &R, person: &str) -> Vec<HistoryEnt
                 kind: doc::get_str(d, &m, "kind").unwrap_or_default(),
                 state: doc::get_str(d, &m, "state")?,
                 edits: serde_json::from_str(&doc::get_str(d, &m, "edits")?).ok()?,
+                at: doc::get_int(d, &m, "at").unwrap_or(0),
+                undone_at: doc::get_int(d, &m, "undone_at"),
+                info: doc::get_str(d, &m, "info").and_then(|s| serde_json::from_str(&s).ok()),
                 slot,
             })
         })
