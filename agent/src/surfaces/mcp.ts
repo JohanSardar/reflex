@@ -73,9 +73,12 @@ export async function runMcp(o: { channel?: boolean } = {}) {
       },
     ));
 
+  // Whether the session turned channels on is known from its command line before initialize, so the
+  // instructions promise pushes only when a push target will be opened.
+  const session = o.channel ? sessionHasChannels() : { on: false, why: "" };
   const server = new Server(
     { name: "reflex", version: "0.1.0" },
-    { capabilities: { tools: {}, ...(o.channel ? { experimental: { [CHANNEL]: {} } } : {}) }, instructions: instructions + (o.channel ? CHANNEL_INSTRUCTIONS : "") },
+    { capabilities: { tools: {}, ...(o.channel ? { experimental: { [CHANNEL]: {} } } : {}) }, instructions: instructions + (session.on ? CHANNEL_INSTRUCTIONS : "") },
   );
   const who = () => {
     const c = server.getClientVersion();
@@ -161,7 +164,6 @@ export async function runMcp(o: { channel?: boolean } = {}) {
     const harness = KNOWN[server.getClientVersion()?.name ?? ""] ?? server.getClientVersion()?.name ?? "MCP client";
     // Only Claude Code has channels. Elsewhere Sends reach the Agent the guaranteed way, through wait_for_user.
     if (!CHANNEL_HARNESSES.has(harness)) return log("channel_unsupported", { harness });
-    const session = sessionHasChannels();
     if (!session.on) return log("channel_off", { harness, why: session.why });
     void openChannel(harness);
   };
@@ -172,7 +174,6 @@ export async function runMcp(o: { channel?: boolean } = {}) {
   async function openChannel(harness: string) {
     for (;;) {
       let c: Client | undefined;
-      let wait = 3000;
       try {
         c = await Client.open(`mcp-channel:${process.pid}`);
         const closed = new Promise<void>((r) => (c!.onClose = r));
@@ -185,10 +186,11 @@ export async function runMcp(o: { channel?: boolean } = {}) {
         const error = String((e as Error).message);
         log("channel_failed", { error });
         c?.close();
-        // The person turned this Agent away: don't keep asking them.
-        if (/^(rate_limited|not_approved)/.test(error)) wait = 60_000;
+        // The person turned this Agent away or didn't answer: stop, so the channel never asks them again on its
+        // own. Tool calls still work; restarting the session opens the channel once they approve.
+        if (/^(rate_limited|not_approved)/.test(error)) return log("channel_stopped", { error });
       }
-      await new Promise((r) => setTimeout(r, wait));
+      await new Promise((r) => setTimeout(r, 3000));
     }
   }
 
