@@ -23,7 +23,7 @@ xcodebuild -project Reflex.xcodeproj -scheme Reflex \
 ## Layout
 
 - `Reflex/`: the app. `CanvasScreen` stacks the Elements, the Ink canvas, the toolbar, the Send button, the Spaces menu and the connection status. `SpaceSession` turns each finished Ink change into a kernel intent (`add_stroke`, `erase`, `erase_precise`, `move`) and canvas undo into the kernel's per-person undo. `PairSheet` pairs.
-- `Packages/ReflexLink`: the Link connection. The same handshake and encrypted framing as the Link (Ed25519, X25519, HKDF, ChaCha20-Poly1305 over length-prefixed TCP), Bonjour discovery, reconnects, the kernel's sync per Space, assets, and Agent approval. Each Space is a kernel replica (UniFFI, `kernel/swift`) saved to `space.automerge`.
+- `Packages/ReflexLink`: the Link connection. The same handshake and encrypted framing as the Link (Ed25519, X25519, HKDF, ChaCha20-Poly1305 over length-prefixed TCP), Bonjour discovery, reconnects, the kernel's sync per Space, assets, and Agent approval. Each Space is a kernel replica (UniFFI, `kernel/swift`) saved to `space.automerge`. It reaches the Link over the local network and over Apple peer-to-peer Wi-Fi (`PeerToPeer.swift`: `_reflex-p2p._tcp`, only on a peer-to-peer interface), keeps both open, and sends over the faster one (`Paths.swift`, the Link's rule).
 - `Packages/ReflexInput`: Ink. The PencilKit canvas, tools, eraser, undo gestures, Pencil double-tap and squeeze, stroke identity and local saving.
 - `Packages/ReflexRender`: draws Protocol v0 Elements (text, Markdown, shapes, sticky notes, math, frames, regions, connectors, images) from the kernel's scene JSON. Unknown types draw as a labelled placeholder.
 
