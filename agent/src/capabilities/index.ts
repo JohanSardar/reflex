@@ -341,7 +341,17 @@ export class Core {
           if (!m) continue;
           const [x, y, w, h] = m.bounds;
           const gap = at.gap ?? (rel === "inside" ? 24 : 40);
-          const own = op.op === "patch" ? outline.find((e) => e.id === op.id)?.bounds : undefined;
+          // The size of what is placed: a patched Element's own bounds, or an arranged group's extent
+          // (exact for row and column; grid and tree take the larger of the two, so the group never lands on the Mark).
+          let own = op.op === "patch" ? outline.find((e) => e.id === op.id)?.bounds : undefined;
+          if (op.op === "arrange") {
+            const bs = (op.ids as string[]).map((id) => outline.find((e) => e.id === id)?.bounds).filter((b): b is Bounds => !!b);
+            const g = (op.gap ?? 40) * Math.max(0, bs.length - 1);
+            const ws = bs.map((b) => b[2]);
+            const hs = bs.map((b) => b[3]);
+            const sum = (xs: number[]) => xs.reduce((t, x) => t + x, 0);
+            if (bs.length) own = [0, 0, op.layout === "column" ? Math.max(...ws) : sum(ws) + g, op.layout === "row" ? Math.max(...hs) : sum(hs) + g];
+          }
           const sw = op.w ?? op.set?.w ?? own?.[2] ?? 200;
           const sh = op.h ?? op.set?.h ?? own?.[3] ?? 120;
           const pos = { right_of: [x + w + gap, y], near: [x + w + gap, y], left_of: [x - gap - sw, y], below: [x, y + h + gap], above: [x, y - gap - sh], inside: [x + gap, y + gap] }[rel]!;
