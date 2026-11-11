@@ -179,6 +179,8 @@ test("a Send pushed while the view posts the last one reaches the view's next wa
       second,
       `the view's next wait (which acknowledges the last posted Send with after) did not get the Send pushed for it: ${JSON.stringify(gotSecond)}`,
     );
+    const still = inbox.pending(recipient(agent)).map((e) => e.send);
+    assert.ok(!still.includes(first), `the Send the view posted to the chat was not acknowledged at the Link: ${JSON.stringify(still)}`);
   } finally {
     chat.close();
     person.close();
