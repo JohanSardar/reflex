@@ -1,0 +1,3 @@
+# A blocking wait_for_user is the guaranteed way Sends reach agents; push is an add-on
+
+Core MCP cannot start a new user turn. The mechanisms that can are tied to particular harnesses: Claude Code channels, `ui/message` in MCP Apps, and Agent SDK streaming. So Reflex guarantees delivery through a long-held `wait_for_user` tool backed by a durable Inbox, which works in every harness, and adds harness-specific Send Adapters on top. Reflex is therefore a canvas runtime with several ways in, not just an MCP server. A future reader might expect "MCP server" to describe the whole system. It doesn't.

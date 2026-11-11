@@ -1,0 +1,3 @@
+# One capability model behind both MCP and the CLI, and the CLI follows Vercel's CLI guidelines
+
+Reflex's MCP tools and the `reflex` CLI are two equal ways in for agents. Both map 1:1 onto one core library of capabilities, so a capability means the same thing however it is called. Any agent that can run shell commands can use Reflex without MCP, and the two interfaces can't drift apart. The CLI follows https://vercel.com/design/cli: grammar `reflex <group> <action> [<resource>]`, stdout carries only the answer, `--json` produces exactly one document, errors are one-line JSON documents with stable `reason` codes, waits are bounded with `--timeout`, consent tiers apply, and remote text (including anything an Agent or Embed produced) is treated as data, never instructions.
