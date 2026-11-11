@@ -376,13 +376,33 @@ final class SpaceSession {
     // MARK: Imports
 
     /// Where the next import goes: the middle of the screen, stepping down for each one.
-    @ObservationIgnored private var importStep = 0
 
+    /// Where something new of `size` goes: the middle of the screen if that's
+    /// free, else the nearest free spot on screen, else below everything.
     private func nextSpot(_ size: CGSize) -> CGPoint {
         let v = viewport()
-        let step = CGFloat(importStep % 6) * 32
-        importStep += 1
-        return CGPoint(x: (v.midX - size.width / 2 + step).rounded(), y: (v.midY - size.height / 2 + step).rounded())
+        let taken = scene.elements.filter { !["ink", "connector"].contains($0.type) }.compactMap(\.frame).map { $0.insetBy(dx: -20, dy: -20) }
+        let free = { (p: CGPoint) in !taken.contains { $0.intersects(CGRect(origin: p, size: size)) } }
+        let center = CGPoint(x: v.midX - size.width / 2, y: v.midY - size.height / 2)
+        var tries = [center]
+        for ring in 1 ... 12 {
+            let d = CGFloat(ring) * 60
+            for i in 0 ..< ring * 8 {
+                let a = Double(i) / Double(ring * 8) * 2 * .pi
+                tries.append(CGPoint(x: center.x + d * cos(a), y: center.y + d * sin(a)))
+            }
+        }
+        let onScreen = { (p: CGPoint) in v.contains(CGRect(origin: p, size: size)) }
+        let spot = tries.first { onScreen($0) && free($0) }
+            ?? CGPoint(x: taken.map(\.minX).min() ?? v.minX, y: (taken.map(\.maxY).max() ?? v.minY) + 20)
+        return CGPoint(x: spot.x.rounded(), y: spot.y.rounded())
+    }
+
+    /// Scrolls so `space` (a rect in Space coordinates) is on screen.
+    private func show(_ space: CGRect) {
+        guard !viewport().contains(space) else { return }
+        let z = ink.zoomScale
+        ink.canvasView.scrollRectToVisible(CGRect(x: space.minX * z, y: space.minY * z, width: space.width * z, height: space.height * z).insetBy(dx: -40, dy: -40), animated: true)
     }
 
     private static func newID(_ prefix: String) -> String {
@@ -408,6 +428,7 @@ final class SpaceSession {
                                       "w": Int(size.width.rounded()), "h": Int(size.height.rounded())]
             if let page { add["page"] = page }
             act(add)
+            show(CGRect(origin: spot, size: size))
         } catch {
             say("Couldn't save that image: \(error.localizedDescription)")
         }
@@ -428,7 +449,8 @@ final class SpaceSession {
     func importData(_ data: Data, name: String, type: UTType?) {
         if type?.conforms(to: .pdf) == true, let pages = Imports.pdfPages(data) {
             let size = pages.first.map { Imports.fit($0.size, in: CGSize(width: 600, height: 800)) } ?? .zero
-            let start = nextSpot(size)
+            let cols = min(pages.count, 4), rows = (pages.count + 3) / 4
+            let start = nextSpot(CGSize(width: CGFloat(cols) * (size.width + 40) - 40, height: CGFloat(rows) * (size.height + 40) - 40))
             for (i, page) in pages.enumerated() {
                 guard let bytes = Imports.encode(page) else { continue }
                 let at = CGPoint(x: start.x + CGFloat(i % 4) * (size.width + 40), y: start.y + CGFloat(i / 4) * (size.height + 40))
@@ -445,6 +467,7 @@ final class SpaceSession {
                 act(["intent": "add_file", "id": Self.newID("file"), "name": String(name.prefix(255)),
                      "mime": type?.preferredMIMEType ?? "application/octet-stream", "size": data.count,
                      "src": "asset:\(hash)", "at": ["x": Int(spot.x), "y": Int(spot.y)], "w": 260, "h": 64])
+                show(CGRect(origin: spot, size: size))
             } catch {
                 say("Couldn't save \(name): \(error.localizedDescription)")
             }

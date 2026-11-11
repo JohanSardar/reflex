@@ -161,7 +161,7 @@ public final class LinkSync {
         let q: [String: Any] = ["detail": "strokes", "ids": ids, "viewer": ["person": person?.id ?? identity.person.id]]
         guard let out = try? space.scene(queryJson: Self.json(q)), let r = Self.object(out) else { return [:] }
         var points: [String: [[Double]]] = [:]
-        for s in r["strokes"] as? [[String: Any]] ?? [] {
+        for s in r["elements"] as? [[String: Any]] ?? [] {
             if let sid = s["id"] as? String, let p = s["points"] as? [[Double]] { points[sid] = p }
         }
         return points
@@ -225,7 +225,7 @@ public final class LinkSync {
     public func storeAsset(_ bytes: Data) throws -> String {
         let hash = sha256(bytes).hex
         let url = Self.assetsDir.appending(path: hash)
-        if !FileManager.default.fileExists(atPath: url.path()) {
+        if !FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) {
             try bytes.write(to: url, options: [.atomic, .completeFileProtection])
         }
         // Pushed now, ahead of the Send that refers to it, on the same ordered connection.
@@ -253,7 +253,7 @@ public final class LinkSync {
         guard let hash = h["hash"] as? String, hash.count == 64, hash.allSatisfy(\.isHexDigit),
               let off = h["off"] as? Int, let size = h["size"] as? Int, size >= 0, size <= 512 * 1024 * 1024 else { return }
         let url = Self.assetsDir.appending(path: hash)
-        if FileManager.default.fileExists(atPath: url.path()) { return }
+        if FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) { return }
         if off == 0 { incoming[hash] = (size, Data()) }
         guard var inc = incoming[hash], inc.data.count == off, inc.size == size, off + body.count <= size else {
             incoming[hash] = nil
@@ -275,7 +275,7 @@ public final class LinkSync {
     }
 
     private func assetHashes() -> [String] {
-        ((try? FileManager.default.contentsOfDirectory(atPath: Self.assetsDir.path())) ?? []).filter { $0.count == 64 }
+        ((try? FileManager.default.contentsOfDirectory(atPath: Self.assetsDir.path(percentEncoded: false))) ?? []).filter { $0.count == 64 }
     }
 
     // MARK: Agent approval

@@ -236,6 +236,9 @@ struct ImageElementView: View {
         Group {
             if let image = Self.load(element.src) ?? element.src.flatMap({ $0.hasPrefix("asset:") ? assets.load(String($0.dropFirst(6))) : nil }) {
                 Image(uiImage: image).resizable().scaledToFit()
+                    // A PDF page is white on a near-white canvas; an edge shows where it ends.
+                    .overlay { if element.page != nil { Rectangle().stroke(Color.secondary.opacity(0.35), lineWidth: 1) } }
+                    .shadow(color: .black.opacity(element.page != nil ? 0.08 : 0), radius: 4, y: 1)
             } else {
                 Rectangle().fill(Color.secondary.opacity(0.15))
                     .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
