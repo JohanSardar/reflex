@@ -34,6 +34,8 @@ export class Sandbox {
   params: Record<string, unknown> = {};
   /** Strokes drawn since the last Send, as [x, y] points. */
   strokes: number[][][] = [];
+  /** The kernel IDs of `strokes`, in the same order: an Embed's answer names them. */
+  #strokeIds: string[] = [];
   last?: SendResult & { strokes: number[][][]; said?: string };
 
   constructor(loaded?: Loaded) {
@@ -81,13 +83,14 @@ export class Sandbox {
   stroke(points: number[][]) {
     const r = this.core.personStroke(SPACE, points);
     this.strokes.push(points);
+    this.#strokeIds.push(r.id);
     return r;
   }
 
   /** Presses Send as the person, then reads it as the Agent would. */
   async send(o: { said?: string; anchors?: { element: string; strokes: number; anchor: unknown; bounds: [number, number, number, number] }[] } = {}): Promise<SendResult> {
     const anchors = (o.anchors ?? []).filter((a) => a.anchor);
-    this.core.personSend(SPACE, { said: o.said, embedAnchors: anchors.map((a) => ({ element: a.element, anchor: a.anchor, bounds: a.bounds })) });
+    this.core.personSend(SPACE, { said: o.said, embedAnchors: anchors.map((a) => ({ element: a.element, strokes: [this.#strokeIds[a.strokes]].filter(Boolean), anchor: a.anchor, bounds: a.bounds })) });
     const r = await this.core.call("wait_for_user", { timeout_s: 0, space: SPACE, ...(this.last ? { after: this.last.bundle.send } : {}) }, this.ctx);
     const bundle = r.json;
     const overlap = (a: number[], b: number[]) => a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
@@ -99,6 +102,7 @@ export class Sandbox {
     if (this.loaded?.ext.kind === "adapter" && bundle.kind) result.adapter = await deliverDry(this.loaded.ext, bundle);
     this.last = { ...result, strokes: this.strokes, said: o.said };
     this.strokes = [];
+    this.#strokeIds = [];
     return result;
   }
 
