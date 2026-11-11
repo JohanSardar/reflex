@@ -417,6 +417,18 @@ public final class LinkSync {
                 }
             }
         }
+        // iPadOS ends a backgrounded app's Bonjour browsing (DefunctConnection): start over.
+        b.stateUpdateHandler = { [weak self] state in
+            guard case .failed(let e) = state else { return }
+            Task { @MainActor in
+                guard let self, self.browser === b else { return }
+                linkLog.error("LAN browsing failed: \(e.localizedDescription, privacy: .public); browsing again")
+                b.cancel()
+                self.browser = nil
+                try? await Task.sleep(for: .seconds(1))
+                self.browse()
+            }
+        }
         b.start(queue: .main)
         browser = b
     }

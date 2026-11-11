@@ -35,8 +35,17 @@ final class PeerToPeerBrowser {
         b.browseResultsChangedHandler = { [weak self] results, _ in
             Task { @MainActor in self?.update(results) }
         }
-        b.stateUpdateHandler = { state in
-            if case .failed(let e) = state { linkLog.error("Peer-to-peer browsing failed: \(e.localizedDescription, privacy: .public)") }
+        // iPadOS ends a backgrounded app's Bonjour browsing (DefunctConnection): start over.
+        b.stateUpdateHandler = { [weak self] state in
+            guard case .failed(let e) = state else { return }
+            Task { @MainActor in
+                guard let self, self.browser === b else { return }
+                linkLog.error("Peer-to-peer browsing failed: \(e.localizedDescription, privacy: .public); browsing again")
+                b.cancel()
+                self.browser = nil
+                try? await Task.sleep(for: .seconds(1))
+                self.start()
+            }
         }
         b.start(queue: .main)
         browser = b
