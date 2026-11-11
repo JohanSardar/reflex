@@ -139,6 +139,14 @@ export class CloudSession {
     if (changed && route) this.#index(true);
   }
 
+  #frozenAt(send: string): number {
+    try {
+      return Number(JSON.parse(this.#space.send(send)).at) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
   /** Indexes Sends the Space holds that this session hasn't seen. */
   #index(route: boolean): void {
     const sends: string[] = JSON.parse(this.#space.scene(JSON.stringify({ detail: "full", ids: [] }))).sends ?? [];
@@ -147,7 +155,10 @@ export class CloudSession {
     let added = 0;
     for (const s of sends) {
       if (this.#sql("SELECT 1 FROM c_sends WHERE gid = ? AND send = ?", g, s).length) continue;
-      this.#d.sql.run("INSERT INTO c_sends (gid, send, at, routed) VALUES (?, ?, ?, ?)", g, s, Date.now(), route && agents.length ? 1 : route ? 0 : 1);
+      // Not routed yet: the first Agent to attach adopts it. Only Sends frozen
+      // before this grant began are old news to its Agent.
+      const routed = agents.length > 0 || (!route && this.#frozenAt(s) < this.grant.issued);
+      this.#d.sql.run("INSERT INTO c_sends (gid, send, at, routed) VALUES (?, ?, ?, ?)", g, s, Date.now(), routed ? 1 : 0);
       if (route) for (const a of agents) this.#d.sql.run("INSERT OR IGNORE INTO c_receipts (gid, agent, send, state) VALUES (?, ?, ?, 'ready')", g, a, s);
       added++;
     }

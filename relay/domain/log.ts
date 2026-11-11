@@ -22,12 +22,14 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS entries (seq INTEGER PRIMARY KEY AUTOINCREMENT, data BLOB NOT NULL, at INTEGER NOT NULL, snap INTEGER NOT NULL DEFAULT 0)",
   "CREATE TABLE IF NOT EXISTS rooms (room TEXT PRIMARY KEY)",
-  "CREATE TABLE IF NOT EXISTS grants (gid TEXT PRIMARY KEY, body TEXT NOT NULL, sig TEXT NOT NULL, plain_key BLOB, code TEXT, status TEXT NOT NULL, expires INTEGER NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS grants (gid TEXT PRIMARY KEY, body TEXT NOT NULL, sig TEXT NOT NULL, plain_key BLOB, code TEXT, status TEXT NOT NULL, expires INTEGER NOT NULL, received INTEGER NOT NULL DEFAULT 0)",
   "CREATE TABLE IF NOT EXISTS tokens (hash TEXT PRIMARY KEY, gid TEXT NOT NULL, wrapped BLOB NOT NULL, expires INTEGER NOT NULL)",
 ];
 
 /** The longest grant a device may issue. */
 const MAX_GRANT_MS = 30 * 24 * 3600_000;
+/** How long a grant's Space key may sit unwrapped, waiting for the token exchange. */
+const PLAIN_KEY_MS = 10 * 60_000;
 
 const tooBig = () =>
   new LogError(507, "this Space is too big to open in a cloud session on this Relay; use a self-hosted Relay (relay/node), which has no such limit, or a smaller Space");
@@ -56,12 +58,14 @@ export interface LogDeps {
 
 export class SpaceLog {
   #d: LogDeps;
-  #session: CloudSession | null = null;
+  /** One cloud session per live grant: each grant has its own Agent, Inbox state and token. */
+  #sessions = new Map<string, CloudSession>();
 
   constructor(d: LogDeps) {
     this.#d = d;
     for (const s of SCHEMA) d.sql.run(s);
     if (!d.sql.all<{ name: string }>("PRAGMA table_info(entries)").some((c) => c.name === "snap")) d.sql.run("ALTER TABLE entries ADD COLUMN snap INTEGER NOT NULL DEFAULT 0");
+    if (!d.sql.all<{ name: string }>("PRAGMA table_info(grants)").some((c) => c.name === "received")) d.sql.run("ALTER TABLE grants ADD COLUMN received INTEGER NOT NULL DEFAULT 0");
   }
 
   get id(): string {
@@ -118,7 +122,7 @@ export class SpaceLog {
     this.#check(token, true);
     this.#d.sql.run("INSERT OR IGNORE INTO rooms (room) VALUES (?)", room);
     const seqs = entries.map((e) => this.#insert(unb64(e), snapshot && entries.length === 1));
-    this.#session?.catchUp();
+    for (const s of this.#sessions.values()) s.catchUp();
     if (seqs.length) this.#notify();
     return { seqs };
   }
@@ -152,17 +156,19 @@ export class SpaceLog {
     const spaceKey = unb64url(key);
     // The key must be the one this log belongs to.
     if (spaceKey.length !== 32 || spaceKeys(spaceKey).log !== this.#d.id) throw new LogError(400, "that key does not belong to this log");
+    // The sign-in must be waiting for this code before the Relay keeps any key.
+    await this.#d.hubs.auth().approve(code, this.#d.id, g.grant, g.expires);
     this.#d.sql.run(
-      "INSERT INTO grants (gid, body, sig, plain_key, code, status, expires) VALUES (?, ?, ?, ?, ?, 'issued', ?)",
+      "INSERT INTO grants (gid, body, sig, plain_key, code, status, expires, received) VALUES (?, ?, ?, ?, ?, 'issued', ?, ?)",
       g.grant,
       JSON.stringify(g),
       sig,
       spaceKey,
       code,
       g.expires,
+      now,
     );
-    await this.#d.hubs.auth().approve(code, this.#d.id, g.grant, g.expires);
-    this.#d.wakeAt(Math.min(g.expires, now + 10 * 60_000));
+    this.#d.wakeAt(Math.min(g.expires, now + PLAIN_KEY_MS));
     this.#d.log(`grant ${g.grant} issued by ${g.device} for ${g.name}, until ${new Date(g.expires).toISOString()}`);
   }
 
@@ -181,10 +187,8 @@ export class SpaceLog {
         /* no session ran yet */
       }
     }
-    if (this.#session?.grant.grant === gid) {
-      this.#session.close();
-      this.#session = null;
-    }
+    this.#sessions.get(gid)?.close();
+    this.#sessions.delete(gid);
     this.#d.log(`grant ${gid} ${status}`);
   }
 
@@ -205,9 +209,13 @@ export class SpaceLog {
   expire(): void {
     const now = Date.now();
     for (const { gid } of this.#d.sql.all<{ gid: string }>("SELECT gid FROM grants WHERE status IN ('issued', 'active') AND expires <= ?", now)) this.#end(gid, "expired");
-    // A grant whose token was never collected keeps its plain key at most 10 minutes.
-    this.#d.sql.run("UPDATE grants SET plain_key = NULL WHERE status = 'issued' AND plain_key IS NOT NULL AND expires <= ?", now);
-    const next = this.#d.sql.all<{ n: number | null }>("SELECT min(expires) AS n FROM grants WHERE status IN ('issued', 'active')")[0]?.n;
+    // A grant whose token was never collected keeps its plain key at most 10
+    // minutes; by then its sign-in has expired too, so no token can follow.
+    this.#d.sql.run("UPDATE grants SET plain_key = NULL WHERE status = 'issued' AND plain_key IS NOT NULL AND received + ? <= ?", PLAIN_KEY_MS, now);
+    const next = this.#d.sql.all<{ n: number | null }>(
+      "SELECT min(CASE WHEN plain_key IS NOT NULL THEN min(expires, received + ?) ELSE expires END) AS n FROM grants WHERE status IN ('issued', 'active')",
+      PLAIN_KEY_MS,
+    )[0]?.n;
     if (next) this.#d.wakeAt(next);
   }
 
@@ -223,9 +231,8 @@ export class SpaceLog {
 
   #sessionFor(token: string): CloudSession {
     const { grant, key } = this.#resolve(token);
-    if (this.#session?.grant.grant === grant.grant) return this.#session;
-    this.#session?.close();
-    this.#session = null;
+    const live = this.#sessions.get(grant.grant);
+    if (live) return live;
     // A Space too big to materialize here would take the whole isolate down
     // on every try. The marker is set before loading and cleared after, so a
     // load that never returned (out of memory) is not tried again until the
@@ -249,7 +256,11 @@ export class SpaceLog {
       lastSnapshot: () => this.lastSnapshot(),
       append: (sealed) => {
         const seq = this.#insert(sealed);
-        queueMicrotask(() => this.#notify());
+        queueMicrotask(() => {
+          // Other grants' sessions on this Space see the Agent's change too.
+          for (const s of this.#sessions.values()) if (s.grant.grant !== grant.grant) s.catchUp();
+          this.#notify();
+        });
         return seq;
       },
       log: this.#d.log,
@@ -265,7 +276,7 @@ export class SpaceLog {
       throw tooBig();
     }
     this.#d.sql.run("DELETE FROM meta WHERE k = 'too_big'");
-    this.#session = session;
+    this.#sessions.set(grant.grant, session);
     return session;
   }
 
