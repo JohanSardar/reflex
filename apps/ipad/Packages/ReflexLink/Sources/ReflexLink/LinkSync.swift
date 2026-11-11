@@ -25,7 +25,12 @@ public struct AgentInfo: Codable, Identifiable, Sendable, Equatable {
 
 /// The iPad's replicas of every Space, kept in the Rust kernel (through
 /// UniFFI), saved on this iPad, and in sync with the paired Link over the
-/// local network (ARCHITECTURE §1, §8).
+/// local network and Apple peer-to-peer Wi-Fi (ARCHITECTURE §1, §6, §8).
+///
+/// Both paths stay open when both are up; changes go over the faster one
+/// (`PathSet`), and when it drops the other takes over at once, with
+/// anti-entropy from scratch. Anything arriving on either path is taken: the
+/// same change arriving twice changes nothing.
 ///
 /// Messages after the handshake are the Link coordinator's
 /// (`link/sync/coordinator.ts`): `spaces`, `sync` (one Automerge sync
@@ -55,15 +60,24 @@ public final class LinkSync {
     public private(set) var assetRevision = 0
     public private(set) var person: Person?
     public var deviceID: String { identity.device }
+    /// The live paths to the Link ("lan", "p2p"), and the one changes go out on.
+    public private(set) var transports: [String] = []
+    public private(set) var activeTransport: String?
 
     @ObservationIgnored private var identity: DeviceIdentity
     @ObservationIgnored private var actor: String
     @ObservationIgnored private var paired: Paired?
     @ObservationIgnored private var replicas: [String: Space] = [:]
-    @ObservationIgnored private var session: Session?
+    @ObservationIgnored private var paths = PathSet()
+    /// The path changes go out on.
+    private var session: Session? { paths.active }
     @ObservationIgnored private var browser: NWBrowser?
+    @ObservationIgnored private var p2p: PeerToPeerBrowser?
     @ObservationIgnored private var discovered: NWEndpoint?
     @ObservationIgnored private var dialing = false
+    @ObservationIgnored private var dialingP2P = false
+    @ObservationIgnored private var ticker: Task<Void, Never>?
+    @ObservationIgnored private var pings = 0
     @ObservationIgnored private var assetsWritten: Set<String> = []
     /// The Relay the Link said to use when the local network can't reach it (RelayConnection.swift).
     @ObservationIgnored private var relay: RelayInfo?
@@ -382,6 +396,14 @@ public final class LinkSync {
 
     /// Finds the paired Link again over Bonjour; discovery is never authentication.
     private func browse() {
+        if p2p == nil, let device = paired?.device {
+            let b = PeerToPeerBrowser(device: device) { [weak self] found in
+                if found != nil { self?.dialPeerToPeer() }
+            }
+            b.start()
+            p2p = b
+        }
+        startTicker()
         guard browser == nil else { return }
         let b = NWBrowser(for: .bonjourWithTXTRecord(type: "_reflex-link._tcp", domain: nil), using: .tcp)
         b.browseResultsChangedHandler = { [weak self] results, _ in
@@ -390,7 +412,7 @@ public final class LinkSync {
                 for r in results {
                     if case .bonjour(let txt) = r.metadata, txt["dev"] == device {
                         self.discovered = r.endpoint
-                        if self.session == nil { self.reconnectSoon(after: 0) }
+                        if self.paths.on("lan") == nil { self.reconnectSoon(after: 0) }
                     }
                 }
             }
@@ -406,8 +428,9 @@ public final class LinkSync {
         }
     }
 
+    /// Reaches the Link over the local network (Bonjour, then the addresses in its pairing code).
     private func reconnect() async {
-        guard let paired, session == nil, !dialing else { return }
+        guard let paired, paths.on("lan") == nil, !dialing else { return }
         dialing = true
         defer { dialing = false }
         var endpoints: [NWEndpoint] = discovered.map { [$0] } ?? []
@@ -423,28 +446,93 @@ public final class LinkSync {
                 conn.close()
             }
         }
-        // The local network can't reach the Link: go through the Relay, if it named one.
-        if let relay, let conn = try? RelayConnection(relay: relay, me: identity, link: paired.device) {
+        // Nothing reaches the Link: go through the Relay, if it named one. Next to a live LAN or
+        // peer-to-peer path the Relay isn't needed.
+        if paths.isEmpty, let relay, let conn = try? RelayConnection(relay: relay, me: identity, link: paired.device) {
             do {
                 try await conn.start()
                 let s = try await handshake(conn, me: identity, pairedKey: paired.key, offer: nil)
                 bind(s)
+                reconnectSoon(after: 5)
                 return
             } catch {
                 conn.close()
                 linkLog.info("Relay path to \(paired.name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             }
         }
-        state = .offline("\(paired.name) is not reachable")
-        reconnectSoon(after: 2)
+        if paths.isEmpty { state = .offline("\(paired.name) is not reachable") }
+        reconnectSoon(after: paths.isEmpty ? 2 : 5)
     }
 
-    /// A new session: anti-entropy from scratch for every Space, then the receive loop.
+    /// Reaches the Link over Apple peer-to-peer Wi-Fi, when its helper has been seen there.
+    private func dialPeerToPeer() {
+        guard let paired, let found = p2p?.found, paths.on("p2p") == nil, !dialingP2P else { return }
+        dialingP2P = true
+        Task {
+            defer { dialingP2P = false }
+            let conn = FramedConnection(endpoint: found.endpoint, peerToPeer: found.interface)
+            do {
+                try await conn.start(timeout: 6)
+                bind(try await handshake(conn, me: identity, pairedKey: paired.key, offer: nil))
+            } catch {
+                conn.close()
+                linkLog.error("Peer-to-peer connect failed: \(error.localizedDescription, privacy: .public)")
+                try? await Task.sleep(for: .seconds(3))
+                dialPeerToPeer()
+            }
+        }
+    }
+
+    /// Every 2 s: ping each path (RTT for choosing between them), drop paths that went silent,
+    /// and redial a path that is missing.
+    private func startTicker() {
+        guard ticker == nil else { return }
+        ticker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                self?.tick()
+            }
+        }
+    }
+
+    private func tick() {
+        let now = Date()
+        for s in paths.all {
+            if now.timeIntervalSince(s.lastHeard) > PathSet.silent {
+                linkLog.error("The \(s.transport, privacy: .public) path went silent; dropping it")
+                s.close()
+                continue
+            }
+            pings += 1
+            s.send(["t": "ping", "n": pings, "at": Self.now()])
+        }
+        if paths.on("p2p") == nil { dialPeerToPeer() }
+    }
+
+    private func publishPaths() {
+        transports = paths.all.map(\.transport)
+        activeTransport = paths.active?.transport
+    }
+
+    /// A new path. The first one starts anti-entropy from scratch for every Space; a second one
+    /// (the other transport) joins as another way to reach the same Link.
     private func bind(_ s: Session) {
-        session = s
+        if let old = paths.on(s.transport) {
+            old.close()
+            _ = paths.remove(old)
+        }
+        let first = paths.isEmpty
+        paths.add(s)
+        publishPaths()
         state = .connected(s.peer.name)
-        linkLog.info("Connected to \(s.peer.name, privacy: .public) over \(s.conn.remote, privacy: .public)")
-        incoming = [:] // parts of an asset from an earlier session never complete
+        linkLog.info("Connected to \(s.peer.name, privacy: .public) over \(s.transport, privacy: .public) \(s.conn.remote, privacy: .public); \(self.paths.all.count) paths")
+        if first || paths.active === s { fresh(s) }
+        Task { await loop(s) }
+    }
+
+    /// Starts over on the path changes go out on: anti-entropy for every Space, and assets.
+    private func fresh(_ s: Session) {
+        incoming = [:] // parts of an asset from an earlier path never complete
         for (_, space) in replicas { space.resetSync(peer: s.peer.device) }
         s.send(["t": "spaces", "spaces": replicas.map { ["id": $0.key, "kind": $0.value.kind()] }])
         s.send(["t": "assets_have", "hashes": assetHashes()])
@@ -453,26 +541,31 @@ public final class LinkSync {
         for (space, regions) in watchHints {
             for (region, hints) in regions { s.send(["t": "hints", "space": space, "region": region, "hints": hints]) }
         }
-        Task { await loop(s) }
     }
 
     private func loop(_ s: Session) async {
         do {
             while let (h, body) = try await s.next() { handle(h, body, s) }
         } catch {
-            linkLog.error("Dropping the Link session: \(error.localizedDescription, privacy: .public)")
+            linkLog.error("Dropping the \(s.transport, privacy: .public) path: \(error.localizedDescription, privacy: .public)")
         }
         s.close()
-        if session === s {
-            session = nil
+        let wasActive = paths.remove(s)
+        publishPaths()
+        if paths.isEmpty {
             for (_, space) in replicas { space.resetSync(peer: s.peer.device) }
             state = .offline("Reconnecting to \(s.peer.name)")
-            reconnectSoon(after: 1)
+        } else if wasActive, let next = paths.active {
+            // What was in flight on the lost path may be gone: start over on the one that is left.
+            linkLog.info("Lost the \(s.transport, privacy: .public) path; now sending over \(next.transport, privacy: .public)")
+            fresh(next)
         }
+        // The ticker redials peer-to-peer; LAN and the Relay are dialed here.
+        if s.transport != "p2p" { reconnectSoon(after: 1) }
     }
 
     private func pump(_ id: String, _ s: Session) {
-        guard session === s, let space = replicas[id], let msg = space.syncMessage(peer: s.peer.device) else { return }
+        guard paths.active === s, let space = replicas[id], let msg = space.syncMessage(peer: s.peer.device) else { return }
         s.send(["t": "sync", "space": id], msg)
     }
 
@@ -486,7 +579,7 @@ public final class LinkSync {
                     persist(id)
                     publishSpaces()
                 }
-                pump(id, s)
+                if let a = paths.active { pump(id, a) }
             }
         case "sync":
             guard let id = h["space"] as? String, let space = replicas[id] else { return }
@@ -502,7 +595,7 @@ public final class LinkSync {
                 persist(id)
                 revision[id, default: 0] += 1
             }
-            pump(id, s)
+            if let a = paths.active { pump(id, a) }
         case "assets_have":
             let have = Set(assetHashes())
             let want = (h["hashes"] as? [String] ?? []).filter { $0.count == 64 && !have.contains($0) && incoming[$0] == nil }
@@ -519,9 +612,10 @@ public final class LinkSync {
             if let data = try? JSONEncoder().encode(known) { try? data.write(to: Self.linkDir.appending(path: "agents.json"), options: .atomic) }
         case "asset_want":
             for hash in h["hashes"] as? [String] ?? [] {
-                if let bytes = try? Data(contentsOf: Self.assetsDir.appending(path: hash)) { sendAsset(hash, bytes, s) }
+                if let bytes = try? Data(contentsOf: Self.assetsDir.appending(path: hash)), let a = paths.active { sendAsset(hash, bytes, a) }
             }
         case "ping":
+            // Answered on the path it came on, so each path's RTT is its own.
             s.send(["t": "pong", "n": h["n"] ?? 0, "at": h["at"] ?? 0])
         case "relay":
             guard let url = h["url"] as? String, let room = h["room"] as? String else { return }
@@ -531,11 +625,19 @@ public final class LinkSync {
                 Self.writeSecret(info, to: Self.linkDir.appending(path: "relay.json"))
                 linkLog.info("The Link syncs through the Relay at \(url, privacy: .public)")
             }
+        case "pong":
+            guard let at = (h["at"] as? NSNumber)?.int64Value else { return }
+            s.recordRtt(Double(Self.now() - at))
+            let from = paths.active
+            if let to = paths.evaluate() {
+                linkLog.info("Now sending over \(to.transport, privacy: .public) (\(to.rttMs ?? -1) ms) instead of \(from?.transport ?? "-", privacy: .public) (\(from?.rttMs ?? -1) ms)")
+                publishPaths()
+            }
         case "agent_request":
             guard let id = h["id"] as? String, !agentRequests.contains(where: { $0.id == id }) else { return }
             agentRequests.append(AgentRequest(id: id, name: h["name"] as? String ?? id, color: h["color"] as? String ?? "violet"))
         default:
-            return // pong, and anything from a newer Link
+            return // anything from a newer Link
         }
     }
 
