@@ -133,7 +133,7 @@ The format is flat and typed. Agents name things; Reflex computes geometry. Each
   Each trigger and action is a fixed protocol item; new combinations need nothing new.
 - **`define` saves an Agent's invention to the Library**: `{ "op": "define", "kind": "recipe" | "embed", "name": "...", "params": {...}, "template": ... }`. It is validated like any extension, appears in `read_me("index")` for every Agent, and the user can rename or delete it.
 - **The JSON Schema stays shallow**, with one level of `oneOf`, because strict tool modes in some harnesses handle deep unions badly.
-- **Repair first, warn second, reject last.** Rejection is all-or-nothing and lists every failing op. Each error comes with a `fix`, for example "No Element 'n-gatway'. Closest: 'n-gateway'." Results report:
+- **Repair first, warn second, reject last.** Rejection is all-or-nothing and lists every failing op. Each error comes with a stable `reason` and a `fix`, for example `reason: "unknown_id"` with "No Element 'n-gatway'. Closest: 'n-gateway'." Results report:
   - `batch`
   - generated `ids`
   - `repaired`
@@ -330,10 +330,10 @@ Cloud execution runs inside the Durable Object first. If a real Space runs out o
 ## 10. Repository layout
 
 ```
-protocol/            schema/, generated/, examples/, spec/          (Reflex Protocol)
+protocol/            schema/, generated/, examples/, tool-text/ (hand-written), spec/   (Reflex Protocol)
 kernel/              Rust crate + uniffi + wasm bindings
 agent/               TypeScript: capabilities/, surfaces/{mcp,cli}/, projection/, lints/,
-                     recipes-loader/, exec/, delivery/, tool-text/ (hand-written)
+                     recipes-loader/, exec/, delivery/
 link/                TypeScript composition: storage/, sync/, transports/, pairing/, render-headless/
 relay/               TypeScript: domain/, cloudflare/, node/
 apps/ipad/           Swift app + Packages/{ReflexKernel (UniFFI), ReflexRender, ReflexInput, ReflexEmbed}
