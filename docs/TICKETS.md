@@ -597,6 +597,58 @@ Prove it with a real Claude Code session: the Agent places a multi-part model (a
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
 
+## Step 8 tickets (scenarios)
+
+```md
+# Scenarios 3–5: CAD redlines, chart markup and teacher grading, end to end
+
+## Goal
+Make SPEC §16 scenarios 3, 4 and 5 work end to end with a real Agent, using only what Reflex already has plus the Guides, Recipes and Embed Templates each one needs (no new tools). When this is done:
+- **3. CAD / 3D.** A model next to its feature tree (a Panel or a native list). The person moves a part, redlines a pocket with a written note ("offset 10 mm from outline"), and sketches a dimensioned rib. The Agent gets each mark tied to the part or feature it names, with the written text recognised, and answers or updates the tree.
+- **4. Chart markup.** A grid of exploratory charts. The person lassoes outliers ("what are these?"), crosses out a chart, and draws the expected trend on another. Marks come back in data coordinates (the rows lassoed, the trend as data points), and the Agent answers about those rows.
+- **5. Teacher grading.** A scanned paper (an image or PDF page) with the Agent's proposed marks as an overlay. The teacher taps to accept a mark, strikes one out and writes their own. Scores and feedback come back against a rubric.
+- Each scenario has a Guide (`read_me`) and the Recipes an Agent needs to set it up in one or two calls.
+
+Prove each scenario with a real Claude Code session on the iPad Simulator, from an empty Space: the Agent sets it up, you do what the scenario says, and the Agent answers correctly from the Send alone.
+
+## Context
+- Read docs/SPEC.md §16 (scenarios 3–5), §5 and §11; docs/ARCHITECTURE.md §4.2 (Recipes, `define`), §5 (the extension ladder); extensions/README.md.
+- What exists on main: everything through T22 and T18. T18 built the 3D Embed with part maps (`read_me("3d")`); T16 the chart Embed with data Anchors; T13 Regions, grading and `check-my-work`; T12 LaTeX and Regions on the iPad; T7 Panels, voice and imports. Guides live in `extensions/guides/`, Recipes in `extensions/recipes/`, Embed Templates in `extensions/embeds/`.
+- Carried over (docs/TICKETS.md, "Follow-ups"): Mark IDs are looked up per Agent, not per Space; Marks re-fork the Space once per Mark and nothing caps how many Elements one Mark lists (T13); the T16 and T18 open nits; a refused Panel save on the iPad isn't retried; each device keeps its own 3D camera.
+- T20 (scenarios 6–13) runs at the same time and also adds Guides and Recipes. Keep to your scenarios' files; whoever merges second rebases. T11 (peer-to-peer) may also be open in `link/` and the iPad's connection code.
+- Codex's usage limit resets at 2026-11-12 13:06; after that, also run one scenario from a Codex session.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
+```md
+# Scenarios 6–13: the remaining Recipes and Guides
+
+## Goal
+Make SPEC §16 scenarios 6 to 13 work end to end with a real Agent, each through Guides, Recipes and Embed Templates (no new tools): UI/HTML prototype markup (marks anchor to DOM nodes), writing/paper markup (the Agent changes only what was marked), morning experiment review (loss curves, an ablation table, tick or kill queued runs), kanji/hanzi practice (guide boxes, stroke order and proportion feedback), sketch critique (corrections on a toggleable overlay, the original never touched, one drill), 3D anatomy learning (rotate a heart, label vessels by Pencil, a quiz), weekly planning/journal (drag time blocks, handwritten journal, the Agent updates a calendar), and a lab plate map (tap wells, "row C contaminated", the notebook entry comes back).
+- Each scenario has a Guide and the Recipes or Embed Templates it needs, listed in `read_me("index")`.
+- Fix the T10 follow-ups carried here.
+
+Prove each scenario with a real Claude Code session on the iPad Simulator, from an empty Space: the Agent sets it up, you do what the scenario says, and the Agent answers correctly from the Send alone. Where a scenario needs real handwriting or a Pencil-only gesture, use the closest Simulator stand-in and list what's left for a real-iPad pass.
+
+## Context
+- Read docs/SPEC.md §16 (scenarios 6–13), §5 and §11; docs/ARCHITECTURE.md §4.2, §5; extensions/README.md.
+- What exists on main: everything through T22 and T18 (3D Embed with part maps, chart Embed with data Anchors, HTML Embeds with Anchors and `setState`, Panels, Behaviors, Regions, LaTeX, voice, imports, shared Spaces). Guides live in `extensions/guides/`, Recipes in `extensions/recipes/`, Embed Templates in `extensions/embeds/`.
+- Carried over (docs/TICKETS.md, "Follow-ups"): Library entries can't be renamed or deleted yet; `read_me(<type>)` returns `unknown_topic` for Element types listed in the index; example values for a number with maximum below 1 come out as 1; the web viewer says "Offline, retrying" after a 401 (T10). Also the T16 and T18 open nits that touch your scenarios.
+- T19 (scenarios 3–5) runs at the same time and also adds Guides and Recipes. Keep to your scenarios' files; whoever merges second rebases. T11 (peer-to-peer) may also be open.
+- Codex's usage limit resets at 2026-11-12 13:06; after that, also run one scenario from a Codex session.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
@@ -629,3 +681,4 @@ Found while building earlier tickets. Each goes into the named ticket's brief.
 - **T22 (done):** a pairing code cut short inside the person ID is refused, on the Link and the iPad (T14). **Open (T22):** people share only through the owner's Link (members' Links don't sync directly); Agents of someone a Space is shared with can't be approved for it; the web viewer shows others but doesn't report its own cursor; key ordering between one person's two Links; a Send's image arrives late on the owner's side, so the Bundle uses a re-rendered image; a one-time "refused a connection … not valid JSON" when two Links dial each other through the Relay at once; one more presence test the reviewer suggested.
 - **ARCHITECTURE decision (T22):** §7.2 checks roles against the writer's own history; T22 checks against the receiver's newest share record, so edits made offline before a downgrade are refused when they arrive. Add a note to §7.2 or make it a follow-up.
 - **Build note:** the iPad app's kernel xcframework has no x86_64 Simulator slice, so `generic/platform=iOS Simulator` builds fail to link; build with `ARCHS=arm64` or a named Simulator.
+- **T18 (done):** `look` and Send images draw 3D models. **Open (T18):** a refused Panel save on the iPad isn't retried (T16); on the iPad, model textures, skins and animation aren't read and a `.gltf` must embed its buffers; parts move only on the iPad and only by position; each device keeps its own camera, so a circle drawn on the iPad doesn't line up in the web viewer; `look` shows small glitches on some faces and a USDZ as a placeholder; a metallic part looked off-colour after a drag. Declined nits: an `http://` link gets a misleading error; the web viewer lets a Mark name a hidden part; an Element on top of a 3D Embed doesn't get the touch; Ink in Send images is misplaced when zoomed.
