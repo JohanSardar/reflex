@@ -117,6 +117,16 @@ final class Model: ObservableObject {
         refresh()
     }
 
+    func redo() {
+        do {
+            note("redo → \(try space.redo(person: person, device: device, nowMs: now).prefix(90))")
+        } catch {
+            note("redo failed: \(error)")
+        }
+        persist()
+        refresh()
+    }
+
     func send() {
         let raw = #"{"send":"s-\#(now)","trigger":"button","said":"look at these"}"#
         do {
@@ -212,6 +222,7 @@ struct ContentView: View {
                 Button("Draw stroke") { m.drawStroke() }.accessibilityIdentifier("draw")
                 Button("Move e1 + n-db") { m.roundTwo() }.accessibilityIdentifier("round-two")
                 Button("Undo") { m.undo() }.accessibilityIdentifier("undo")
+                Button("Redo") { m.redo() }.accessibilityIdentifier("redo")
                 Button("Send") { m.send() }.accessibilityIdentifier("send")
             }
             .buttonStyle(.borderedProminent)
