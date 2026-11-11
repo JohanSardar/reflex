@@ -21,6 +21,13 @@ Usage
   reflex link revoke <agent>          Take an approved Agent's access away
   reflex link relay                   The Relay: connection and the grants you gave cloud Agents
   reflex link relay revoke <grant>    End a cloud Agent's grant now
+  reflex link shares                  Shared Spaces: who is in each, with which role, and live invites
+  reflex link join <invite>           Join someone's Space with the invite they sent (reflex://invite?...)
+  reflex link role <space> <person> viewer    Make someone in your Space a viewer
+  reflex link remove <space> <person>         Remove someone from your Space (its key changes)
+
+Sharing a Space: type \`invite <space> [editor|viewer]\` in the Link's terminal, or tap Share on your
+iPad. Making someone an editor needs you too: \`role <space> <person> editor\` there, or the iPad.
 
 Through a Relay (--relay), your devices sync when they aren't on the same network, and each
 Space is kept there as an encrypted log the Relay can't read. A cloud Agent signs in on the
@@ -269,6 +276,25 @@ async function main(): Promise<void> {
       const lines = [`${r.url} · ${r.connected ? "connected" : "not connected"} · ${r.logs} Spaces in its encrypted log`, `Grants (${r.grants.length})`];
       for (const g of r.grants) lines.push(`  ${g.gid}  ${g.status.padEnd(8)} ${g.space.padEnd(16)} ${g.name} (${g.agent}) until ${new Date(g.expires).toLocaleString()}`);
       return out(lines.join("\n"), r);
+    }
+    case "shares": {
+      type S = { space: string; owner: { name: string }; role: string | null; members: { person: { id: string; name: string }; role: string }[]; epoch: number };
+      const r = await admin<{ shares: S[]; invites: { invite: string; space: string; role: string; expires: number }[] }>("share.list");
+      const lines = r.shares.map((s) => `${s.space.padEnd(16)} ${s.owner.name}'s · you: ${s.role ?? "removed"} · key epoch ${s.epoch}\n${s.members.map((m) => `    ${m.person.name} (${m.person.id}) ${m.role}`).join("\n")}`);
+      for (const i of r.invites) lines.push(`invite ${i.invite} to '${i.space}' as ${i.role}, until ${new Date(i.expires).toLocaleString()}`);
+      return out(lines.join("\n") || "No shared Spaces yet.", r);
+    }
+    case "join": {
+      if (!args[1]) throw new LinkError("usage", "Which invite? reflex link join '<invite>'", "Paste the whole reflex://invite?... the owner sent.");
+      const r = await admin<{ space: string; role: string; owner: { name: string } }>("share.join", { uri: args[1] });
+      return out(`Joined '${r.space}', ${r.owner.name}'s Space, as ${r.role === "editor" ? "an editor" : "a viewer"}.`, r);
+    }
+    case "role":
+    case "remove": {
+      const [, space, person, role] = args;
+      if (!space || !person) throw new LinkError("usage", `reflex link ${cmd} <space> <person>${cmd === "role" ? " viewer" : ""}`, "Run reflex link shares to see who is in each Space.");
+      const r = await admin(cmd === "role" ? "share.role" : "share.remove", { space, person, role });
+      return out(JSON.stringify(r, null, 2), r);
     }
     case "dev":
       return dev();

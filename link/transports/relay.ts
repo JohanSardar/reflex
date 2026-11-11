@@ -108,7 +108,8 @@ class RelayPath implements Path {
 type Pending = { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
 
 export class RelayTransport implements Transport {
-  readonly name = "relay";
+  /** "relay" for this person's own room; another name for a room shared with someone else (link/sharing.ts). */
+  readonly name: string;
   readonly url: string;
   #key: DeviceKey;
   #room: () => string;
@@ -132,7 +133,8 @@ export class RelayTransport implements Transport {
   /** A log this device watches has new entries. */
   onLogNew: (log: string, last: number) => void = () => {};
 
-  constructor(o: { url: string; key: DeviceKey; room: () => string; watch: () => string[]; log: (m: string) => void }) {
+  constructor(o: { url: string; key: DeviceKey; room: () => string; watch: () => string[]; log: (m: string) => void; name?: string }) {
+    this.name = o.name ?? "relay";
     this.url = o.url.replace(/\/+$/, "");
     this.#key = o.key;
     this.#room = o.room;
@@ -217,7 +219,7 @@ export class RelayTransport implements Transport {
       }
       this.#pending.clear();
       this.#online.clear();
-      if (was) this.#log(`relay: disconnected from ${this.url} (${ev.code}${ev.reason ? ` ${ev.reason}` : ""})`);
+      if (was && this.name === "relay") this.#log(`relay: disconnected from ${this.url} (${ev.code}${ev.reason ? ` ${ev.reason}` : ""})`);
       if (this.#stopped) return;
       const t = setTimeout(() => this.#connect(), this.#backoff);
       t.unref();
@@ -236,7 +238,7 @@ export class RelayTransport implements Transport {
       case "welcome":
         this.#ready = true;
         this.#backoff = 500;
-        this.#log(`relay: connected to ${this.url} as ${this.#key.device}`);
+        if (this.name === "relay") this.#log(`relay: connected to ${this.url} as ${this.#key.device}`);
         this.#sendWatch();
         this.onReady();
         return;

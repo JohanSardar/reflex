@@ -11,6 +11,9 @@ import { DEVICE_ID, frame, helloText, LOG_ID, MAX_FRAME, unframe, type Grant } f
 
 type Msg = Record<string, unknown> & { t?: string; req?: unknown };
 
+/** Whether a socket accepts frames from `device`: it watches it, or anyone in the room (`*`, an invite room). */
+const watches = (s: Sock, device: string): boolean => s.state.watch.includes(device) || s.state.watch.includes("*");
+
 export class Room {
   readonly id: string;
   #sockets: () => Sock[];
@@ -84,7 +87,7 @@ export class Room {
   /** Tells every socket watching `device` that it came or went. */
   #presence(device: string, online: boolean, joined = false): void {
     const msg = JSON.stringify(joined ? { t: "presence", device, online, joined } : { t: "presence", device, online });
-    for (const o of this.#authed()) if (o.state.device !== device && o.state.watch.includes(device)) o.send(msg);
+    for (const o of this.#authed()) if (o.state.device !== device && watches(o, device)) o.send(msg);
   }
 
   closed(s: Sock): void {
@@ -99,7 +102,7 @@ export class Room {
     if (!f || data.length > MAX_FRAME + 64) return s.close(4400, "malformed frame");
     const me = s.state.device!;
     const to = this.#byDevice(f.device);
-    if (!to || !to.state.watch.includes(me)) {
+    if (!to || !watches(to, me)) {
       s.send(JSON.stringify({ t: "undeliverable", device: f.device, ch: f.ch }));
       return;
     }
@@ -116,15 +119,16 @@ export class Room {
     };
     switch (m.t) {
       case "watch": {
-        const devices = (Array.isArray(m.devices) ? m.devices : []).map(String).filter((d) => DEVICE_ID.test(d)).slice(0, 256);
+        const devices = (Array.isArray(m.devices) ? m.devices : []).map(String).filter((d) => DEVICE_ID.test(d) || d === "*").slice(0, 256);
         s.state = { ...st, watch: devices };
         const online = new Set(this.#authed().map((o) => o.state.device));
-        for (const d of devices) s.send(JSON.stringify({ t: "presence", device: d, online: online.has(d) }));
+        const any = devices.includes("*");
+        for (const d of any ? [...online].filter((d) => d !== st.device) : devices) s.send(JSON.stringify({ t: "presence", device: d, online: online.has(d) }));
         return;
       }
       case "close": {
         const to = this.#byDevice(String(m.device ?? ""));
-        if (to?.state.watch.includes(st.device!)) to.send(JSON.stringify({ t: "close", device: st.device, ch: Number(m.ch) }));
+        if (to && watches(to, st.device!)) to.send(JSON.stringify({ t: "close", device: st.device, ch: Number(m.ch) }));
         return;
       }
       case "log.append":

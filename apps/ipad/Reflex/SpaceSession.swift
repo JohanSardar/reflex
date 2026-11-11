@@ -53,6 +53,8 @@ final class SpaceSession {
     @ObservationIgnored private var stateTimer: Task<Void, Never>?
     /// Panel values entered here and not yet saved, by Element and component, so the scene doesn't overwrite them.
     @ObservationIgnored private var unsavedPanel: [String: Set<String>] = [:]
+    /// How many times the Link made this Space start over here (it refused changes from this iPad).
+    @ObservationIgnored private var seenResets = 0
 
     init(id: String, link: LinkSync) {
         self.id = id
@@ -79,8 +81,15 @@ final class SpaceSession {
             self.link.reportPresence(space: self.id, pen: down)
         }
         embeds.onEvent = { [weak self] key, event in self?.embedEvent(key, event) }
+        // Where the pen or finger is, for the other people in a shared Space.
+        ink.onCursor = { [weak self] p in self?.link.reportCursor(p) }
+        seenResets = link.resets[id] ?? 0
         refresh()
     }
+
+    /// This person's role here: "owner", "editor", "viewer", or nil once the owner removed them.
+    var role: String? { link.role(id) }
+    var share: ShareInfo? { link.shares[id] }
 
     /// Reads the scene again when the Space changed, here or on the Link.
     func refresh() {
@@ -89,12 +98,21 @@ final class SpaceSession {
             embeds.templates = Dictionary(link.embedTemplates().map { ($0.name, EmbedHost.Template(html: $0.html, allow: $0.allow, source: $0.source)) }) { a, _ in a }
         }
         let r = link.revision[id] ?? 0
+        // A viewer, or someone the owner removed, can't draw or erase here.
+        ink.readOnly = role == "viewer" || role == nil
         guard r != seen, let json = link.scene(id) else { return }
         seen = r
         do {
             scene = try SceneDocument.decode(json)
         } catch {
             log.error("Could not read the scene of \(self.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+        // The Link refused this iPad's changes and the Space started over: take back the strokes it didn't keep.
+        if let n = link.resets[id], n != seenResets {
+            seenResets = n
+            let kept = Set(scene.elements.map(\.id))
+            ink.withdraw(ink.strokes.map(\.id).filter { !kept.contains($0) })
+            say(role == "viewer" ? "Your stroke wasn't kept: \(share?.owner.name ?? "the owner") made you a viewer here." : "Your changes weren't kept: you're no longer in this Space.")
         }
         // Ink this canvas didn't draw came from another device: draw it from its raw points.
         let local = Set(ink.strokes.map(\.id))
@@ -233,12 +251,15 @@ final class SpaceSession {
     }
 
     private func touched(_ p: CGPoint, trigger: String) {
+        // What the person picked shows on the other people's screens.
+        link.reportCursor(p, selection: element(at: p, where: { _ in true }).map { [$0.id] } ?? [])
         guard let e = element(at: p, where: { !$0.behaviors(on: trigger).isEmpty }) else { return }
         fire(e, on: trigger)
     }
 
     private func drag(from start: CGPoint, by: CGSize, ended: Bool) {
         guard let e = element(at: start, where: { $0.draggable == true && $0.locked != true }) else { return }
+        link.reportCursor(CGPoint(x: start.x + by.width, y: start.y + by.height), selection: [e.id])
         guard ended else {
             dragging = (e.id, by)
             return
@@ -471,6 +492,8 @@ final class SpaceSession {
     private func refusedInk() {
         guard Date().timeIntervalSince(refusedAt) > 2 else { return }
         refusedAt = Date()
+        if role == "viewer" { return say("You can view this Space: \(share?.owner.name ?? "its owner") made you a viewer.") }
+        if role == nil { return say("\(share?.owner.name ?? "The owner") removed you from this Space.") }
         say("Writing isn't allowed in this area")
     }
 

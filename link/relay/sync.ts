@@ -13,10 +13,16 @@
 //
 // A grant is issued only from the Link's own terminal, after the person typed
 // the code the Relay's sign-in page showed them (link/link.ts).
+//
+// A shared Space's key comes from its owner's Link with the share record
+// (link/sharing.ts), and every member's Link writes the same log. Entries by
+// another member's Link are taken in as that member's role allows. Removing
+// someone moves the Space to a new key (`rotate`): a new log, which the
+// removed person's devices can't name or read.
 import { createHash, randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { Space } from "@reflex/kernel/node";
-import type { Catalog } from "../pairing/catalog.ts";
+import type { Catalog, PairedDevice } from "../pairing/catalog.ts";
 import { b64, signWith, unb64, verifyFrom, type DeviceKey } from "../pairing/crypto.ts";
 import type { AssetStore } from "../storage/assets.ts";
 import type { SpaceStore } from "../storage/journal.ts";
@@ -94,7 +100,15 @@ export class RelaySync {
   /** Sends whose crops are all on the relay, per Space. */
   #scanned = new Map<string, Set<string>>();
   #pushTimers = new Map<string, NodeJS.Timeout>();
+  /** A member's own changes set aside before another person's arrived over a session, still to write. */
+  #held = new Map<string, Uint8Array[]>();
+  /** The heads a push now on its way to the Relay will mark as written, and what to mark instead when other people's changes came in meanwhile. */
+  #inflight = new Map<string, { heads: string; after?: string }>();
   #connected: (device: string) => boolean;
+  #syncs: (space: string) => boolean;
+  #role: (space: string) => "owner" | "editor" | "viewer" | null;
+  #writers: (d: PairedDevice | undefined, space: string) => string;
+  #device: (id: string, space: string) => PairedDevice | undefined;
 
   constructor(o: {
     db: DatabaseSync;
@@ -106,8 +120,20 @@ export class RelaySync {
     person: () => { id: string; name: string };
     /** Whether a device is in an end-to-end session with this Link right now. */
     connected: (device: string) => boolean;
+    /** Whether a Space goes to the log at all: not one this person was removed from. */
+    syncs?: (space: string) => boolean;
+    /** This person's role in a Space (link/sharing.ts): only an owner writes it whole, and a viewer writes nothing. */
+    role?: (space: string) => "owner" | "editor" | "viewer" | null;
+    /** Who a device's changes to a Space may be written for (link/sharing.ts). */
+    writers: (d: PairedDevice | undefined, space: string) => string;
+    /** A device by ID: a paired one, or another member's Link in that shared Space. */
+    device?: (id: string, space: string) => PairedDevice | undefined;
     log: (m: string) => void;
   }) {
+    this.#syncs = o.syncs ?? (() => true);
+    this.#role = o.role ?? (() => "owner");
+    this.#writers = o.writers;
+    this.#device = o.device ?? ((id) => o.catalog.device(id));
     this.#connected = o.connected;
     this.#db = o.db;
     this.#store = o.store;
@@ -160,10 +186,10 @@ export class RelaySync {
    * Space keys from another Link of this person. Two Links that each made a key for the same Space
    * both keep the one whose log ID sorts first, so they end up writing one log.
    */
-  importKeys(keys: { space: string; key: string }[], from: string): void {
+  importKeys(keys: { space: string; key: string }[], from: string, skip: (space: string) => boolean = () => false): void {
     for (const k of keys ?? []) {
       const key = Buffer.from(String(k.key), "base64url");
-      if (key.length !== 32 || typeof k.space !== "string") continue;
+      if (key.length !== 32 || typeof k.space !== "string" || skip(k.space)) continue;
       const mine = this.#db.prepare("SELECT key FROM relay_spaces WHERE space = ?").get(k.space) as { key: Uint8Array } | undefined;
       if (mine && Buffer.from(mine.key).equals(key)) continue;
       if (mine && spaceKeys(mine.key).log < spaceKeys(key).log) continue;
@@ -177,6 +203,45 @@ export class RelaySync {
     }
   }
 
+  /** A Space's key, for a member of it (sent only over an end-to-end session). */
+  keyOf(space: string): string | undefined {
+    const row = this.#db.prepare("SELECT key FROM relay_spaces WHERE space = ?").get(space) as { key: Uint8Array } | undefined;
+    return row && Buffer.from(row.key).toString("base64url");
+  }
+
+  /** A shared Space's key from its owner's Link: it replaces this Link's own, and its log is read from the start. */
+  setKey(space: string, b64key: string, from: string): void {
+    const key = Buffer.from(String(b64key), "base64url");
+    if (key.length !== 32) return;
+    const mine = this.#db.prepare("SELECT key FROM relay_spaces WHERE space = ?").get(space) as { key: Uint8Array } | undefined;
+    if (mine && Buffer.from(mine.key).equals(key)) return;
+    this.#replaceKey(space, key);
+    this.#log(`relay: '${space}' now uses ${from}'s key for its encrypted log`);
+  }
+
+  /** A new key for a Space (someone was removed): later changes go to a new log only its members can read. */
+  rotate(space: string): void {
+    this.#replaceKey(space, randomBytes(32));
+    this.#log(`relay: '${space}' has a new key; from now on its changes go to a new encrypted log (${this.keys(space).log.slice(0, 12)}…)`);
+  }
+
+  /** This person was removed from a shared Space: its log is no longer theirs to read or write. */
+  dropKey(space: string): void {
+    this.#db.prepare("DELETE FROM relay_spaces WHERE space = ?").run(space);
+    this.#db.prepare("DELETE FROM relay_logs WHERE space = ?").run(space);
+    this.#db.prepare("DELETE FROM relay_assets WHERE space = ?").run(space);
+    this.#watching.delete(space);
+  }
+
+  #replaceKey(space: string, key: Buffer): void {
+    this.#db.prepare("INSERT INTO relay_spaces (space, key) VALUES (?, ?) ON CONFLICT (space) DO UPDATE SET key = excluded.key").run(space, key);
+    this.#db.prepare("DELETE FROM relay_logs WHERE space = ?").run(space);
+    this.#db.prepare("DELETE FROM relay_assets WHERE space = ?").run(space);
+    this.#watching.delete(space);
+    this.#scanned.delete(space);
+    if (this.#store.has(space)) this.#queue(space, () => this.#sync(space));
+  }
+
   #spaceForLog(log: string): string | undefined {
     for (const r of this.#db.prepare("SELECT space, key FROM relay_spaces").all() as { space: string; key: Uint8Array }[])
       if (spaceKeys(r.key).log === log) return r.space;
@@ -185,7 +250,7 @@ export class RelaySync {
 
   #queue(space: string, fn: () => Promise<void>): Promise<void> {
     const run = (this.#chains.get(space) ?? Promise.resolve())
-      .then(() => (this.#t.connected ? fn() : undefined))
+      .then(() => (this.#t.connected && this.#syncs(space) ? fn() : undefined))
       .catch((e: Error) => this.#log(`relay: ${space}: ${e.message}`));
     this.#chains.set(space, run);
     return run;
@@ -208,17 +273,76 @@ export class RelaySync {
   }
 
   /** Sends what the log doesn't have yet. */
+  /**
+   * Takes in another person's changes to a Space that came over a session (a member hears the owner's
+   * Link). For a member those are the owner's Link's to write to the log: other members check this
+   * Link's entries by this person's role and would refuse them. So this Link's own unwritten changes
+   * are set aside first, and what arrives is marked as already written.
+   */
+  aside(space: string, apply: () => string): string {
+    if (this.#role(space) !== "editor" || !this.#store.has(space)) return apply();
+    const flying = this.#inflight.get(space);
+    const written = flying?.heads ?? this.#row(space).pushed;
+    if (written === "[]") return apply(); // nothing written yet: the first push only marks where this Link starts
+    const before = this.#store.read(space, (s) => s.heads());
+    const own = written !== before ? this.#store.read(space, (s) => s.changesSince(written)) : null;
+    const r = apply();
+    const after = this.#store.read(space, (s) => s.heads());
+    if (after === before) return r; // nothing new: this Link's own changes go out as usual
+    if (flying) flying.after = after;
+    else this.#db.prepare("UPDATE relay_logs SET pushed = ? WHERE relay = ? AND space = ?").run(after, this.#t.url, space);
+    // Heads that include the other person's changes don't mark this Link's own as written: send those now.
+    if (own) {
+      this.#held.set(space, [...(this.#held.get(space) ?? []), own]);
+      void this.#queue(space, () => this.#push(space));
+    }
+    return r;
+  }
+
   async #push(space: string): Promise<void> {
     if (!this.#store.has(space)) return;
     const keys = this.keys(space);
+    const role = this.#role(space);
+    if (role === "viewer" || role === null) {
+      this.#held.delete(space);
+      return this.#watch(space, keys);
+    }
+    for (let held = this.#held.get(space); held?.length; held = this.#held.get(space)) {
+      const seq = await this.#append(space, keys, held[0], false);
+      this.#log(`relay: pushed ${held[0].length} bytes of '${space}' set aside (entry ${seq})`);
+      held.shift();
+      if (!held.length) this.#held.delete(space);
+    }
     const { pushed, since_snapshot } = this.#row(space);
     const heads = this.#store.read(space, (s) => s.heads());
     if (heads === pushed) return this.#watch(space, keys);
+    // A member writes only its own new changes to a shared Space's log, never the whole Space: earlier
+    // ones are the owner's Link's to pass on, and other members check this Link's entries by its role.
+    if (role === "editor" && pushed === "[]") {
+      this.#db.prepare("UPDATE relay_logs SET pushed = ? WHERE relay = ? AND space = ?").run(heads, this.#t.url, space);
+      return this.#watch(space, keys);
+    }
     let bytes: Uint8Array = this.#store.read(space, (s) => s.changesSince(pushed));
     // The first push, a long way behind, or enough changes since the last snapshot: the whole Space, compacted.
-    const snapshot = pushed === "[]" || bytes.length > MAX_ENTRY || since_snapshot + bytes.length > SNAPSHOT_AFTER;
+    const snapshot = role === "owner" && (pushed === "[]" || bytes.length > MAX_ENTRY || since_snapshot + bytes.length > SNAPSHOT_AFTER);
     if (snapshot) bytes = this.#store.read(space, (s) => s.save());
     if (bytes.length > MAX_ENTRY) throw new Error(`Space '${space}' is ${bytes.length} bytes, over what one log entry can carry`);
+    const flying = { heads } as { heads: string; after?: string };
+    this.#inflight.set(space, flying);
+    let seq: number;
+    try {
+      seq = await this.#append(space, keys, bytes, snapshot);
+    } finally {
+      this.#inflight.delete(space);
+    }
+    this.#db
+      .prepare("UPDATE relay_logs SET pushed = ?, since_snapshot = ? WHERE relay = ? AND space = ?")
+      .run(flying.after ?? heads, snapshot ? 0 : since_snapshot + bytes.length, this.#t.url, space);
+    this.#log(`relay: pushed ${bytes.length} bytes of '${space}'${snapshot ? " as a snapshot" : ""} (entry ${seq})`);
+    await this.#watch(space, keys);
+  }
+
+  async #append(space: string, keys: SpaceKeys, bytes: Uint8Array, snapshot: boolean): Promise<number> {
     await this.#uploadCrops(space, keys);
     const header = {
       v: 0 as const,
@@ -231,11 +355,7 @@ export class RelaySync {
     };
     const sealed = sealEntry(keys, header, bytes);
     const r = await this.#t.request({ t: "log.append", log: keys.log, token: keys.token, entries: [sealed.toString("base64")], snapshot }, 60_000);
-    this.#db
-      .prepare("UPDATE relay_logs SET pushed = ?, since_snapshot = ? WHERE relay = ? AND space = ?")
-      .run(heads, snapshot ? 0 : since_snapshot + bytes.length, this.#t.url, space);
-    this.#log(`relay: pushed ${bytes.length} bytes of '${space}'${snapshot ? " as a snapshot" : ""} (entry ${(r.seqs as number[])[0]})`);
-    await this.#watch(space, keys);
+    return (r.seqs as number[])[0];
   }
 
   async #watch(space: string, keys: SpaceKeys): Promise<void> {
@@ -341,11 +461,11 @@ export class RelaySync {
     }
     if (header.author.startsWith("device:")) {
       const device = header.author.slice(7);
-      const d = this.#catalog.device(device);
-      if (!d || !header.sig || !verifyFrom(unb64(d.key), createHash("sha256").update(bytes).digest(), header.sig)) return skip("is not signed by a paired device");
+      const d = this.#device(device, space);
+      if (!d || !header.sig || !verifyFrom(unb64(d.key), createHash("sha256").update(bytes).digest(), header.sig)) return skip("is not signed by a paired device or a member's Link");
       // A device this Link is in sync with right now sends the same changes over its own session.
       if (this.#connected(device)) return null;
-      return { writers: JSON.stringify(d.kind === "ipad" ? { people: [d.person.id] } : { people: [d.person.id], agents: "*" }), bytes, author: header.author };
+      return { writers: this.#writers(d, space), bytes, author: header.author };
     }
     return null;
   }

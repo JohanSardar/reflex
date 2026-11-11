@@ -106,7 +106,12 @@ public struct PairingOffer: Sendable {
         guard let p = UInt16(try need("p")) else { throw LinkError.badCode("The pairing code's port is damaged.") }
         port = p
         name = q["n"] ?? ""
-        person = Person(id: try need("pi"), name: q["pn"] ?? "")
+        // The person comes last in the code, so a code cut short shows here: a damaged ID, or no name after it.
+        let pi = try need("pi")
+        guard pi.count == 14, pi.hasPrefix("p_"), pi.dropFirst(2).allSatisfy({ $0.isHexDigit && !$0.isUppercase }), q["pn"] != nil else {
+            throw LinkError.badCode("The pairing code is cut short. Copy the whole code.")
+        }
+        person = Person(id: pi, name: q["pn"] ?? "")
     }
 }
 

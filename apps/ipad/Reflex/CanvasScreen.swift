@@ -15,6 +15,7 @@ struct CanvasScreen: View {
     @State private var showStrokeIDs = false
     @State private var pairing = false
     @State private var showHistory = false
+    @State private var sharing = false
     @State private var voice = VoiceCapture()
     /// Spaces changed since the person last looked at them (SPEC §4, Attention).
     @State private var lastSeen: [String: Int] = [:]
@@ -36,6 +37,9 @@ struct CanvasScreen: View {
                     .onDrop(of: [.item], delegate: CanvasDrop(session: open))
                 RegionButtons(session: open).ignoresSafeArea()
                 EmbedAllowButtons(session: open).ignoresSafeArea()
+                // Other people here: their cursors and what they picked.
+                HereOverlay(people: here(open.id), scene: open.scene, offset: open.ink.contentOffset, zoom: open.ink.zoomScale)
+                    .ignoresSafeArea()
                 if showStrokeIDs {
                     StrokeIDOverlay(strokes: open.ink.strokes, offset: open.ink.contentOffset, zoom: open.ink.zoomScale)
                         .ignoresSafeArea()
@@ -50,10 +54,21 @@ struct CanvasScreen: View {
                 if let open {
                     InkToolbar(ink: open.ink, showStrokeIDs: $showStrokeIDs)
                     ImportMenu(session: open)
+                    shareButton(open)
                 }
                 connectButton
             }
             .padding(.top, 8)
+        }
+        .overlay(alignment: .topTrailing) {
+            if let open {
+                HStack(spacing: 8) {
+                    HereChips(people: here(open.id))
+                    if open.role == "viewer" { badge("View only", "eye") }
+                    if open.role == nil { badge("Removed", "person.crop.circle.badge.xmark") }
+                }
+                .padding(.top, 68).padding(.trailing, 16)
+            }
         }
         .overlay(alignment: .topLeading) {
             if let open { AgentsBar(session: open, link: link, showHistory: $showHistory).padding(.top, 68).padding(.leading, 16) }
@@ -98,6 +113,7 @@ struct CanvasScreen: View {
             }
         }
         .sheet(isPresented: $pairing) { PairSheet(link: link, code: incomingCode ?? "") }
+        .sheet(isPresented: $sharing) { if let open { ShareSheet(link: link, space: open.id) } }
         .sheet(isPresented: $showHistory) { if let open { HistorySheet(session: open, link: link) } }
         .alert(
             "Allow \(link.agentRequests.first?.name ?? "this Agent") to use your Spaces?",
@@ -114,6 +130,8 @@ struct CanvasScreen: View {
             open?.refresh()
             if let open { lastSeen[open.id] = link.revision[open.id] ?? 0 }
         }
+        // A new role (made a viewer, removed) applies to the canvas at once, not at the next change.
+        .onChange(of: open.map { link.role($0.id) } ?? "") { _, _ in open?.refresh() }
         .onChange(of: incomingCode) { _, code in if code != nil { pairing = true } }
         // Which Space is on screen, so an Agent's request_attention knows the person is already looking at it.
         .onChange(of: open?.id, initial: true) { _, _ in reportPresence() }
@@ -149,6 +167,30 @@ struct CanvasScreen: View {
         }
         #endif
         .preferredColorScheme(.light)
+    }
+
+    /// Other devices showing this Space now.
+    private func here(_ space: String) -> [HereEntry] {
+        link.here.values.filter { $0.space == space }.sorted { $0.device < $1.device }
+    }
+
+    private func badge(_ text: String, _ icon: String) -> some View {
+        Label(text, systemImage: icon)
+            .font(.system(size: 13, weight: .semibold))
+            .padding(.horizontal, 10).frame(height: 28)
+            .glassEffect()
+            .accessibilityIdentifier("role-badge")
+    }
+
+    private func shareButton(_ open: SpaceSession) -> some View {
+        Button { sharing = true } label: {
+            Image(systemName: open.share == nil ? "person.badge.plus" : "person.2.fill")
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: 48, height: 48)
+                .glassEffect()
+        }
+        .accessibilityIdentifier("share-button")
+        .accessibilityLabel(open.share == nil ? "Share this Space" : "People in this Space")
     }
 
     private func reportPresence() {
