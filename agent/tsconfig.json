@@ -12,5 +12,5 @@
     "lib": ["ES2023"],
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "bin/*.mjs", "../kernel/wasm/js/node.ts", "../kernel/wasm/js/wasm.d.ts"]
+  "include": ["src/**/*.ts", "examples/*.ts", "bin/*.mjs", "../kernel/wasm/js/node.ts", "../kernel/wasm/js/wasm.d.ts"]
 }

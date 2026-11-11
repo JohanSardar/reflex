@@ -91,6 +91,18 @@ async function call(tool: string, args: Record<string, unknown>, f: Flags, human
   return 0;
 }
 
+/** Calls the Link's push-target management for this Agent and prints the answer. */
+async function adapters(action: string, args: Record<string, unknown>, f: Flags, human: (j: any) => string[]) {
+  const r = await (await host()).adapters(who(f), action, args);
+  if (r.isError) {
+    process.stderr.write(JSON.stringify(r.json) + "\n");
+    return 1;
+  }
+  if (f.json) out(JSON.stringify(r.json));
+  else for (const line of human(r.json)) out(line);
+  return 0;
+}
+
 const outlineLines = (items: any[]) =>
   items.map((e) => `${e.id.padEnd(14)} ${e.type.padEnd(10)} by ${String(e.by).padEnd(12)} [${e.bounds.join(", ")}]${e.text ? `  ${JSON.stringify(e.text)}` : ""}${e.from ? `  ${e.from} → ${e.to}` : ""}`);
 const tail = (j: any) => (j.pending_sends ? [`📥 ${j.pending_sends} pending Send${j.pending_sends === 1 ? "" : "s"}: reflex wait --timeout 0`] : []);
@@ -341,6 +353,37 @@ const COMMANDS: Record<string, Cmd> = {
         ...tail(r.json),
       ]);
     },
+  },
+  "adapters add": {
+    usage: "reflex adapters add webhook --url <url>",
+    summary: "Have your Sends POSTed to a URL as they arrive (a webhook push target), signed with a secret shown once",
+    flags: ["url"],
+    run: async (p, f) => {
+      const usage = "reflex adapters add webhook --url <url>";
+      const adapter = need(p, 0, "adapter", usage);
+      if (adapter !== "webhook") throw new Usage(`Only a webhook can be added by hand, not '${adapter}'. Usage: ${usage}`);
+      if (typeof f.url !== "string") throw new Usage(`Missing --url. Usage: ${usage}`);
+      return adapters("add", { adapter, config: { url: f.url } }, f, (j) => [
+        `Added ${j.target}: Sends for you are POSTed to ${j.config.url}.`,
+        `Secret: ${j.secret}`,
+        j.next,
+      ]);
+    },
+  },
+  "adapters list": {
+    usage: "reflex adapters list",
+    summary: "List your push targets: webhooks, Claude Code channels and MCP App views",
+    run: (_p, f) =>
+      adapters("list", {}, f, (j) =>
+        j.targets.length
+          ? j.targets.map((t: any) => `${t.target}  ${t.adapter.padEnd(15)} ${t.live ? "live   " : "offline"}  ${t.config.url ?? t.config.harness ?? t.config.host ?? ""}`)
+          : ["No push targets. Add a webhook: reflex adapters add webhook --url <url>"],
+      ),
+  },
+  "adapters remove": {
+    usage: "reflex adapters remove <target>",
+    summary: "Remove one of your push targets and its secret",
+    run: (p, f) => adapters("remove", { target: need(p, 0, "target", "reflex adapters remove <target>") }, f, (j) => [`Removed ${j.removed}.`]),
   },
   mcp: {
     usage: "reflex mcp [--channel]",

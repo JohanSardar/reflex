@@ -14,6 +14,9 @@ import { openDb } from "../storage/db.ts";
 import { Inbox } from "../storage/inbox.ts";
 import { SpaceStore } from "../storage/journal.ts";
 
+// These tests are about asking again, not about how long the Link waits before it may (agent-host.ts).
+process.env.REFLEX_REASK_S = "0";
+
 /** What `reflex mcp` and the CLI do on the Agent layer's socket. */
 class Surface {
   #sock: ReturnType<typeof connect>;

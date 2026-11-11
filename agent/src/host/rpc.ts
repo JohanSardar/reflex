@@ -48,6 +48,8 @@ export type ClientFrame =
   | { t: "cancel"; id: number }
   /** Opens a push target for this Agent (a Send Adapter on this connection), held until the connection closes. */
   | { t: "listen"; id: number; who: Who; adapter: string; config: Record<string, unknown> }
+  /** Manages this Agent's own push targets that need no live connection (a webhook): add, list, remove. */
+  | { t: "adapters"; id: number; who: Who; action: string; args: Record<string, unknown> }
   /** The answer to a push: whether the Send reached the harness. */
   | { t: "pushed"; push: number; ok: boolean; reason?: string };
 

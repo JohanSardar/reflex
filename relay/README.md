@@ -62,6 +62,8 @@ Then `reflex link --relay wss://relay.example.com` on each of your Links.
 3. The Link signs a grant for that Space and sends it, with the Space key, to the Relay. The page continues, the client gets an access token, and every MCP call from then on runs in a cloud session on that one Space.
 4. `reflex link relay` lists grants; `reflex link relay revoke <grant>` ends one at once. The Link also stops taking in anything that grant writes, whether or not the Relay heard.
 
+In a chat host that renders MCP Apps (claude.ai, ChatGPT, the reference host), `open_space` also shows Reflex's view, `ui://reflex/space`: the Space, redrawn every 20 s and after each Send. The view holds `wait_for_user` on the session's Inbox through the host and posts each Send to the chat with `ui/message`, so the person's Send starts the Agent's next turn. Once the host took it, the view's next wait acknowledges it. The view only shows the Space; the person draws on their devices.
+
 The Agent writes as its own Agent ID (`a_rc…`), through the kernel's checks, like any Agent. The Link takes its changes in only through the kernel's checked receive, only as that Agent, and only while the grant is live.
 
 | Path | What it is |

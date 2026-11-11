@@ -45,7 +45,15 @@ sees no Space content until it is approved.
   the surfaces, `server.ts` for the Link. Each Agent also presents a
   credential it keeps in `$REFLEX_HOME/agents/` (0600), which is what the
   person approves.
-- `src/surfaces/`: `mcp.ts` (stdio MCP server) and `cli.ts`.
+- `src/surfaces/`: `mcp.ts` (stdio MCP server) and `cli.ts`. `app.ts` and
+  `app-view.ts` are the MCP App view (`ui://reflex/space`, tied to
+  `open_space`) that both `reflex mcp` and the Relay's `/mcp` serve to chat
+  hosts that render MCP Apps: it shows the Space live (`look` every 20 s and
+  after each Send), holds `wait_for_user` through the host, and posts each Send
+  to the chat with `ui/message` as a new turn. `reflex adapters add webhook
+  --url <url>` has the Link POST your Sends to a URL (`reflex adapters list`,
+  `remove`); `examples/webhook-claude.ts` is a receiver that answers each with
+  a `claude -p` turn.
 - `src/library.ts`: the person's Library. `define` ops are checked like any
   extension before they are saved in the Space of kind `library`;
   `read_me("index")` lists every Library entry, and `read_me(<name>)` returns it.

@@ -29,6 +29,8 @@ export type HostOptions = {
   devPerson: boolean;
   /** Registers a push target; returns its ID, or throws a ReflexError when it isn't accepted. */
   listen?: (l: Listener) => string;
+  /** Adds, lists or removes the caller's push targets that need no connection (`reflex adapters`). */
+  adapters?: (who: Identity, action: string, args: Record<string, unknown>) => Record<string, any>;
   log: (event: string, data?: Record<string, unknown>) => void;
 };
 
@@ -117,6 +119,12 @@ export function serveHost(o: HostOptions): Promise<Server> {
           });
           log("listening", { client, who: who.name, adapter: f.adapter, target });
           send({ t: "listening", id, target, agent: who.agent });
+        } else if (f.t === "adapters") {
+          if (!o.adapters) throw new ReflexError("unavailable", [{ code: "unavailable", msg: "This host takes no push targets.", fix: "Use wait_for_user." }]);
+          const who = await o.authorize(f.who, ac.signal);
+          const json = o.adapters(who, String(f.action), f.args && typeof f.args === "object" ? f.args : {});
+          log("adapters", { client, who: who.name, action: f.action });
+          send({ t: "result", id: f.id, json, images: [], isError: false });
         } else if (f.t === "person") {
           if (!o.devPerson)
             throw new ReflexError("unavailable", [{ code: "unavailable", msg: "Acting as the person needs a Link started with --dev.", fix: "Draw and press Send on the iPad, or restart the Link with `reflex link --dev`." }]);

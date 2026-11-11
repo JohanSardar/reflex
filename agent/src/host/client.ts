@@ -103,6 +103,11 @@ export class Client {
     return { target: (r as any).target, agent: (r as any).agent };
   }
 
+  /** This Agent's push targets that need no connection: `add` (adapter, config), `list`, `remove` (target). */
+  adapters(who: Who, action: string, args: Record<string, unknown> = {}) {
+    return this.#request((id) => ({ t: "adapters", id, who, action, args }));
+  }
+
   person(action: string, args: Record<string, any>) {
     return this.#request((id) => ({ t: "person", id, action, args }));
   }

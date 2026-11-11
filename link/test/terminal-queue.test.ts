@@ -9,6 +9,9 @@ import { join } from "node:path";
 import { Link } from "../link.ts";
 import { LinkClient } from "../rpc/client.ts";
 
+// These tests are about asking again, not about how long the Link waits before it may (agent-host.ts).
+process.env.REFLEX_REASK_S = "0";
+
 /** Stands in for the person's terminal: a TTY stdin, and its output captured. */
 function terminal(): { out: () => string; restore: () => void } {
   const stdin = new PassThrough();
