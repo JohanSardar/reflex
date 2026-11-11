@@ -42,6 +42,8 @@ export interface WebSource {
   receive(space: string, peer: string, bytes: Uint8Array): { ok: boolean; errors?: { msg: string }[] };
   onChange(fn: (space: string) => void): void;
   asset?(hash: string): Buffer | undefined;
+  /** Who is in each Space right now (cursors, names, selections), sent to a viewer when it connects; later ones go by `broadcast`. */
+  here?(): Record<string, unknown>[];
 }
 
 export type Extra = (req: IncomingMessage, res: ServerResponse, url: URL, body: () => Promise<Buffer>) => Promise<boolean> | boolean;
@@ -165,6 +167,7 @@ export async function serveWeb(o: WebOptions): Promise<{ server: Server; port: n
         for (const s of o.source.spaces()) o.source.read(s.id, (sp) => sp.resetSync(id));
         write(peer, hello());
         for (const s of o.source.spaces()) pump(s.id, peer);
+        for (const h of o.source.here?.() ?? []) write(peer, { t: "here", ...h });
         const ping = setInterval(() => write(peer, { t: "ping" }), 15_000);
         log(`web viewer ${id} connected`);
         req.on("close", () => {

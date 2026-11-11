@@ -31,8 +31,8 @@ struct PairSheet: View {
                         Button { scanning = true } label: { Label("Scan the QR code", systemImage: "qrcode.viewfinder") }
                     }
                 }
-                Section("Or type the code") {
-                    TextField("reflex://pair?…", text: $code, axis: .vertical)
+                Section("Or type the code, or an invite someone sent you") {
+                    TextField("reflex://pair?… or reflex://invite?…", text: $code, axis: .vertical)
                         .font(.system(.body, design: .monospaced))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -41,7 +41,7 @@ struct PairSheet: View {
                     Button {
                         Task { await pair(code) }
                     } label: {
-                        if busy { ProgressView() } else { Text("Pair") }
+                        if busy { ProgressView() } else { Text(isInvite ? "Join" : "Pair") }
                     }
                     .disabled(busy || code.isEmpty)
                     .accessibilityIdentifier("pair-button")
@@ -63,12 +63,19 @@ struct PairSheet: View {
         }
     }
 
+    private var isInvite: Bool { code.trimmingCharacters(in: .whitespaces).hasPrefix("reflex://invite") }
+
     private func pair(_ text: String) async {
         busy = true
         error = nil
         defer { busy = false }
         do {
-            try await link.pair(code: text)
+            // An invite to someone's shared Space: this iPad's Link presents it to theirs.
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("reflex://invite") {
+                _ = try await link.join(invite: text)
+            } else {
+                try await link.pair(code: text)
+            }
             dismiss()
         } catch {
             self.error = error.localizedDescription
@@ -98,7 +105,7 @@ struct QRScanner: UIViewControllerRepresentable {
 
         func dataScanner(_ scanner: DataScannerViewController, didAdd items: [RecognizedItem], allItems: [RecognizedItem]) {
             for item in items {
-                if case .barcode(let b) = item, let s = b.payloadStringValue, s.hasPrefix("reflex://pair"), !done {
+                if case .barcode(let b) = item, let s = b.payloadStringValue, s.hasPrefix("reflex://pair") || s.hasPrefix("reflex://invite"), !done {
                     done = true
                     scanner.stopScanning()
                     found(s)

@@ -8,6 +8,7 @@ The iPad app: a PencilKit canvas for the user's Ink, with Agent Elements drawn u
 2. On the iPad, tap Connect and scan the code, or paste its text (it starts with `reflex://pair?`). Opening a `reflex://pair?…` link pairs too.
 3. When an Agent opens a Space, it shows up in the Spaces menu (a dot marks Spaces that changed). Draw on it, and press Send to hand your strokes to the Agents in that Space.
 4. The first time an Agent connects, the iPad asks whether to allow it.
+5. To share a Space, tap the people button, pick Editor or Viewer and Make an invite: a QR code and a `reflex://invite?…` code, single use. The other person scans it, opens it, or pastes it in Connect and taps Join. The People list there changes someone's role or removes them. Who else is here shows as named chips at the top right, with their cursors and selections on the canvas; a viewer sees "View only", and someone removed sees "Removed".
 
 The iPad keeps working offline. Strokes and Sends are saved in the kernel first and go out when the Link is back.
 
@@ -74,6 +75,7 @@ Send claims the strokes drawn since the last Send in the kernel (`freeze_send`),
 ## Not yet
 
 - The device key and pairing are files in Application Support, not the Keychain.
+- After a refused change, the iPad starts the Space over from the Link's copy; its own Ink comes back as remote Ink.
 - Remote Ink can't be erased or lassoed from this iPad; only its own Ink is in PencilKit.
 - An MCP App server the person allowed is allowed on this iPad only.
 

@@ -11,12 +11,17 @@ import { serveWeb } from "../agent/src/web/server.ts";
 import type { AssetStore } from "./storage/assets.ts";
 import type { Catalog } from "./pairing/catalog.ts";
 import type { SpaceStore } from "./storage/journal.ts";
+import type { HereEntry, HereMessage } from "./here.ts";
 
 export async function startWebViewer(o: {
   store: SpaceStore;
   assets: AssetStore;
   catalog: Catalog;
   person: () => { id: string; name: string };
+  /** People in Spaces shared with or by this person, for names. */
+  people?: () => { id: string; name: string }[];
+  /** Who is in each Space right now (link/here.ts). */
+  here?: () => HereEntry[];
   port: number;
   log: (msg: string) => void;
 }) {
@@ -24,7 +29,7 @@ export async function startWebViewer(o: {
   o.store.onChange((space) => {
     for (const l of listeners) l(space);
   });
-  return serveWeb({
+  const web = await serveWeb({
     port: o.port,
     page: "index.html",
     log: o.log,
@@ -32,7 +37,12 @@ export async function startWebViewer(o: {
       get person() {
         return o.person();
       },
-      names: () => ({ ...Object.fromEntries(o.catalog.agents().map((a) => [a.id, a.name])), [o.person().id]: o.person().name }),
+      names: () => ({
+        ...Object.fromEntries(o.catalog.agents().map((a) => [a.id, a.name])),
+        ...Object.fromEntries((o.people?.() ?? []).map((p) => [p.id, p.name])),
+        [o.person().id]: o.person().name,
+      }),
+      here: () => (o.here?.() ?? []) as unknown as Record<string, unknown>[],
       spaces: () => o.store.ids().map((id) => ({ id, kind: o.store.kind(id) })),
       read: (space, fn) => o.store.read(space, fn),
       receive: (space, peer, bytes) => JSON.parse(o.store.commit(space, `sync:${peer}`, (s) => s.receiveSyncMessageChecked(peer, bytes, JSON.stringify({ people: [] })))),
@@ -46,4 +56,6 @@ export async function startWebViewer(o: {
       },
     },
   });
+  // Live cursors and names go to every viewer as they change; they are never written into a Space.
+  return { ...web, here: (m: HereMessage) => web.broadcast({ t: "here", ...m }) };
 }

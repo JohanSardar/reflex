@@ -8,7 +8,10 @@
 //   relay → device  {t:"challenge", nonce}
 //   device → relay  {t:"hello", device, key, sig}       sig = Ed25519("reflex-relay/v0 hello <room> <nonce>")
 //   relay → device  {t:"welcome", device}
-//   device → relay  {t:"watch", devices:[...]}          the devices it accepts frames from; replaces the list
+//   device → relay  {t:"watch", devices:[...]}          the devices it accepts frames from; replaces the list.
+//                                                       "*" accepts any device in the room: a Link does that
+//                                                       only in an invite's room, whose name only the
+//                                                       invite's holders know (link/sharing/invite.ts)
 //   relay → device  {t:"presence", device, online, joined?}  for each watched device, now and on every change;
 //                                                       joined: it connected anew, so channels to it are gone
 //

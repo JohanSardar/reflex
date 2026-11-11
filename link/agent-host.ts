@@ -33,11 +33,13 @@ class LinkSpaces implements AgentSpaces {
   #store: SpaceStore;
   #db: DatabaseSync;
   #inbox: Inbox;
+  #hidden: (space: string) => boolean;
 
-  constructor(store: SpaceStore, db: DatabaseSync, inbox: Inbox) {
+  constructor(store: SpaceStore, db: DatabaseSync, inbox: Inbox, hidden: (space: string) => boolean = () => false) {
     this.#store = store;
     this.#db = db;
     this.#inbox = inbox;
+    this.#hidden = hidden;
   }
 
   #entry(id: string): SpaceEntry {
@@ -66,10 +68,12 @@ class LinkSpaces implements AgentSpaces {
   }
 
   get(name: string) {
-    return this.#store.has(name) ? this.#entry(name) : undefined;
+    return this.#store.has(name) && !this.#hidden(name) ? this.#entry(name) : undefined;
   }
 
   create(name: string, o: { kind?: "space" | "library"; title?: string; size?: SpaceEntry["size"]; width?: number }) {
+    // A Space someone else shared with this person: their Agents join only once its owner approves them.
+    if (this.#hidden(name)) throw new ReflexError("invalid_input", [{ code: "invalid_input", msg: `'${name}' is a Space someone else shared with this person; Agents join it only through its owner.`, fix: "Open a Space with another name." }]);
     this.#store.ensure(name, o.kind ?? "space");
     this.#db
       .prepare("INSERT INTO space_meta (space, title, size, width) VALUES (?, ?, ?, ?) ON CONFLICT (space) DO NOTHING")
@@ -78,7 +82,7 @@ class LinkSpaces implements AgentSpaces {
   }
 
   list() {
-    return this.#store.ids().map((id) => this.#entry(id));
+    return this.#store.ids().filter((id) => !this.#hidden(id)).map((id) => this.#entry(id));
   }
 
   write<T>(entry: SpaceEntry, origin: WriteOrigin, fn: (s: Space) => T): T {
@@ -174,6 +178,8 @@ export interface AgentHostOptions {
   socket: string;
   token: string;
   devPerson: boolean;
+  /** Spaces this person's Agents can't see: ones someone else shared with them (link/sharing.ts). */
+  hidden?: (space: string) => boolean;
   /** How many of the person's devices are connected (not other Links), and the Spaces on their screens. */
   presence?: () => { devices: number; viewing?: string[] };
   /** Whether the person is writing in a Space now, from a device's live pen signal; undefined when no device shows it. */
@@ -193,7 +199,7 @@ const APPROVAL_WAIT_MS = 120_000;
 const reaskMs = () => Number(process.env.REFLEX_REASK_S ?? 600) * 1000;
 
 export async function startAgentHost(o: AgentHostOptions) {
-  const spaces = new LinkSpaces(o.store, o.db, o.inbox);
+  const spaces = new LinkSpaces(o.store, o.db, o.inbox, o.hidden);
   o.inbox.recipientsFor = (space, send) => route(o.db, o.store, space, send);
   const names = Object.fromEntries(o.catalog.agents().map((a) => [a.id, a.name]));
   const inbox = new LinkInbox(o.inbox, o.store);

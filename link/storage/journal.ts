@@ -110,6 +110,23 @@ export class SpaceStore {
   }
 
   /**
+   * Starts a Space over from its genesis: the changes this replica made that a
+   * peer refused (a shared Space's viewer drew) are dropped, and everything
+   * else syncs back from that peer.
+   */
+  reset(id: string, now = Date.now()): void {
+    const kind = this.kind(id);
+    const space = Space.create(id, kind, this.#actor);
+    tx(this.#db, () => {
+      this.#db.prepare("DELETE FROM journal WHERE space = ?").run(id);
+      this.#db.prepare("UPDATE checkpoints SET bytes = ?, upto = 0, at = ? WHERE space = ?").run(space.save(), now, id);
+    });
+    this.#spaces.get(id)?.free();
+    this.#spaces.set(id, space);
+    for (const l of this.#listeners) l(id, "create");
+  }
+
+  /**
    * Runs one kernel call against a Space and makes whatever it changed durable
    * before returning. Calls are synchronous, so commits never interleave.
    */
