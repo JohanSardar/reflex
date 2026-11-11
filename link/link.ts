@@ -294,7 +294,7 @@ export class Link {
       a = this.#catalog.agent(a.id)!;
     }
     if (a.status === "pending")
-      throw new LinkError("approval_pending", `Waiting for the user to approve ${a.name} (${a.id}).`, `Approve it with \`reflex-link approve ${a.id}\`, then connect again.`);
+      throw new LinkError("approval_pending", `Waiting for the user to approve ${a.name} (${a.id}).`, "Ask the person to tap Allow on their iPad, or answer y in the terminal running `reflex link`, then connect again.");
     if (a.status !== "approved") throw new LinkError("agent_denied", `The user ${a.status} ${a.name} (${a.id}).`);
     c.agent = a;
     return { agent: a.id, name: a.name, color: a.color };

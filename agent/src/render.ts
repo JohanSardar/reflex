@@ -101,6 +101,24 @@ function edge(b: Bounds, p: [number, number]): [number, number] {
   return [cx + dx * s, cy + dy * s];
 }
 
+/**
+ * An arrowhead at `pts[tip]`, pointing away from `pts[from]`, as a plain polygon. It also pulls the
+ * line's end back under the head so the line doesn't poke through its tip. SVG markers aren't used:
+ * resvg panics (and takes the process down) on a marker placed outside the image.
+ */
+function arrowHead(pts: [number, number][], tip: number, from: number, color: string): string {
+  const [tx, ty] = pts[tip];
+  const [fx, fy] = pts[from] ?? pts[tip];
+  const len = Math.hypot(tx - fx, ty - fy);
+  if (!(len > 0)) return "";
+  const [ux, uy] = [(tx - fx) / len, (ty - fy) / len];
+  const [l, hw] = [16, 7];
+  const [bx, by] = [tx - ux * l, ty - uy * l];
+  const back = Math.min(len, l / 2);
+  pts[tip] = [tx - ux * back, ty - uy * back];
+  return `<polygon points="${tx},${ty} ${bx - uy * hw},${by + ux * hw} ${bx + uy * hw},${by - ux * hw}" fill="${color}"/>`;
+}
+
 function dash(stroke: string | undefined) {
   return stroke === "dashed" ? ' stroke-dasharray="10 6"' : stroke === "dotted" ? ' stroke-dasharray="2 5"' : "";
 }
@@ -150,8 +168,12 @@ function elementSvg(e: SceneElement, byId: Map<string, SceneElement>, strokes: R
       else if (Array.isArray(e.points)) pts = e.points;
       else pts = [[b[0], b[1]], [b[0] + b[2], b[1] + b[3]]];
       const arrow = e.arrow ?? "end";
-      const markers = `${arrow === "end" || arrow === "both" ? ' marker-end="url(#arrow)"' : ""}${arrow === "start" || arrow === "both" ? ' marker-start="url(#arrow)"' : ""}`;
-      const line = `<polyline points="${pts.map((p) => p.join(",")).join(" ")}" fill="none" stroke="${color}" stroke-width="2.5"${dash(e.stroke)}${markers}/>`;
+      const heads: string[] = [];
+      const line_ = pts.map((p) => [...p] as [number, number]);
+      if (arrow === "end" || arrow === "both") heads.push(arrowHead(line_, line_.length - 1, line_.length - 2, color));
+      if (arrow === "start" || arrow === "both") heads.push(arrowHead(line_, 0, 1, color));
+      const line =
+        `<polyline points="${line_.map((p) => p.join(",")).join(" ")}" fill="none" stroke="${color}" stroke-width="2.5"${dash(e.stroke)}/>` + heads.join("");
       if (!e.text) return line;
       const mid = pts[Math.floor((pts.length - 1) / 2)];
       const end = pts[Math.ceil((pts.length - 1) / 2)];
@@ -194,7 +216,6 @@ export class SvgRenderer implements Renderer {
       .map((e) => elementSvg(e, byId, strokes))
       .join("\n");
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x} ${y} ${w} ${h}" width="${pxW}" height="${pxH}">
-<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="${COLORS.black}"/></marker></defs>
 <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#fbfbfa"/>
 ${body}
 </svg>`;

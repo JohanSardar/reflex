@@ -328,7 +328,12 @@ export class Core {
     if (norm.errors.length) throw new ReflexError(norm.errors.length === 1 ? norm.errors[0].code : "batch_rejected", norm.errors, [`read(space: '${a.space}')`]);
 
     // Placement next to a Mark: Marks live in Send Bundles, not in the kernel.
-    const marks = this.#marksFor(agent, a.in_reply_to) ?? [];
+    let marks = this.#marksFor(agent, a.in_reply_to) ?? [];
+    // Mark IDs live in memory; after a restart, an answer to a Send delivered before it rebuilds them from the frozen Send.
+    if (a.in_reply_to && !this.#marks.get(agent)?.has(a.in_reply_to)) {
+      const frozen: FrozenSend | null = JSON.parse(entry.space.send(a.in_reply_to));
+      if (frozen) marks = this.#project(frozen, false, agent).marks;
+    }
     const outline: SceneElement[] = this.scene(entry, { agent }, "outline");
     const has = (id: string) => outline.some((e) => e.id === id);
     const errors: ProtocolError[] = [];
@@ -339,6 +344,8 @@ export class Core {
         if (!m) errors.push({ op: i, field, code: "unknown_id", msg: `No Mark '${id}'${a.in_reply_to ? ` in Send ${a.in_reply_to}` : ""}.`, fix: "Use a Mark ID from the Send you are answering, with in_reply_to." });
         return m;
       };
+      // An answer without a position goes next to what the person marked, not to the Space's origin.
+      if (op.op === "add" && op.type !== "connector" && !op.at && !op.points && marks.length && a.in_reply_to) op.at = { near: marks[0].id };
       const at = op.op === "add" || op.op === "arrange" ? op.at : op.op === "patch" ? op.set?.at : undefined;
       if (at) {
         for (const rel of ["right_of", "left_of", "above", "below", "near", "inside"]) {
@@ -470,7 +477,14 @@ export class Core {
   }
 
   #deliver(frozen: FrozenSend, redelivered: boolean, ctx: Ctx) {
-    const agent = ctx.who.agent;
+    const { bundle, images } = this.#project(frozen, redelivered, ctx.who.agent);
+    this.#lastSend.set(ctx.who.agent, frozen.send);
+    this.log("send_delivered", { agent: ctx.who.name, send: frozen.send, redelivered });
+    return { json: bundle, images: images.map((i) => i.png) };
+  }
+
+  /** Builds a Send's Bundle for one Agent and remembers its Mark IDs, which answers place things by. */
+  #project(frozen: FrozenSend, redelivered: boolean, agent: string) {
     const entry = this.#entry(frozen.space);
     const viewer = { agent };
     const elements: SceneElement[] = this.scene(entry, viewer, "full");
@@ -493,9 +507,7 @@ export class Core {
     const byAgent = this.#marks.get(agent) ?? new Map();
     byAgent.set(frozen.send, marks);
     this.#marks.set(agent, byAgent);
-    this.#lastSend.set(agent, frozen.send);
-    this.log("send_delivered", { agent: ctx.who.name, send: frozen.send, redelivered });
-    return { json: bundle, images: images.map((i) => i.png) };
+    return { bundle, images, marks };
   }
 
   // ---------- the person's side without an iPad: `reflex dev person`, on a Link started with --dev ----------

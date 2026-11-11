@@ -187,7 +187,7 @@ export function project(opts: {
     pending_after: opts.pendingAfter,
     next:
       kind === "send"
-        ? `Reply with apply(in_reply_to: '${s}'), then wait_for_user(after: '${s}').`
+        ? `Reply with apply(in_reply_to: '${s}')${refs.length ? `; what you add without at goes next to ${refs[0].id}` : ""}, then wait_for_user(after: '${s}').`
         : `${opts.personName}'s turn is not over. Answer if useful, then wait_for_user(after: '${s}').`,
   };
   return { bundle, images, marks: refs };

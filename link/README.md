@@ -4,17 +4,18 @@ The process on your computer that keeps a copy of every Space, stores it durably
 
 ```sh
 sh kernel/wasm/build.sh && npm install
-npm run reflex-link                         # start the Link (or: node link/bin/reflex-link.ts)
-npm run reflex-link -- pair                 # show a pairing QR code
-npm run reflex-link -- --home /tmp/b pair 'reflex://pair?...'   # a second Link pairs with it
-npm run reflex-link -- --help
+reflex link                                 # start the Link: shows a pairing QR code and its text (or: node agent/bin/reflex.mjs link)
+reflex link --home /tmp/b pair 'reflex://pair?...'   # a second Link pairs with the first one's code
+reflex link status                          # Spaces, peers, Agents, the Inbox
+reflex link --help
 ```
 
-`npx reflex link` arrives when T6 joins the Link and the Agent layer.
+The Link runs in its terminal. Enter shows a new pairing code; when an Agent asks to connect, `y` or `n` answers it. The iPad pairs by scanning the QR code or by pasting its text, and can then approve Agents too.
 
 | Path | What it is |
 |---|---|
-| `link.ts` | composition, and the local RPC on a Unix socket |
+| `link.ts` | composition, the terminal (pairing codes, Agent questions), and the admin RPC on a Unix socket |
+| `agent-host.ts` | the Agent layer (`@reflex/agent`'s capability table) on the durable Spaces, Inbox and assets, served on `agent.sock` to `reflex mcp` and the CLI |
 | `home.ts` | the profile folder: identity, local credentials, socket |
 | `storage/journal.ts` | each Space: a kernel replica, a checkpoint and a journal of change bytes |
 | `storage/inbox.ts` | the durable Inbox index and per-recipient receipts |
@@ -35,11 +36,12 @@ npm run reflex-link -- --help
 - **Discovery is never authentication.** Each device has an Ed25519 key, and its device ID is derived from it. The handshake signs a transcript of both hellos, and the session is encrypted with ChaCha20-Poly1305 using keys from an X25519 exchange. A peer is bound only if it is paired with exactly that key, or proves it knows the secret of a live pairing offer.
 - **Pairing:** the QR code carries the offering device's key, a single-use secret valid for 10 minutes, its addresses, and its person. A device that holds nothing yet becomes that person's device (ADR-0008).
 - **One path per peer.** If both sides dial at once, both keep the path dialed by the lower device ID. Sync state is reset on every new binding, so anti-entropy runs after each reconnect.
-- **Agent approval.** Local clients present `rpc.key` (Agents) or `admin.key` (your own commands), both 0600 in a 0700 folder. An Agent then presents a credential it made itself. The first time, the Link asks you (on its terminal, or through `reflex-link approve|deny`), and the Agent sees no Space content until you approve it. The decision is kept in the signed control catalog against the credential's hash, and records whose signature doesn't verify are ignored.
+- **Agent approval.** Agents reach the Link on `agent.sock` with `rpc.key` and a credential they keep (`agents/*.cred`, 0600). The first time, the Link asks the person: Allow on an iPad that paired by scanning this Link's code, or `y` in the Link's terminal. Nothing else can approve: the admin RPC (`admin.key`) can deny or revoke but never approve, and another Link can't decide either. The Agent sees no Space content until it is approved. The decision is kept in the signed control catalog against the credential's hash, and records whose signature doesn't verify are ignored.
+- **Received changes are checked.** The kernel tries a peer's changes on a fork first and applies them only if that peer may make them: an iPad writes only as its person (its own Ink, its Sends, its removals), a paired Link also on behalf of Agents. A rejected message is logged and the session is closed. The Agent layer writes as each Agent through the kernel's own checks.
 
 ## Not here yet
 
-- MCP and CLI tools for Agents: T4 builds them, and T6 plugs them into this RPC. The `dev` commands are stand-ins for the iPad and an Agent until then.
-- The kernel does not yet check authorization on changes it receives (T2). Only paired devices can send changes, but a paired device is trusted for everything it sends.
-- `admin.key` and `rpc.key` are files readable by your OS user, so a local Agent with shell access could read `admin.key` and approve itself. OS-level separation, and the platform credential stores, come later.
+- The `dev` commands (with `--dev`) act as the person without an iPad, for testing.
+- The check on received changes knows people and Agents but not roles; roles come with T22.
+- Approval can't be given through any Reflex command, but a local process running as your OS user can still read the Link's files (`identity.json`, `link.db`) or its terminal. OS-level separation, and the platform credential stores, come later.
 - Fastest-path selection waits for a second transport (T11). The fault-injection transport and the headless renderer aren't built yet.
