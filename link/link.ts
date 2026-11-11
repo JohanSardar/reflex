@@ -31,7 +31,10 @@ import { SpaceStore } from "./storage/journal.ts";
 import { Coordinator } from "./sync/coordinator.ts";
 import { startAgentHost } from "./agent-host.ts";
 import { socketPath as agentSocketPath } from "../agent/src/host/rpc.ts";
+import { FaultTransport, parseFaults } from "./transports/fault.ts";
 import { LanTransport } from "./transports/lan.ts";
+import { P2pTransport } from "./transports/p2p.ts";
+import type { Transport } from "./transports/transport.ts";
 
 export class LinkError extends Error {
   reason: string;
@@ -56,6 +59,12 @@ export interface LinkOptions {
   prompt?: boolean;
   /** Allow acting as the person without an iPad (`dev` commands, `reflex dev person`). */
   dev?: boolean;
+  /** Apple peer-to-peer Wi-Fi next to LAN (default: on, on macOS with the helper built). */
+  p2p?: boolean;
+  /** Fault injection on the transports (link/transports/fault.ts), e.g. "lan:delay=80". Changeable while running. */
+  fault?: string;
+  /** Send every change over every live path, not just the fastest. */
+  everyPath?: boolean;
   log?: (msg: string) => void;
 }
 
@@ -82,6 +91,7 @@ export class Link {
   #ports: Record<string, number> = {};
   #keys!: { rpc: string; admin: string };
   #decisions = new Map<string, (() => void)[]>();
+  #faults: FaultTransport[] = [];
   #log: (msg: string) => void;
 
   constructor(opts: LinkOptions) {
@@ -116,8 +126,9 @@ export class Link {
       assets: this.#assets,
       catalog: this.#catalog,
       offers: this.#offers,
-      transports: [new LanTransport({ device: this.#id.key.device, port: this.#opts.port ?? 7420 })],
+      transports: this.#transports(),
       log: this.#log,
+      everyPath: this.#opts.everyPath,
     });
     this.#coord.onPaired((d) => process.stdout.write(`\nPaired with ${d.name} (${d.device}).\n`));
     this.#coord.pendingAgents = () => this.#catalog.agents().filter((a) => a.status === "pending").map(({ id, name, color }) => ({ id, name, color }));
@@ -145,14 +156,29 @@ export class Link {
     await this.#listen();
     writeFileSync(
       this.home.runtime,
-      JSON.stringify({ pid: process.pid, socket: this.home.socket, lan: this.#ports.lan, device: this.#id.key.device }, null, 2),
+      JSON.stringify({ pid: process.pid, socket: this.home.socket, lan: this.#ports.lan, p2p: this.#ports.p2p, device: this.#id.key.device }, null, 2),
     );
     this.#log(
       `${this.#id.name} (${this.#id.key.device}) for ${this.#id.person.name} · ${rec.spaces} Spaces, ` +
         `${rec.replayed} journal entries replayed, ${this.#inbox.all().length} Sends in the Inbox, ` +
-        `${devices.length} paired devices · LAN :${this.#ports.lan} · ${this.home.socket}`,
+        `${devices.length} paired devices · LAN :${this.#ports.lan}${this.#ports.p2p ? ` · peer-to-peer :${this.#ports.p2p}` : ""} · ${this.home.socket}`,
     );
     if (this.#opts.prompt && process.stdin.isTTY) this.#terminal();
+  }
+
+  /** LAN, and Apple peer-to-peer Wi-Fi where it can run; each wrapped for fault injection if asked. */
+  #transports(): Transport[] {
+    const list: Transport[] = [new LanTransport({ device: this.#id.key.device, port: this.#opts.port ?? 7420 })];
+    if (this.#opts.p2p !== false) {
+      const p2p = P2pTransport.available();
+      if (p2p.ok) list.push(new P2pTransport({ device: this.#id.key.device, log: this.#log }));
+      else this.#log(`peer-to-peer Wi-Fi is off: ${p2p.why}`);
+    }
+    if (this.#opts.fault === undefined) return list;
+    const faults = parseFaults(this.#opts.fault);
+    this.#faults = list.map((t) => new FaultTransport(t, faults.get(t.name)));
+    this.#log(`fault injection on: ${this.#opts.fault || "(nothing yet)"}`);
+    return this.#faults;
   }
 
   /** This terminal: Enter shows a fresh pairing code; y or n answers the Agent question on screen. */
@@ -431,6 +457,19 @@ export class Link {
       case "assets.get": {
         return { hash: p.hash, base64: this.#assets.get(String(p.hash)).toString("base64") };
       }
+      case "fault": {
+        if (!this.#faults.length)
+          throw new LinkError("needs_fault", "Fault injection needs a Link started with --fault.", 'Restart it with `reflex link --fault ""`.');
+        let faults;
+        try {
+          faults = parseFaults(String(p.spec ?? ""));
+        } catch (e) {
+          throw new LinkError("bad_fault", (e as Error).message);
+        }
+        for (const t of this.#faults) t.set(faults.get(t.name));
+        this.#log(`fault injection now: ${String(p.spec) || "(none)"}`);
+        return Object.fromEntries(this.#faults.map((t) => [t.name, t.faults()]));
+      }
       case "inbox.all":
         return this.#inbox.all().map((e) => ({ ...e, receipts: this.#inbox.receipts(e.space, e.send) }));
       default:
@@ -466,13 +505,24 @@ export class Link {
       name: this.#id.name,
       person: this.#id.person,
       lan_port: this.#ports.lan,
+      p2p_port: this.#ports.p2p ?? null,
       socket: this.home.socket,
       spaces: this.#store.ids().map((id) => this.#store.info(id)),
       journal: this.#store.journalStats(),
       assets: this.#assets.list().length,
       inbox: this.#inbox.all().map((e) => ({ space: e.space, send: e.send, via: e.via, receipts: this.#inbox.receipts(e.space, e.send) })),
       paired: this.#catalog.devices().map((d) => ({ device: d.device, name: d.name, person: d.person, connected: this.#coord.peers().some((p) => p.device === d.device) })),
-      peers: this.#coord.peers().map((p) => ({ device: p.device, name: p.name, since: p.since, transport: p.session.path.transport, remote: p.session.path.remote, ...p.session.measurements() })),
+      peers: this.#coord.peers().map((p) => {
+        const active = p.paths.active();
+        const path = (s: NonNullable<typeof active>) => ({ transport: s.path.transport, remote: s.path.remote, ...s.measurements() });
+        return {
+          device: p.device,
+          name: p.name,
+          since: p.since,
+          ...(active ? path(active) : {}),
+          paths: p.paths.all().map((e) => ({ ...path(e.session), active: e.session === active, since: e.since })),
+        };
+      }),
       agents: this.#catalog.agents().map((a) => ({ id: a.id, name: a.name, status: a.status, color: a.color })),
     };
   }

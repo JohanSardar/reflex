@@ -19,6 +19,8 @@ Usage
   reflex link agents                  List Agents and their approval
   reflex link deny <agent>            Deny an Agent waiting to connect
   reflex link revoke <agent>          Take an approved Agent's access away
+  reflex link fault <spec>            Change fault injection on a Link started with --fault
+                                      (e.g. "lan:drop=1" takes LAN down, "" clears it)
 
 Agents are approved by you: tap Allow on your iPad, or answer y in the Link's terminal.
 
@@ -37,6 +39,9 @@ Options
   --name <name>   This device's name, on first start
   --port <n>      LAN port (default 7420; any free port if taken)
   --dev           Allow acting as the person without an iPad
+  --no-p2p        Don't use Apple peer-to-peer Wi-Fi (on by default on macOS; needs npm run build:p2p)
+  --fault <spec>  Drop, delay or duplicate frames per transport, e.g. "lan:delay=80,jitter=40;p2p:drop=0.01"
+  --every-path    Send every change over every live path, not just the fastest
   --json          Machine-readable output
   --no-prompt     Don't use this terminal for pairing codes or questions
   -h, --help      Show this help
@@ -51,6 +56,9 @@ const { values: flags, positionals: args } = parseArgs({
     json: { type: "boolean", default: false },
     "no-prompt": { type: "boolean", default: false },
     dev: { type: "boolean", default: false },
+    "no-p2p": { type: "boolean", default: false },
+    fault: { type: "string" },
+    "every-path": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -68,7 +76,8 @@ async function admin<T>(method: string, params: Record<string, unknown> = {}): P
 }
 
 async function start(): Promise<void> {
-  const link = new Link({ dir, name: flags.name, port: flags.port ? Number(flags.port) : undefined, prompt: !flags["no-prompt"], dev: flags.dev });
+  const link = new Link({ dir, name: flags.name, port: flags.port ? Number(flags.port) : undefined, prompt: !flags["no-prompt"], dev: flags.dev,
+    p2p: !flags["no-p2p"], fault: flags.fault, everyPath: flags["every-path"] });
   await link.start();
   const stop = async (sig: string): Promise<void> => {
     console.log(`link: ${sig}, stopping`);
@@ -84,23 +93,29 @@ interface Status {
   name: string;
   person: { id: string; name: string };
   lan_port: number;
+  p2p_port: number | null;
   spaces: { id: string; kind: string; digest: string; elements: number; sends: string[] }[];
   journal: { entries: number; checkpoints: number };
   assets: number;
   inbox: { space: string; send: string; via: string; receipts: { recipient: string; state: string }[] }[];
   paired: { device: string; name: string; connected: boolean }[];
-  peers: { device: string; name: string; remote: string; rttMs: number | null }[];
+  peers: { device: string; name: string; paths: { transport: string; remote: string; rttMs: number | null; active: boolean; sentBytes: number; receivedBytes: number }[] }[];
   agents: { id: string; name: string; status: string }[];
 }
 
 function showStatus(s: Status): string {
-  const lines = [`${s.name} (${s.device}) · ${s.person.name} · LAN :${s.lan_port}`, ""];
+  const lines = [`${s.name} (${s.device}) · ${s.person.name} · LAN :${s.lan_port}${s.p2p_port ? ` · peer-to-peer :${s.p2p_port}` : ""}`, ""];
   lines.push(`Spaces (${s.spaces.length}), journal ${s.journal.entries} entries, ${s.assets} assets`);
   for (const x of s.spaces) lines.push(`  ${x.id.padEnd(20)} ${x.kind.padEnd(8)} ${String(x.elements).padStart(3)} elements  ${x.sends.length} sends  digest ${x.digest.slice(0, 12)}`);
   lines.push(`Paired devices (${s.paired.length})`);
   for (const d of s.paired) {
     const p = s.peers.find((x) => x.device === d.device);
-    lines.push(`  ${d.name.padEnd(20)} ${d.device}  ${p ? `connected ${p.remote}${p.rttMs !== null ? `, ${p.rttMs} ms` : ""}` : "not connected"}`);
+    lines.push(`  ${d.name.padEnd(20)} ${d.device}  ${p ? `connected over ${p.paths.length} path${p.paths.length === 1 ? "" : "s"}` : "not connected"}`);
+    for (const x of p?.paths ?? [])
+      lines.push(
+        `    ${x.active ? "→" : " "} ${x.transport.padEnd(4)} ${x.remote}${x.rttMs !== null ? `, ${x.rttMs} ms` : ""}, ` +
+          `sent ${x.sentBytes} B, received ${x.receivedBytes} B${x.active ? " (sending here)" : ""}`,
+      );
   }
   lines.push(`Agents (${s.agents.length})`);
   for (const a of s.agents) lines.push(`  ${a.id.padEnd(28)} ${a.status.padEnd(9)} ${a.name}`);
@@ -201,6 +216,11 @@ async function main(): Promise<void> {
       const status = { approve: "approved", deny: "denied", revoke: "revoked" }[cmd];
       const a = await admin<{ id: string; name: string; status: string }>("agents.decide", { id: args[1], status });
       return out(`${a.name} (${a.id}) ${a.status}.`, a);
+    }
+    case "fault": {
+      if (args[1] === undefined) throw new LinkError("usage", 'Which faults? reflex link fault "lan:drop=1" (or "" to clear)');
+      const f = await admin<Record<string, unknown>>("fault", { spec: args[1] });
+      return out(Object.entries(f).map(([t, v]) => `${t}: ${JSON.stringify(v)}`).join("\n"), f);
     }
     case "dev":
       return dev();

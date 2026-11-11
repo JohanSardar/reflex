@@ -10,6 +10,7 @@
   ],
   "scripts": {
     "build:kernel-wasm": "sh kernel/wasm/build.sh",
+    "build:p2p": "swift build -c release --package-path link/transports/p2p",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check:protocol": "npm run check -w @reflex/protocol",
     "reflex-link": "node link/bin/reflex-link.ts"
