@@ -440,6 +440,7 @@ export class Link {
     // The question is answered, on whichever surface: stop asking it here.
     this.#questions = this.#questions.filter((q) => q.id !== id);
     this.#log(`Agent ${a.name} (${a.id}) ${status} by ${by}`);
+    this.#coord.announceAgents();
     for (const w of this.#decisions.get(id) ?? []) w();
     this.#decisions.delete(id);
     return a;

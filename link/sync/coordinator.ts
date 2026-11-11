@@ -13,6 +13,7 @@
 //   agent_request { id, name, color }           an Agent is waiting for the person's approval (to iPads)
 //   agent_decision { id, status }               the person's answer, from an iPad that paired
 //                                               by scanning this Link's code
+//   agents        { agents: [{ id, name, color, status }] }   every known Agent (to iPads), for chips and history
 //
 // Changes a peer sends are taken only if they were its to make: an iPad
 // writes for its person, another Link for its person and the Agents it hosts
@@ -252,11 +253,23 @@ export class Coordinator {
     for (const id of this.#store.ids()) this.#pump(id, peer);
     for (const a of this.pendingAgents()) void peer.session.send({ t: "agent_request", ...a }, undefined, "control").catch(() => {});
     this.onBound(peer);
+    this.#sendAgents(peer);
+  }
+
+  /** Every Agent's name and color, so iPads can label Agent changes (their chips and history). */
+  announceAgents(): void {
+    for (const p of this.#peers.values()) this.#sendAgents(p);
+  }
+
+  #sendAgents(p: Peer): void {
+    const agents = this.#catalog.agents().map(({ id, name, color, status }) => ({ id, name, color, status }));
+    void p.session.send({ t: "agents", agents }, undefined, "control").catch(() => {});
   }
 
   /** Asks every connected iPad about an Agent waiting for approval. */
   askAboutAgent(a: { id: string; name: string; color: string }): void {
     for (const p of this.#peers.values()) void p.session.send({ t: "agent_request", ...a }, undefined, "control").catch(() => {});
+    this.announceAgents();
   }
 
   /** Who a peer's changes may be written for, from its pairing record. */

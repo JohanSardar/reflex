@@ -3,6 +3,7 @@ import ReflexInput
 import ReflexLink
 import ReflexRender
 import SwiftUI
+import UniformTypeIdentifiers
 
 private let log = Logger(subsystem: "si.eilmer.reflex", category: "canvas")
 
@@ -12,8 +13,9 @@ struct CanvasScreen: View {
     @State private var link = LinkSync(deviceName: UIDevice.current.name)
     @State private var open: SpaceSession?
     @State private var showStrokeIDs = false
-    @State private var notice: String?
     @State private var pairing = false
+    @State private var showHistory = false
+    @State private var voice = VoiceCapture()
     /// Spaces changed since the person last looked at them (SPEC §4, Attention).
     @State private var lastSeen: [String: Int] = [:]
     @Binding var incomingCode: String?
@@ -22,9 +24,14 @@ struct CanvasScreen: View {
         ZStack {
             Color(red: 0.99, green: 0.99, blue: 0.97).ignoresSafeArea()
             if let open {
-                ElementsLayer(scene: open.scene, offset: open.ink.contentOffset, zoom: open.ink.zoomScale, spaceSize: InkCanvasController.spaceSize)
-                    .ignoresSafeArea()
+                ElementsLayer(
+                    scene: open.scene, offset: open.ink.contentOffset, zoom: open.ink.zoomScale, spaceSize: InkCanvasController.spaceSize,
+                    localInk: open.localInk, remoteInk: open.remoteInk, dragging: open.dragging
+                )
+                .environment(\.assetImages, AssetImages { [link] hash in AssetImageCache.shared.image(hash, link: link) })
+                .ignoresSafeArea()
                 InkCanvas(controller: open.ink).ignoresSafeArea().id(open.id)
+                    .onDrop(of: [.item], delegate: CanvasDrop(session: open))
                 if showStrokeIDs {
                     StrokeIDOverlay(strokes: open.ink.strokes, offset: open.ink.contentOffset, zoom: open.ink.zoomScale)
                         .ignoresSafeArea()
@@ -36,16 +43,47 @@ struct CanvasScreen: View {
         .overlay(alignment: .top) {
             HStack(spacing: 10) {
                 spaceMenu
-                if let open { InkToolbar(ink: open.ink, showStrokeIDs: $showStrokeIDs) }
+                if let open {
+                    InkToolbar(ink: open.ink, showStrokeIDs: $showStrokeIDs)
+                    ImportMenu(session: open)
+                }
                 connectButton
             }
             .padding(.top, 8)
         }
+        .overlay(alignment: .topLeading) {
+            if let open { AgentsBar(session: open, link: link, showHistory: $showHistory).padding(.top, 68).padding(.leading, 16) }
+        }
+        .overlay(alignment: .trailing) {
+            if let open, let shown = open.panel {
+                PanelView(session: open, panel: shown.panel).padding(.vertical, 72).padding(.trailing, 16)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .id(shown.element)
+            }
+        }
         .overlay(alignment: .bottomTrailing) {
-            if open != nil { SendButton(action: send).padding(24) }
+            if let open {
+                HStack(spacing: 14) {
+                    MicButton(voice: voice, onFail: { open.say($0) }) { said, words in
+                        open.send(trigger: "voice", said: said, words: words)
+                    }
+                    SendButton { open.send(trigger: "button") }
+                }
+                .padding(24)
+            }
         }
         .overlay(alignment: .bottom) {
-            if let notice {
+            if voice.state != .idle, !voice.partial.isEmpty {
+                Text(voice.partial)
+                    .font(.title3)
+                    .padding(.horizontal, 18).padding(.vertical, 12)
+                    .glassEffect()
+                    .padding(.bottom, 110).padding(.horizontal, 120)
+                    .accessibilityIdentifier("voice-partial")
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let notice = open?.notice {
                 Text(notice)
                     .font(.callout)
                     .padding(.horizontal, 16).padding(.vertical, 10)
@@ -56,6 +94,7 @@ struct CanvasScreen: View {
             }
         }
         .sheet(isPresented: $pairing) { PairSheet(link: link, code: incomingCode ?? "") }
+        .sheet(isPresented: $showHistory) { if let open { HistorySheet(session: open, link: link) } }
         .alert(
             "Allow \(link.agentRequests.first?.name ?? "this Agent") to use your Spaces?",
             isPresented: Binding(get: { !link.agentRequests.isEmpty }, set: { _ in })
@@ -76,6 +115,18 @@ struct CanvasScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .debugInk)) { note in
             guard let url = note.object as? URL, let open,
                   let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else { return }
+            if url.path == "/voice", let name = q.first(where: { $0.name == "file" })?.value {
+                let file = URL.documentsDirectory.appending(path: name)
+                Task {
+                    do {
+                        let (said, words) = try await voice.debugTranscribe(file)
+                        open.send(trigger: "voice", said: said, words: words)
+                    } catch {
+                        open.say(error.localizedDescription)
+                    }
+                }
+                return
+            }
             let v = { (k: String) in CGFloat(Double(q.first { $0.name == k }?.value ?? "") ?? 0) }
             let points = (0 ... 72).map { i in
                 let a = Double(i) / 72 * 2 * .pi
@@ -160,47 +211,20 @@ struct CanvasScreen: View {
         case .unpaired: .gray
         }
     }
+}
 
-    /// Captures the Send: the strokes since the last one (claimed by the kernel), the viewport, and a crop
-    /// of what the screen showed around them, stored as an asset first so it is durable before the Send refers to it.
-    private func send() {
-        guard let open else { return }
-        let ink = open.ink
-        let strokes = ink.takeUnsent()
-        let zoom = ink.zoomScale, offset = ink.contentOffset
-        let screen = ink.canvasView.bounds.size
-        let viewport = CGRect(x: offset.x / zoom, y: offset.y / zoom, width: screen.width / zoom, height: screen.height / zoom)
-        var raw: [String: Any] = [
-            "send": "s_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(12),
-            "trigger": "button",
-            "viewport": [viewport.minX, viewport.minY, viewport.width, viewport.height].map { Int($0.rounded()) },
-        ]
-        let marked = ink.strokes.filter { strokes.contains($0.id) }.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
-        if !marked.isNull, let crop = Crop.capture(space: marked.insetBy(dx: -60, dy: -60).intersection(viewport), zoom: zoom, offset: offset) {
-            do {
-                let hash = try link.storeAsset(crop.png)
-                let b = crop.bounds
-                raw["crops"] = [["asset": hash, "bounds": [b.minX, b.minY, b.width, b.height].map { Int($0.rounded()) }, "strokes": strokes]]
-            } catch {
-                log.error("Could not store the crop: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-        do {
-            let frozen = try link.freezeSend(open.id, raw: raw)
-            let n = (frozen["strokes"] as? [Any])?.count ?? 0
-            log.info("Send \(frozen["send"] as? String ?? "", privacy: .public) frozen with \(n) strokes")
-            if case .connected = link.state { say("Sent: \(n) stroke\(n == 1 ? "" : "s")") } else { say("Saved: it goes out when the Link is back") }
-        } catch {
-            say("Could not send: \(error.localizedDescription)")
-        }
-    }
+/// Decoded asset images, so a redraw doesn't decode them again.
+@MainActor
+final class AssetImageCache {
+    static let shared = AssetImageCache()
+    private let cache = NSCache<NSString, UIImage>()
 
-    private func say(_ text: String) {
-        withAnimation { notice = text }
-        Task {
-            try? await Task.sleep(for: .seconds(3))
-            withAnimation { if notice == text { notice = nil } }
-        }
+    func image(_ hash: String, link: LinkSync) -> UIImage? {
+        if let hit = cache.object(forKey: hash as NSString) { return hit }
+        _ = link.assetRevision // redraw when an asset arrives from the Link
+        guard let bytes = link.asset(hash), let image = UIImage(data: bytes) else { return nil }
+        cache.setObject(image, forKey: hash as NSString)
+        return image
     }
 }
 
