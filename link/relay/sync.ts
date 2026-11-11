@@ -27,7 +27,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS relay_spaces (space TEXT PRIMARY KEY, key BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS relay_logs (
   relay TEXT NOT NULL, space TEXT NOT NULL, pushed TEXT NOT NULL DEFAULT '[]', read_seq INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (relay, space)
+  since_snapshot INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (relay, space)
 );
 CREATE TABLE IF NOT EXISTS relay_assets (relay TEXT NOT NULL, space TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY (relay, space, hash));
 CREATE TABLE IF NOT EXISTS relay_grants (
@@ -36,8 +36,13 @@ CREATE TABLE IF NOT EXISTS relay_grants (
 );
 `;
 
-/** An entry that's bigger than this is sent as a whole-Space snapshot instead. */
-const MAX_ENTRY = 12 * 1024 * 1024;
+/** The most one entry may carry (the relay takes up to 16 MiB sealed). */
+const MAX_ENTRY = 15 * 1024 * 1024;
+/**
+ * After this many bytes of changes, the next entry is the whole Space instead (`save()`, marked
+ * as a snapshot), so a cloud session replays from there and not from the beginning of the log.
+ */
+const SNAPSHOT_AFTER = 4 * 1024 * 1024;
 
 export interface GrantRecord {
   gid: string;
@@ -86,6 +91,10 @@ export class RelaySync {
   /** One chain per Space, so pushes and pulls of a Space never interleave. */
   #chains = new Map<string, Promise<void>>();
   #watching = new Set<string>();
+  /** Sends whose crops are all on the relay, per Space. */
+  #scanned = new Map<string, Set<string>>();
+  #pushTimers = new Map<string, NodeJS.Timeout>();
+  #connected: (device: string) => boolean;
 
   constructor(o: {
     db: DatabaseSync;
@@ -95,8 +104,11 @@ export class RelaySync {
     transport: RelayTransport;
     key: DeviceKey;
     person: () => { id: string; name: string };
+    /** Whether a device is in an end-to-end session with this Link right now. */
+    connected: (device: string) => boolean;
     log: (m: string) => void;
   }) {
+    this.#connected = o.connected;
     this.#db = o.db;
     this.#store = o.store;
     this.#assets = o.assets;
@@ -106,6 +118,8 @@ export class RelaySync {
     this.#person = o.person;
     this.#log = o.log;
     this.#db.exec(SCHEMA);
+    const cols = this.#db.prepare("PRAGMA table_info(relay_logs)").all() as { name: string }[];
+    if (!cols.some((c) => c.name === "since_snapshot")) this.#db.exec("ALTER TABLE relay_logs ADD COLUMN since_snapshot INTEGER NOT NULL DEFAULT 0");
     this.#t.onReady = () => {
       this.#watching.clear();
       for (const id of this.#store.ids()) this.#queue(id, () => this.#sync(id));
@@ -116,7 +130,14 @@ export class RelaySync {
     };
     this.#store.onChange((space, origin) => {
       if (origin === "sync:relay") return; // came from the log
-      this.#queue(space, () => this.#push(space));
+      // Many changes in a burst (a person drawing) go as one entry.
+      if (this.#pushTimers.has(space)) return;
+      const t = setTimeout(() => {
+        this.#pushTimers.delete(space);
+        void this.#queue(space, () => this.#push(space));
+      }, 300);
+      t.unref();
+      this.#pushTimers.set(space, t);
     });
   }
 
@@ -171,26 +192,32 @@ export class RelaySync {
   }
 
   async #sync(space: string): Promise<void> {
+    await this.#watch(space, this.keys(space));
     await this.#push(space);
     await this.#pull(space);
   }
 
-  #row(space: string): { pushed: string; read_seq: number } {
+  #row(space: string): { pushed: string; read_seq: number; since_snapshot: number } {
     this.keys(space);
     this.#db.prepare("INSERT OR IGNORE INTO relay_logs (relay, space) VALUES (?, ?)").run(this.#t.url, space);
-    return this.#db.prepare("SELECT pushed, read_seq FROM relay_logs WHERE relay = ? AND space = ?").get(this.#t.url, space) as { pushed: string; read_seq: number };
+    return this.#db.prepare("SELECT pushed, read_seq, since_snapshot FROM relay_logs WHERE relay = ? AND space = ?").get(this.#t.url, space) as {
+      pushed: string;
+      read_seq: number;
+      since_snapshot: number;
+    };
   }
 
   /** Sends what the log doesn't have yet. */
   async #push(space: string): Promise<void> {
     if (!this.#store.has(space)) return;
     const keys = this.keys(space);
-    const { pushed } = this.#row(space);
+    const { pushed, since_snapshot } = this.#row(space);
     const heads = this.#store.read(space, (s) => s.heads());
     if (heads === pushed) return this.#watch(space, keys);
     let bytes: Uint8Array = this.#store.read(space, (s) => s.changesSince(pushed));
-    // The first push, or a long way behind: the whole Space, compacted.
-    if (pushed === "[]" || bytes.length > MAX_ENTRY) bytes = this.#store.read(space, (s) => s.save());
+    // The first push, a long way behind, or enough changes since the last snapshot: the whole Space, compacted.
+    const snapshot = pushed === "[]" || bytes.length > MAX_ENTRY || since_snapshot + bytes.length > SNAPSHOT_AFTER;
+    if (snapshot) bytes = this.#store.read(space, (s) => s.save());
     if (bytes.length > MAX_ENTRY) throw new Error(`Space '${space}' is ${bytes.length} bytes, over what one log entry can carry`);
     await this.#uploadCrops(space, keys);
     const header = {
@@ -200,25 +227,39 @@ export class RelaySync {
       author: `device:${this.#key.device}`,
       at: Date.now(),
       sig: signWith(this.#key, createHash("sha256").update(bytes).digest()),
+      ...(snapshot ? { snapshot: true } : {}),
     };
     const sealed = sealEntry(keys, header, bytes);
-    const r = await this.#t.request({ t: "log.append", log: keys.log, token: keys.token, entries: [sealed.toString("base64")] });
-    this.#db.prepare("UPDATE relay_logs SET pushed = ? WHERE relay = ? AND space = ?").run(heads, this.#t.url, space);
-    this.#log(`relay: pushed ${bytes.length} bytes of '${space}' (entry ${(r.seqs as number[])[0]})`);
+    const r = await this.#t.request({ t: "log.append", log: keys.log, token: keys.token, entries: [sealed.toString("base64")], snapshot }, 60_000);
+    this.#db
+      .prepare("UPDATE relay_logs SET pushed = ?, since_snapshot = ? WHERE relay = ? AND space = ?")
+      .run(heads, snapshot ? 0 : since_snapshot + bytes.length, this.#t.url, space);
+    this.#log(`relay: pushed ${bytes.length} bytes of '${space}'${snapshot ? " as a snapshot" : ""} (entry ${(r.seqs as number[])[0]})`);
     await this.#watch(space, keys);
   }
 
   async #watch(space: string, keys: SpaceKeys): Promise<void> {
     if (this.#watching.has(space)) return;
-    await this.#t.request({ t: "log.watch", log: keys.log, token: keys.token });
+    const r = await this.#t.request({ t: "log.watch", log: keys.log, token: keys.token });
     this.#watching.add(space);
+    // A log shorter than what this Link already read lost entries (a relay restored or replaced): send it everything again.
+    const { read_seq } = this.#row(space);
+    if (Number(r.last) < read_seq) {
+      this.#log(`relay: the log of '${space}' has ${r.last} entries but this Link read ${read_seq}; sending the whole Space again`);
+      this.#db.prepare("UPDATE relay_logs SET pushed = '[]', read_seq = 0, since_snapshot = 0 WHERE relay = ? AND space = ?").run(this.#t.url, space);
+      this.#db.prepare("DELETE FROM relay_assets WHERE relay = ? AND space = ?").run(this.#t.url, space);
+      this.#scanned.delete(space);
+    }
   }
 
   /** Uploads, sealed, the crops this Space's Sends refer to, before any entry that refers to them. */
   async #uploadCrops(space: string, keys: SpaceKeys): Promise<void> {
-    const sends: string[] = this.#store.info(space).sends;
+    const sends: string[] = this.#store.read(space, (s) => JSON.parse(s.scene(JSON.stringify({ detail: "full", ids: [] }))).sends ?? []);
+    const seen = this.#scanned.get(space) ?? new Set<string>();
+    this.#scanned.set(space, seen);
     const hashes = new Set<string>();
     for (const id of sends) {
+      if (seen.has(id)) continue;
       const f = JSON.parse(this.#store.read(space, (s) => s.send(id))) as { crops?: { asset: string }[] } | null;
       for (const c of f?.crops ?? []) hashes.add(c.asset);
     }
@@ -233,9 +274,23 @@ export class RelaySync {
       if (!res.ok) throw new Error(`could not upload asset ${hash}: ${res.status} ${await res.text()}`);
       this.#db.prepare("INSERT OR IGNORE INTO relay_assets (relay, space, hash) VALUES (?, ?, ?)").run(this.#t.url, space, hash);
     }
+    // A crop that isn't here yet is looked for again next time.
+    for (const id of sends) {
+      if (seen.has(id)) continue;
+      const f = JSON.parse(this.#store.read(space, (s) => s.send(id))) as { crops?: { asset: string }[] } | null;
+      if ((f?.crops ?? []).every((c) => done.has(c.asset) || this.#isUploaded(space, c.asset))) seen.add(id);
+    }
   }
 
-  /** Takes in entries other writers (cloud sessions, other devices) appended. */
+  #isUploaded(space: string, hash: string): boolean {
+    return Boolean(this.#db.prepare("SELECT 1 FROM relay_assets WHERE relay = ? AND space = ? AND hash = ?").get(this.#t.url, space, hash));
+  }
+
+  /**
+   * Takes in entries other writers (cloud sessions, other devices) appended. Consecutive
+   * entries with the same writers are checked and applied together: a checked receive
+   * forks the Space, so doing it once per page instead of once per entry matters.
+   */
   async #pull(space: string): Promise<void> {
     if (!this.#store.has(space)) return;
     const keys = this.keys(space);
@@ -244,44 +299,67 @@ export class RelaySync {
       const r = await this.#t.request({ t: "log.read", log: keys.log, token: keys.token, after: read_seq, limit: 200 });
       const entries = r.entries as { seq: number; data: string }[];
       if (!entries.length) return;
+      let run: { writers: string; authors: Set<string>; parts: Buffer[]; first: number; last: number } | null = null;
+      const flush = (): void => {
+        if (run) this.#apply(space, run.writers, Buffer.concat(run.parts), `entries ${run.first}–${run.last} from ${[...run.authors].join(", ")}`);
+        run = null;
+      };
       for (const e of entries) {
-        this.#apply(space, keys, e.seq, unb64Std(e.data));
-        this.#db.prepare("UPDATE relay_logs SET read_seq = ? WHERE relay = ? AND space = ?").run(e.seq, this.#t.url, space);
+        const w = this.#writersFor(space, keys, e.seq, unb64Std(e.data));
+        if (!w) continue;
+        if (run && run.writers !== w.writers) flush();
+        run ??= { writers: w.writers, authors: new Set(), parts: [], first: e.seq, last: e.seq };
+        run.parts.push(w.bytes);
+        run.authors.add(w.author);
+        run.last = e.seq;
       }
+      flush();
+      this.#db.prepare("UPDATE relay_logs SET read_seq = ? WHERE relay = ? AND space = ?").run(entries[entries.length - 1].seq, this.#t.url, space);
     }
   }
 
-  #apply(space: string, keys: SpaceKeys, seq: number, sealed: Uint8Array): void {
+  /** Opens an entry and says who may have written it, or null to skip it. */
+  #writersFor(space: string, keys: SpaceKeys, seq: number, sealed: Uint8Array): { writers: string; bytes: Buffer; author: string } | null {
     let opened;
     try {
       opened = openEntry(keys, sealed);
     } catch {
-      return this.#log(`relay: entry ${seq} of '${space}' does not open with its key; ignored`);
+      this.#log(`relay: entry ${seq} of '${space}' does not open with its key; ignored`);
+      return null;
     }
     const { header, bytes } = opened;
-    if (header.space !== space) return this.#log(`relay: entry ${seq} claims Space '${header.space}', in the log of '${space}'; ignored`);
-    if (header.author === `device:${this.#key.device}`) return; // this Link wrote it
-    let writers: string;
+    const skip = (why: string): null => (this.#log(`relay: entry ${seq} of '${space}' ${why}; ignored`), null);
+    if (header.space !== space) return skip(`claims Space '${header.space}'`);
+    if (header.author === `device:${this.#key.device}`) return null; // this Link wrote it
     if (header.author.startsWith("grant:")) {
       const g = this.grant(header.author.slice(6));
-      const now = Date.now();
-      if (!g || g.space !== space) return this.#log(`relay: entry ${seq} of '${space}' is from a grant this Link didn't issue; ignored`);
-      if (g.status !== "active" || now > g.expires) return this.#log(`relay: entry ${seq} of '${space}' is from grant ${g.gid}, which is ${g.status === "active" ? "expired" : g.status}; ignored`);
-      writers = JSON.stringify({ people: [], agents: [g.agent] });
-    } else if (header.author.startsWith("device:")) {
-      const d = this.#catalog.device(header.author.slice(7));
-      if (!d || !header.sig || !verifyFrom(unb64(d.key), createHash("sha256").update(bytes).digest(), header.sig))
-        return this.#log(`relay: entry ${seq} of '${space}' is not signed by a paired device; ignored`);
-      writers = JSON.stringify(d.kind === "ipad" ? { people: [d.person.id] } : { people: [d.person.id], agents: "*" });
-    } else return;
+      // Another Link of this person issued it; its changes reach this one through that Link.
+      if (!g) return null;
+      if (g.space !== space) return skip(`is from grant ${g.gid}, which is for another Space`);
+      if (g.status !== "active" || Date.now() > g.expires) return skip(`is from grant ${g.gid}, which is ${g.status === "active" ? "expired" : g.status}`);
+      return { writers: JSON.stringify({ people: [], agents: [g.agent] }), bytes, author: header.author };
+    }
+    if (header.author.startsWith("device:")) {
+      const device = header.author.slice(7);
+      const d = this.#catalog.device(device);
+      if (!d || !header.sig || !verifyFrom(unb64(d.key), createHash("sha256").update(bytes).digest(), header.sig)) return skip("is not signed by a paired device");
+      // A device this Link is in sync with right now sends the same changes over its own session.
+      if (this.#connected(device)) return null;
+      return { writers: JSON.stringify(d.kind === "ipad" ? { people: [d.person.id] } : { people: [d.person.id], agents: "*" }), bytes, author: header.author };
+    }
+    return null;
+  }
+
+  #apply(space: string, writers: string, bytes: Uint8Array, what: string): void {
     const before = this.#store.read(space, (s) => s.heads());
     const { pushed } = this.#row(space);
     const r = this.#store.commit(space, "sync:relay", (s) => receiveChecked(s, bytes, writers));
-    if (!r.ok) return this.#log(`relay: refused entry ${seq} of '${space}' from ${header.author}: ${(r.errors ?? []).map((e) => e.msg).join(" ")}`);
+    if (!r.ok) return this.#log(`relay: refused ${what} of '${space}': ${(r.errors ?? []).map((e) => e.msg).join(" ")}`);
+    const after = this.#store.read(space, (s) => s.heads());
+    if (after === before) return;
     // What came from the log needn't go back to it.
-    if (pushed === before)
-      this.#db.prepare("UPDATE relay_logs SET pushed = ? WHERE relay = ? AND space = ?").run(this.#store.read(space, (s) => s.heads()), this.#t.url, space);
-    this.#log(`relay: took in entry ${seq} of '${space}' from ${header.author}`);
+    if (pushed === before) this.#db.prepare("UPDATE relay_logs SET pushed = ? WHERE relay = ? AND space = ?").run(after, this.#t.url, space);
+    this.#log(`relay: took in ${what} of '${space}'`);
   }
 
   // ---------- grants ----------

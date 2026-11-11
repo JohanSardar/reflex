@@ -24,6 +24,7 @@ export interface EntryHeader {
   author: string;
   at: number;
   sig?: string;
+  snapshot?: boolean;
 }
 
 const mac = (k: Uint8Array, label: string): Buffer => createHmac("sha256", k).update(`${RELAY_PROTOCOL} ${label}`).digest();

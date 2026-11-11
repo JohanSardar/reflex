@@ -9,7 +9,8 @@
 //   device → relay  {t:"hello", device, key, sig}       sig = Ed25519("reflex-relay/v0 hello <room> <nonce>")
 //   relay → device  {t:"welcome", device}
 //   device → relay  {t:"watch", devices:[...]}          the devices it accepts frames from; replaces the list
-//   relay → device  {t:"presence", device, online}      for each watched device, now and on every change
+//   relay → device  {t:"presence", device, online, joined?}  for each watched device, now and on every change;
+//                                                       joined: it connected anew, so channels to it are gone
 //
 // Frames between two devices are binary WebSocket messages:
 //
@@ -26,7 +27,7 @@
 //
 // Requests (each answered by `{t:"result", req, ok, ...}` or `{..., ok:false, error}`):
 //
-//   {t:"log.append", req, log, token, entries:[b64]}     → {seqs}
+//   {t:"log.append", req, log, token, entries:[b64], snapshot?}  → {seqs}   snapshot: one entry holding the whole Space
 //   {t:"log.read",   req, log, token, after, limit?}      → {entries:[{seq, data}], last}
 //   {t:"log.watch",  req, log, token}                    → {last}; later {t:"log.new", log, last}
 //   {t:"log.assets", req, log, token, ids}               → {have:[ids]}
@@ -105,4 +106,6 @@ export interface EntryHeader {
   at: number;
   /** For a device: Ed25519 over the change bytes' SHA-256, by its device key. */
   sig?: string;
+  /** The bytes are the whole Space (`save()`), so replay can start here. */
+  snapshot?: boolean;
 }

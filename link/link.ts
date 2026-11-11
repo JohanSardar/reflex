@@ -144,6 +144,7 @@ export class Link {
         transport: this.#relayT,
         key: this.#id.key,
         person: () => this.#id.person,
+        connected: (device) => this.#coord.peers().some((p) => p.device === device),
         log: this.#log,
       });
     }

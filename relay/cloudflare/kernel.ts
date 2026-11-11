@@ -9,5 +9,6 @@ const exports = initSync({ module: wasm }) as unknown as { memory: WebAssembly.M
 
 export const kernel: Kernel = {
   create: (id, kind, actor) => Space.create(id, kind, actor) as never,
+  load: (bytes, actor) => Space.load(bytes, actor) as never,
   memoryBytes: () => exports.memory.buffer.byteLength,
 };

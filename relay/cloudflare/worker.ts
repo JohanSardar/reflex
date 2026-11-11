@@ -25,6 +25,8 @@ interface Env {
   ASSETS: R2Bucket;
   /** The public origin, if it differs from the request's. */
   ORIGIN?: string;
+  /** Bytes of WASM memory a cloud session may take; default 96 MB. */
+  SESSION_MEMORY_LIMIT?: string;
 }
 
 const LOG_METHODS = ["append", "read", "watch", "assetsHave", "issueGrant", "revokeGrant", "mint"] as const;
@@ -160,6 +162,8 @@ export class LogDO extends DurableObject<Env> {
       renderer: () => new SvgRenderer(),
       log: (m) => console.log(`log: ${m}`),
       wakeAt: (at) => void this.ctx.storage.setAlarm(at),
+      // Workers allow 128 MB per isolate, WASM included; leave room for the JS heap and the renderer.
+      memoryLimit: Number(this.env.SESSION_MEMORY_LIMIT ?? 96 * 1024 * 1024),
     });
     return this.#log;
   }

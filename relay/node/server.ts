@@ -81,7 +81,7 @@ export async function startRelay(o: RelayOptions): Promise<{ port: number; close
         sql: sqlite(join(o.dir, "logs", `${id}.sqlite`)),
         bucket,
         hubs,
-        kernel: { create: (s, k, a) => Space.create(s, k, a) },
+        kernel: { create: (s, k, a) => Space.create(s, k, a), load: (b, a) => Space.load(b, a) },
         renderer: () => renderer,
         log,
         wakeAt: (at) => {
@@ -133,7 +133,7 @@ export async function startRelay(o: RelayOptions): Promise<{ port: number; close
     Readable.fromWeb(response.body as never).on("error", () => res.destroy()).pipe(res);
   }
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", originOf(req));
     const id = url.searchParams.get("room") ?? "";
