@@ -31,8 +31,11 @@ struct StrokeKeys: Hashable {
     let shape: String
     /// `shape` plus transform and ink. Changes when the stroke is moved or recolored.
     let full: String
+    /// The parametric ranges of the path still visible.
+    let visible: [ClosedRange<CGFloat>]
 
     init(_ stroke: PKStroke) {
+        visible = stroke.maskedPathRanges
         let date = stroke.path.creationDate.timeIntervalSinceReferenceDate.bitPattern
         origin = "\(date):\(stroke.randomSeed)"
 
@@ -40,7 +43,7 @@ struct StrokeKeys: Hashable {
         if let first = stroke.path.first {
             shape += "|\(first.location.x.bitPattern):\(first.location.y.bitPattern)"
         }
-        for range in stroke.maskedPathRanges {
+        for range in visible {
             shape += "|\(range.lowerBound.bitPattern)-\(range.upperBound.bitPattern)"
         }
         if let mask = stroke.mask {
@@ -76,7 +79,9 @@ public struct InkChange: Sendable, Equatable {
 /// 3. A stroke that kept its geometry but changed transform or ink (lasso move,
 ///    recolor) keeps its ID.
 /// 4. A stroke that shares its origin with a stroke that just disappeared is a
-///    fragment of it: a new ID, with that stroke as its parent.
+///    fragment of it: a new ID, with that stroke as its parent. When several
+///    pieces of one stroke disappear at once, the parent is the piece whose
+///    visible path covers the fragment.
 /// 5. Anything else is a new stroke.
 struct StrokeLedger {
     private(set) var records: [StrokeRecord] = []
@@ -142,7 +147,7 @@ struct StrokeLedger {
         // 4 and 5. Fragments of a stroke that just disappeared, then new strokes.
         let disappeared = unusedPrevious.sorted()
         for (i, key) in nextKeys.enumerated() where result[i] == nil {
-            let parent = disappeared.first(where: { keys[$0].origin == key.origin }).map { records[$0].id }
+            let parent = parentIndex(of: key, among: disappeared).map { records[$0].id }
             let record = StrokeRecord(id: StrokeRecord.newID(), parent: parent)
             take(i, record)
             change.added.append(record)
@@ -160,6 +165,24 @@ struct StrokeLedger {
         records = result.map { $0! }
         keys = nextKeys
         return change
+    }
+}
+
+extension StrokeLedger {
+    /// The stroke a fragment was cut from: among the strokes that just
+    /// disappeared with the same origin, the one with the least visible path
+    /// that still covers the fragment. Falls back to any with the same origin.
+    fileprivate func parentIndex(of fragment: StrokeKeys, among disappeared: [Int]) -> Int? {
+        let sameOrigin = disappeared.filter { keys[$0].origin == fragment.origin }
+        func covers(_ index: Int) -> Bool {
+            fragment.visible.allSatisfy { piece in
+                keys[index].visible.contains { $0.lowerBound <= piece.lowerBound && piece.upperBound <= $0.upperBound }
+            }
+        }
+        func length(_ index: Int) -> CGFloat {
+            keys[index].visible.reduce(0) { $0 + $1.upperBound - $1.lowerBound }
+        }
+        return sameOrigin.filter(covers).min { length($0) < length($1) } ?? sameOrigin.first
     }
 }
 
