@@ -17,6 +17,8 @@ import type { Bucket, Sql } from "./ports.ts";
 import { assetId, hex, openAsset, openEntry, random, sealEntry, sha256hex, type SpaceKeys } from "./seal.ts";
 import type { Grant } from "./wire.ts";
 
+const CLOCK_SKEW_MS = 5 * 60_000;
+
 /** The kernel binding: `@reflex/kernel/node` or `@reflex/kernel/workers`. */
 export interface Kernel {
   create(id: string, kind: string, actor: string): Space;
@@ -155,14 +157,16 @@ export class CloudSession {
     let added = 0;
     for (const s of sends) {
       if (this.#sql("SELECT 1 FROM c_sends WHERE gid = ? AND send = ?", g, s).length) continue;
-      // Not routed yet: the first Agent to attach adopts it. Only Sends frozen
-      // before this grant began are old news to its Agent.
-      const routed = agents.length > 0 || (!route && this.#frozenAt(s) < this.grant.issued);
-      this.#d.sql.run("INSERT INTO c_sends (gid, send, at, routed) VALUES (?, ?, ?, ?)", g, s, Date.now(), routed ? 1 : 0);
-      if (route) for (const a of agents) this.#d.sql.run("INSERT OR IGNORE INTO c_receipts (gid, agent, send, state) VALUES (?, ?, ?, 'ready')", g, a, s);
-      added++;
+      // Sends frozen before this grant began are old news to its Agent (with
+      // room for the devices' clocks to differ). Any other goes to the Agents
+      // already attached, or waits for the first to attach.
+      const old = !route && this.#frozenAt(s) < this.grant.issued - CLOCK_SKEW_MS;
+      this.#d.sql.run("INSERT INTO c_sends (gid, send, at, routed) VALUES (?, ?, ?, ?)", g, s, Date.now(), old || agents.length ? 1 : 0);
+      if (old) continue;
+      for (const a of agents) this.#d.sql.run("INSERT OR IGNORE INTO c_receipts (gid, agent, send, state) VALUES (?, ?, ?, 'ready')", g, a, s);
+      if (agents.length) added++;
     }
-    if (added && route) this.#wake();
+    if (added) this.#wake();
   }
 
   #wake(): void {

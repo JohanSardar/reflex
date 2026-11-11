@@ -168,7 +168,7 @@ export class SpaceLog {
       g.expires,
       now,
     );
-    this.#d.wakeAt(Math.min(g.expires, now + PLAIN_KEY_MS));
+    this.#schedule();
     this.#d.log(`grant ${g.grant} issued by ${g.device} for ${g.name}, until ${new Date(g.expires).toISOString()}`);
   }
 
@@ -201,7 +201,7 @@ export class SpaceLog {
     const token = `rfx1.${this.#d.id}.${gid}.${b64url(random(32))}`;
     this.#d.sql.run("INSERT INTO tokens (hash, gid, wrapped, expires) VALUES (?, ?, ?, ?)", sha256hex(token), gid, wrapKey(token, new Uint8Array(row.plain_key)), row.expires);
     this.#d.sql.run("UPDATE grants SET plain_key = NULL, status = 'active', code = NULL WHERE gid = ?", gid);
-    this.#d.wakeAt(row.expires);
+    this.#schedule();
     return { token, expires: row.expires };
   }
 
@@ -212,6 +212,11 @@ export class SpaceLog {
     // A grant whose token was never collected keeps its plain key at most 10
     // minutes; by then its sign-in has expired too, so no token can follow.
     this.#d.sql.run("UPDATE grants SET plain_key = NULL WHERE status = 'issued' AND plain_key IS NOT NULL AND received + ? <= ?", PLAIN_KEY_MS, now);
+    this.#schedule();
+  }
+
+  /** The platform keeps one wake time per log: always the earliest deadline of any grant. */
+  #schedule(): void {
     const next = this.#d.sql.all<{ n: number | null }>(
       "SELECT min(CASE WHEN plain_key IS NOT NULL THEN min(expires, received + ?) ELSE expires END) AS n FROM grants WHERE status IN ('issued', 'active')",
       PLAIN_KEY_MS,
@@ -272,6 +277,9 @@ export class SpaceLog {
     const after = this.#d.kernel.memoryBytes?.() ?? 0;
     if (this.#d.memoryLimit && after > this.#d.memoryLimit && after > before) {
       session.close();
+      // Remembered only if this Space alone outgrew the budget; one that lost
+      // to other live sessions in the isolate is tried again later.
+      if (after - before <= this.#d.memoryLimit) this.#d.sql.run("DELETE FROM meta WHERE k = 'too_big'");
       this.#d.log(`'${grant.space}' took ${after} bytes of WASM memory to open, over the ${this.#d.memoryLimit} a cloud session may use here`);
       throw tooBig();
     }
