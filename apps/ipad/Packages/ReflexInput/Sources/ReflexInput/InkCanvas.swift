@@ -184,9 +184,11 @@ public final class InkCanvasController: NSObject {
             -\(change.removed, privacy: .public) \
             restored \(change.restored, privacy: .public) moved \(change.moved, privacy: .public)
             """)
-        unsent.append(contentsOf: change.added.map(\.id) + change.restored)
         let removed = Set(change.removed)
         unsent.removeAll(where: removed.contains)
+        for id in change.added.map(\.id) + change.restored where !unsent.contains(id) {
+            unsent.append(id)
+        }
         publishStrokes()
         save(drawing)
     }
