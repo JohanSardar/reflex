@@ -27,10 +27,24 @@ export function existsSync(p: string | URL): boolean {
   return key(p) in files;
 }
 
+/** Bundled files are files; a prefix of them is a directory. */
+export function statSync(p: string | URL, o?: { throwIfNoEntry?: boolean }) {
+  const k = key(p);
+  const file = k in files;
+  const dir = !file && Object.keys(files).some((f) => f.startsWith(k + "/"));
+  if (!file && !dir) {
+    if (o?.throwIfNoEntry === false) return undefined;
+    throw missing(p);
+  }
+  return { isFile: () => file, isDirectory: () => dir, size: file ? files[k].length : 0, mtimeMs: 0 };
+}
+
 const nope = (): never => {
   throw new Error("no file system in the Worker");
 };
 export const writeFileSync = nope;
 export const appendFileSync = nope;
 export const mkdirSync = nope;
-export default { readFileSync, readdirSync, existsSync, writeFileSync, appendFileSync, mkdirSync };
+export const rmSync = nope;
+export const watch = nope;
+export default { readFileSync, readdirSync, existsSync, statSync, writeFileSync, appendFileSync, mkdirSync, rmSync, watch };
