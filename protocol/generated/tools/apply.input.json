@@ -1123,7 +1123,7 @@
               },
               "params": {
                 "type": "object",
-                "description": "A JSON Schema (the same restricted subset) for the parameters."
+                "description": "A JSON Schema (the same restricted subset) for the parameters, not their values."
               },
               "template": {
                 "type": "array",
@@ -1169,7 +1169,8 @@
                 "maxLength": 200
               },
               "params": {
-                "type": "object"
+                "type": "object",
+                "description": "A JSON Schema (the same restricted subset) for the parameters, not their values."
               },
               "template": {
                 "type": "string",

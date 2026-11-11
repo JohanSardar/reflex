@@ -4,15 +4,41 @@
   "title": "open_space input",
   "type": "object",
   "properties": {
-    "space": { "$ref": "common.schema.json#/$defs/space_name" },
-    "create": { "description": "Create the Space if it doesn't exist. Without it, a missing Space is an error.", "type": "boolean" },
-    "title": { "description": "create only: the title the person sees.", "type": "string", "maxLength": 120 },
+    "space": {
+      "$ref": "common.schema.json#/$defs/space_name"
+    },
+    "create": {
+      "description": "Create the Space if it doesn't exist. Without it, a missing Space is an error.",
+      "type": "boolean"
+    },
+    "title": {
+      "description": "create only: the title the person sees.",
+      "type": "string",
+      "maxLength": 120
+    },
     "size": {
       "description": "create only: an infinite canvas (default), fixed pages, or a set width.",
       "type": "string",
-      "enum": ["infinite", "pages", "width"]
+      "enum": [
+        "infinite",
+        "pages",
+        "width"
+      ]
+    },
+    "width": {
+      "description": "create with size \"width\" only: the width, in your coordinates.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000000
     }
   },
-  "required": ["space"],
-  "additionalProperties": false
+  "required": [
+    "space"
+  ],
+  "additionalProperties": false,
+  "dependentRequired": {
+    "width": [
+      "size"
+    ]
+  }
 }

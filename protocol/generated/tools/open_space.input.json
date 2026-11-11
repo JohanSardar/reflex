@@ -23,12 +23,23 @@
         "pages",
         "width"
       ]
+    },
+    "width": {
+      "description": "create with size \"width\" only: the width, in your coordinates.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000000
     }
   },
   "required": [
     "space"
   ],
   "additionalProperties": false,
+  "dependentRequired": {
+    "width": [
+      "size"
+    ]
+  },
   "$defs": {
     "space_name": {
       "description": "A Space's short, stable name, such as 'auth-plan'.",

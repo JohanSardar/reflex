@@ -6,7 +6,7 @@
     "topic": {
       "description": "'index' lists every Element type, Recipe, Embed Template and Guide. Any name from it returns that Guide.",
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
     }
   },
   "required": [
