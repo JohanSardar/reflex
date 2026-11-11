@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "open_space input",
+  "type": "object",
+  "properties": {
+    "space": {
+      "$ref": "#/$defs/space_name"
+    },
+    "create": {
+      "description": "Create the Space if it doesn't exist. Without it, a missing Space is an error.",
+      "type": "boolean"
+    },
+    "title": {
+      "description": "create only: the title the person sees.",
+      "type": "string",
+      "maxLength": 120
+    },
+    "size": {
+      "description": "create only: an infinite canvas (default), fixed pages, or a set width.",
+      "type": "string",
+      "enum": [
+        "infinite",
+        "pages",
+        "width"
+      ]
+    },
+    "width": {
+      "description": "create with size \"width\" only: the width, in your coordinates.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000000
+    }
+  },
+  "required": [
+    "space"
+  ],
+  "additionalProperties": false,
+  "dependentRequired": {
+    "width": [
+      "size"
+    ]
+  },
+  "$defs": {
+    "space_name": {
+      "description": "A Space's short, stable name, such as 'auth-plan'.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    }
+  }
+}

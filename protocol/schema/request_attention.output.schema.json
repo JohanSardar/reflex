@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reflex.eilmer.si/protocol/v0/request_attention.output.schema.json",
+  "title": "request_attention result",
+  "type": "object",
+  "properties": {
+    "status": {
+      "description": "shown: a banner is up on a device. already_viewing: the person is in that Space, so no banner was needed. queued: no device is awake; the banner shows when one wakes.",
+      "type": "string",
+      "enum": ["shown", "already_viewing", "queued"]
+    },
+    "pending_sends": { "$ref": "common.schema.json#/$defs/pending_sends" }
+  },
+  "required": ["status", "pending_sends"],
+  "additionalProperties": false
+}

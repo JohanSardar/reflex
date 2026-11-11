@@ -1,0 +1,4 @@
+{
+  "space": "auth-plan",
+  "code": "const names = ['orders', 'billing', 'search', 'email'];\nconst ids = names.map((name) => {\n  space.add({ type: 'shape', id: `n-${name}`, shape: 'rect', text: name });\n  space.add({ type: 'connector', from: 'n-gateway', to: `n-${name}` });\n  return `n-${name}`;\n});\nspace.arrange({ ids, layout: 'row', gap: 40, at: { below: 'n-gateway', gap: 120 } });\nreturn space.find({ type: 'shape' }).length;"
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reflex.eilmer.si/protocol/v0/exec.output.schema.json",
+  "title": "exec result",
+  "description": "The apply result fields, plus what the code returned and logged. batch is unset when the code wrote nothing.",
+  "type": "object",
+  "properties": {
+    "ok": { "const": true },
+    "batch": { "$ref": "common.schema.json#/$defs/batch_id" },
+    "ids": { "$ref": "apply.output.schema.json#/properties/ids" },
+    "repaired": { "$ref": "apply.output.schema.json#/properties/repaired" },
+    "lints": { "$ref": "apply.output.schema.json#/properties/lints" },
+    "look": { "$ref": "look.output.schema.json" },
+    "result": { "description": "The code's return value, as JSON." },
+    "logs": { "type": "array", "items": { "type": "string", "maxLength": 2000 }, "maxItems": 200 },
+    "pending_sends": { "$ref": "common.schema.json#/$defs/pending_sends" }
+  },
+  "required": ["ok", "pending_sends"],
+  "additionalProperties": false
+}

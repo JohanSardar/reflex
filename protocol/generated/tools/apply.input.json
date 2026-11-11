@@ -1,0 +1,1782 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "apply input",
+  "description": "One batch of operations on one Space. The batch is atomic: all ops apply or none do, and it is one revert unit.",
+  "type": "object",
+  "properties": {
+    "space": {
+      "$ref": "#/$defs/space_name"
+    },
+    "ops": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "title": "add text",
+            "description": "Add a text: Plain text or Markdown.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "add"
+              },
+              "type": {
+                "const": "text"
+              },
+              "id": {
+                "$ref": "#/$defs/new_id"
+              },
+              "at": {
+                "$ref": "#/$defs/at"
+              },
+              "w": {
+                "$ref": "#/$defs/w"
+              },
+              "h": {
+                "$ref": "#/$defs/h"
+              },
+              "text": {
+                "$ref": "#/$defs/text"
+              },
+              "markdown": {
+                "$ref": "#/$defs/markdown"
+              },
+              "size": {
+                "$ref": "#/$defs/size"
+              },
+              "color": {
+                "$ref": "#/$defs/color"
+              },
+              "align": {
+                "$ref": "#/$defs/align"
+              },
+              "data": {
+                "$ref": "#/$defs/data"
+              },
+              "behaviors": {
+                "$ref": "#/$defs/behaviors"
+              },
+              "draggable": {
+                "$ref": "#/$defs/draggable"
+              },
+              "locked": {
+                "$ref": "#/$defs/locked"
+              },
+              "snap": {
+                "$ref": "#/$defs/snap"
+              }
+            },
+            "required": [
+              "op",
+              "type",
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "title": "add note",
+            "description": "Add a note: A sticky note.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "add"
+              },
+              "type": {
+                "const": "note"
+              },
+              "id": {
+                "$ref": "#/$defs/new_id"
+              },
+              "at": {
+                "$ref": "#/$defs/at"
+              },
+              "w": {
+                "$ref": "#/$defs/w"
+              },
+              "h": {
+                "$ref": "#/$defs/h"
+              },
+              "text": {
+                "$ref": "#/$defs/note_text"
+              },
+              "color": {
+                "$ref": "#/$defs/color"
+              },
+              "data": {
+                "$ref": "#/$defs/data"
+              },
+              "behaviors": {
+                "$ref": "#/$defs/behaviors"
+              },
+              "draggable": {
+                "$ref": "#/$defs/draggable"
+              },
+              "locked": {
+                "$ref": "#/$defs/locked"
+              },
+              "snap": {
+                "$ref": "#/$defs/snap"
+              }
+            },
+            "required": [
+              "op",
+              "type",
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "title": "add math",
+            "description": "Add a math: LaTeX math, rendered natively.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "add"
+              },
+              "type": {
+                "const": "math"
+              },
+              "id": {
+                "$ref": "#/$defs/new_id"
+              },
+              "at": {
+                "$ref": "#/$defs/at"
+              },
+              "w": {
+                "$ref": "#/$defs/w"
+              },
+              "h": {
+                "$ref": "#/$defs/h"
+              },
+              "latex": {
+                "$ref": "#/$defs/latex"
+              },
+              "size": {
+                "$ref": "#/$defs/size"
+              },
+              "color": {
+                "$ref": "#/$defs/color"
+              },
+              "data": {
+                "$ref": "#/$defs/data"
+              },
+              "behaviors": {
+                "$ref": "#/$defs/behaviors"
+              },
+              "draggable": {
+                "$ref": "#/$defs/draggable"
+              },
+              "locked": {
+                "$ref": "#/$defs/locked"
+              },
+              "snap": {
+                "$ref": "#/$defs/snap"
+              }
+            },
+            "required": [
+              "op",
+              "type",
+              "latex"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "title": "add shape",
+            "description": "Add a shape: A shape with optional text inside it.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "add"
+              },
+              "type": {
+                "const": "shape"
+              },
+              "id": {
+                "$ref": "#/$defs/new_id"
+              },
+              "at": {
+                "$ref": "#/$defs/at"
+              },
+              "w": {
+                "$ref": "#/$defs/w"
+              },
+              "h": {
+                "$ref": "#/$defs/h"
+              },
+              "shape": {
+                "$ref": "#/$defs/shape"
+              },
+              "text": {
+                "$ref": "#/$defs/shape_text"
+              },
+              "color": {
+                "$ref": "#/$defs/color"
+              },
+              "fill": {
+                "$ref": "#/$defs/fill"
+              },
+              "stroke": {
+                "$ref": "#/$defs/stroke"
+              },
+              "data": {
+                "$ref": "#/$defs/data"
+              },
+              "behaviors": {
+                "$ref": "#/$defs/behaviors"
+              },
+              "draggable": {
+                "$ref": "#/$defs/draggable"
+              },
+              "locked": {
+                "$ref": "#/$defs/locked"
+              },
+              "snap": {
+                "$ref": "#/$defs/snap"
+              }
+            },
+            "required": [
+              "op",
+              "type",
+              "shape"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "title": "add connector",
+            "description": "Add a connector: A line or arrow. Bind both ends to Elements with from and to, and it follows them when they move. Or give points for a free line, such as an underline.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "add"
+              },
+              "type": {
+                "const": "connector"
+              },
+              "id": {
+                "$ref": "#/$defs/new_id"
+              },
+              "at": {
+                "$ref": "#/$defs/at"
+              },
+              "w": {
+                "$ref": "#/$defs/w"
+              },
+              "h": {
+                "$ref": "#/$defs/h"
+              },
+              "from": {
+                "$ref": "#/$defs/from"
+              },
+              "to": {
+                "$ref": "#/$defs/to"
+              },
+              "points": {
+                "$ref": "#/$defs/points"
+              },
+              "text": {
+                "$ref": "#/$defs/connector_text"
+              },
+              "arrow": {
+                "$ref": "#/$defs/arrow"
+              },
+              "stroke": {
+                "$ref": "#/$defs/stroke"
+              },
+              "color": {
+                "$ref": "#/$defs/color"
+              },
+              "data": {
+                "$ref": "#/$defs/data"
+              },
+              "behaviors": {
+                "$ref": "#/$defs/behaviors"
+              },
+              "draggable": {
+                "$ref": "#/$defs/draggable"
+              },
+              "locked": {
+                "$ref": "#/$defs/locked"
+              },
+              "snap": {
+                "$ref": "#/$defs/snap"
+              }
+            },
+            "required": [
+              "op",
+              "type"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "title": "add image",
+            "description": "Add a image: A picture. Photos and PDF pages the person adds become images they can write on.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "add"
+              },
+              "type": {
+                "const": "image"
+              },
+              "id": {
+                "$ref": "#/$defs/new_id"
+              },
+              "at": {
+                "$ref": "#/$defs/at"
+              },
+              "w": {
+                "$ref": "#/$defs/w"
+              },
+              "h": {
+                "$ref": "#/$defs/h"
+              },
+              "src": {
+                "$ref": "#/$defs/src"
+              },
+              "alt": {
+                "$ref": "#/$defs/alt"
+              },
+              "page": {
+                "$ref": "#/$defs/page"
+              },
+              "data": {
+                "$ref": "#/$defs/data"
+              },
+              "behaviors": {
+                "$ref": "#/$defs/behaviors"
+              },
+              "draggable": {
+                "$ref": "#/$defs/draggable"
+              },
+              "locked": {
+                "$ref": "#/$defs/locked"
+              },
+              "snap": {
+                "$ref": "#/$defs/snap"
+              }
+            },
+            "required": [
+              "op",
+              "type",
+              "src"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "title": "add frame",
+            "description": "Add a frame: A titled container. Elements placed inside it move with it.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "add"
+              },
+              "type": {
+                "const": "frame"
+              },
+              "id": {
+                "$ref": "#/$defs/new_id"
+              },
+              "at": {
+                "$ref": "#/$defs/at"
+              },
+              "w": {
+                "$ref": "#/$defs/w"
+              },
+              "h": {
+                "$ref": "#/$defs/h"
+              },
+              "title": {
+                "$ref": "#/$defs/title"
+              },
+              "color": {
+                "$ref": "#/$defs/color"
+              },
+              "data": {
+                "$ref": "#/$defs/data"
+              },
+              "behaviors": {
+                "$ref": "#/$defs/behaviors"
+              },
+              "draggable": {
+                "$ref": "#/$defs/draggable"
+              },
+              "locked": {
+                "$ref": "#/$defs/locked"
+              },
+              "snap": {
+                "$ref": "#/$defs/snap"
+              }
+            },
+            "required": [
+              "op",
+              "type"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "title": "add region",
+            "description": "Add a region: An area with its own rules: whether Ink is allowed, whether Agents may write there, watch mode, and a Send button scoped to it.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "add"
+              },
+              "type": {
+                "const": "region"
+              },
+              "id": {
+                "$ref": "#/$defs/new_id"
+              },
+              "at": {
+                "$ref": "#/$defs/at"
+              },
+              "w": {
+                "$ref": "#/$defs/w"
+              },
+              "h": {
+                "$ref": "#/$defs/h"
+              },
+              "title": {
+                "$ref": "#/$defs/title"
+              },
+              "ink": {
+                "$ref": "#/$defs/ink"
+              },
+              "agents_read_only": {
+                "$ref": "#/$defs/agents_read_only"
+              },
+              "watch": {
+                "$ref": "#/$defs/watch"
+              },
+              "send_button": {
+                "$ref": "#/$defs/send_button"
+              },
+              "data": {
+                "$ref": "#/$defs/data"
+              },
+              "behaviors": {
+                "$ref": "#/$defs/behaviors"
+              },
+              "draggable": {
+                "$ref": "#/$defs/draggable"
+              },
+              "locked": {
+                "$ref": "#/$defs/locked"
+              },
+              "snap": {
+                "$ref": "#/$defs/snap"
+              }
+            },
+            "required": [
+              "op",
+              "type"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "title": "add embed",
+            "description": "Add a embed: Web or 3D content Reflex does not natively understand, sandboxed. Use one of: template (an Embed Template, with params), html (inline HTML), url (an MCP App 'ui://' resource or an https page), or model (a USDZ or glTF asset).",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "add"
+              },
+              "type": {
+                "const": "embed"
+              },
+              "id": {
+                "$ref": "#/$defs/new_id"
+              },
+              "at": {
+                "$ref": "#/$defs/at"
+              },
+              "w": {
+                "$ref": "#/$defs/w"
+              },
+              "h": {
+                "$ref": "#/$defs/h"
+              },
+              "template": {
+                "$ref": "#/$defs/template"
+              },
+              "params": {
+                "$ref": "#/$defs/element_params"
+              },
+              "html": {
+                "$ref": "#/$defs/html"
+              },
+              "url": {
+                "$ref": "#/$defs/url"
+              },
+              "model": {
+                "$ref": "#/$defs/model"
+              },
+              "allow": {
+                "$ref": "#/$defs/allow"
+              },
+              "data": {
+                "$ref": "#/$defs/data"
+              },
+              "behaviors": {
+                "$ref": "#/$defs/behaviors"
+              },
+              "draggable": {
+                "$ref": "#/$defs/draggable"
+              },
+              "locked": {
+                "$ref": "#/$defs/locked"
+              },
+              "snap": {
+                "$ref": "#/$defs/snap"
+              }
+            },
+            "required": [
+              "op",
+              "type"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "title": "add extension",
+            "description": "Add an Element of an extension type. Its fields go in props. If props fail the type's schema, the error includes a schema excerpt and one example. Call read_me(type) first.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "add"
+              },
+              "type": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,39}$",
+                "not": {
+                  "enum": [
+                    "text",
+                    "note",
+                    "math",
+                    "shape",
+                    "connector",
+                    "image",
+                    "frame",
+                    "region",
+                    "embed",
+                    "ink",
+                    "file"
+                  ]
+                }
+              },
+              "id": {
+                "$ref": "#/$defs/new_id"
+              },
+              "at": {
+                "$ref": "#/$defs/at"
+              },
+              "w": {
+                "$ref": "#/$defs/w"
+              },
+              "h": {
+                "$ref": "#/$defs/h"
+              },
+              "props": {
+                "type": "object"
+              },
+              "data": {
+                "$ref": "#/$defs/data"
+              },
+              "behaviors": {
+                "$ref": "#/$defs/behaviors"
+              },
+              "draggable": {
+                "$ref": "#/$defs/draggable"
+              },
+              "locked": {
+                "$ref": "#/$defs/locked"
+              },
+              "snap": {
+                "$ref": "#/$defs/snap"
+              }
+            },
+            "required": [
+              "op",
+              "type",
+              "props"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "title": "patch",
+            "description": "Change one of your Elements with explicit field operations. Each key is one operation; use as many as you need. Their merge behavior with concurrent edits is defined, so prefer text_insert over setting the whole text.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "patch"
+              },
+              "id": {
+                "$ref": "#/$defs/element_id"
+              },
+              "set": {
+                "description": "Fields to set to new values.",
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "$ref": "#/$defs/text"
+                  },
+                  "markdown": {
+                    "$ref": "#/$defs/markdown"
+                  },
+                  "size": {
+                    "$ref": "#/$defs/size"
+                  },
+                  "color": {
+                    "$ref": "#/$defs/color"
+                  },
+                  "align": {
+                    "$ref": "#/$defs/align"
+                  },
+                  "latex": {
+                    "$ref": "#/$defs/latex"
+                  },
+                  "shape": {
+                    "$ref": "#/$defs/shape"
+                  },
+                  "fill": {
+                    "$ref": "#/$defs/fill"
+                  },
+                  "stroke": {
+                    "$ref": "#/$defs/stroke"
+                  },
+                  "from": {
+                    "$ref": "#/$defs/from"
+                  },
+                  "to": {
+                    "$ref": "#/$defs/to"
+                  },
+                  "points": {
+                    "$ref": "#/$defs/points"
+                  },
+                  "arrow": {
+                    "$ref": "#/$defs/arrow"
+                  },
+                  "src": {
+                    "$ref": "#/$defs/src"
+                  },
+                  "alt": {
+                    "$ref": "#/$defs/alt"
+                  },
+                  "page": {
+                    "$ref": "#/$defs/page"
+                  },
+                  "title": {
+                    "$ref": "#/$defs/title"
+                  },
+                  "ink": {
+                    "$ref": "#/$defs/ink"
+                  },
+                  "agents_read_only": {
+                    "$ref": "#/$defs/agents_read_only"
+                  },
+                  "watch": {
+                    "$ref": "#/$defs/watch"
+                  },
+                  "send_button": {
+                    "$ref": "#/$defs/send_button"
+                  },
+                  "template": {
+                    "$ref": "#/$defs/template"
+                  },
+                  "params": {
+                    "$ref": "#/$defs/element_params"
+                  },
+                  "html": {
+                    "$ref": "#/$defs/html"
+                  },
+                  "url": {
+                    "$ref": "#/$defs/url"
+                  },
+                  "model": {
+                    "$ref": "#/$defs/model"
+                  },
+                  "allow": {
+                    "$ref": "#/$defs/allow"
+                  },
+                  "at": {
+                    "$ref": "#/$defs/at"
+                  },
+                  "w": {
+                    "$ref": "#/$defs/w"
+                  },
+                  "h": {
+                    "$ref": "#/$defs/h"
+                  },
+                  "props": {
+                    "$ref": "#/$defs/set_props"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/set_data"
+                  },
+                  "behaviors": {
+                    "$ref": "#/$defs/behaviors"
+                  },
+                  "draggable": {
+                    "$ref": "#/$defs/draggable"
+                  },
+                  "locked": {
+                    "$ref": "#/$defs/locked"
+                  },
+                  "snap": {
+                    "$ref": "#/$defs/snap"
+                  }
+                },
+                "minProperties": 1,
+                "additionalProperties": false
+              },
+              "unset": {
+                "description": "Fields to clear back to their defaults.",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "text",
+                    "markdown",
+                    "size",
+                    "color",
+                    "align",
+                    "latex",
+                    "fill",
+                    "stroke",
+                    "from",
+                    "to",
+                    "points",
+                    "arrow",
+                    "alt",
+                    "page",
+                    "title",
+                    "ink",
+                    "agents_read_only",
+                    "watch",
+                    "send_button",
+                    "params",
+                    "allow",
+                    "w",
+                    "h",
+                    "props",
+                    "data",
+                    "behaviors",
+                    "draggable",
+                    "locked",
+                    "snap"
+                  ]
+                },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "text_insert": {
+                "description": "Insert text at a UTF-16 offset.",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "enum": [
+                        "text",
+                        "latex",
+                        "alt",
+                        "title",
+                        "html"
+                      ]
+                    },
+                    "at": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "text": {
+                      "type": "string",
+                      "maxLength": 20000
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "at",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 64
+              },
+              "text_delete": {
+                "description": "Delete len UTF-16 code units starting at at.",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "enum": [
+                        "text",
+                        "latex",
+                        "alt",
+                        "title",
+                        "html"
+                      ]
+                    },
+                    "at": {
+                      "$ref": "#/$defs/count"
+                    },
+                    "len": {
+                      "$ref": "#/$defs/count"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "at",
+                    "len"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 64
+              },
+              "list_insert": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "enum": [
+                        "behaviors",
+                        "points",
+                        "allow"
+                      ]
+                    },
+                    "index": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 100000
+                    },
+                    "value": {}
+                  },
+                  "required": [
+                    "field",
+                    "index",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 64
+              },
+              "list_move": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "enum": [
+                        "behaviors",
+                        "points",
+                        "allow"
+                      ]
+                    },
+                    "from": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 100000
+                    },
+                    "to": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 100000
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "from",
+                    "to"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 64
+              },
+              "list_remove": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "enum": [
+                        "behaviors",
+                        "points",
+                        "allow"
+                      ]
+                    },
+                    "index": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 100000
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "index"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 64
+              },
+              "map_put": {
+                "description": "Set one key inside data, props or params, leaving the other keys alone.",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "enum": [
+                        "data",
+                        "props",
+                        "params"
+                      ]
+                    },
+                    "key": {
+                      "description": "The key inside that map.",
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "value": {}
+                  },
+                  "required": [
+                    "field",
+                    "key",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 64
+              },
+              "map_delete": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "enum": [
+                        "data",
+                        "props",
+                        "params"
+                      ]
+                    },
+                    "key": {
+                      "description": "The key inside that map.",
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "key"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 64
+              }
+            },
+            "required": [
+              "op",
+              "id"
+            ],
+            "minProperties": 3,
+            "additionalProperties": false
+          },
+          {
+            "title": "remove",
+            "description": "Remove your Elements. A person's Ink can never be removed.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "remove"
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/element_id"
+                },
+                "minItems": 1,
+                "maxItems": 1000,
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "op",
+              "ids"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "title": "arrange",
+            "description": "Lay out Elements and let Reflex compute the positions. tree follows the connectors between them.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "arrange"
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/element_id"
+                },
+                "minItems": 2,
+                "maxItems": 1000,
+                "uniqueItems": true
+              },
+              "layout": {
+                "type": "string",
+                "enum": [
+                  "row",
+                  "column",
+                  "grid",
+                  "tree"
+                ]
+              },
+              "gap": {
+                "$ref": "#/$defs/length"
+              },
+              "columns": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000,
+                "description": "grid only."
+              },
+              "align": {
+                "type": "string",
+                "enum": [
+                  "start",
+                  "middle",
+                  "end"
+                ]
+              },
+              "at": {
+                "$ref": "#/$defs/placement",
+                "description": "Where the arranged group goes. Defaults to where the first Element is."
+              }
+            },
+            "required": [
+              "op",
+              "ids",
+              "layout"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "title": "focus",
+            "description": "Point your own view, the one look renders by default, at Elements or bounds. It never moves the person's screen; to ask for their attention, use request_attention.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "focus"
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/target_ref"
+                },
+                "minItems": 1,
+                "maxItems": 1000
+              },
+              "bounds": {
+                "$ref": "#/$defs/bounds"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "minProperties": 2,
+            "maxProperties": 2,
+            "additionalProperties": false
+          },
+          {
+            "title": "define recipe",
+            "description": "Save a Recipe to the person's Library, where every Agent finds it in read_me('index') and applies it with recipe(name, params). template is a list of apply ops. A string value that is exactly '{{name}}' is replaced by that parameter's value, keeping its type; '{{name}}' inside a longer string is replaced by its text.",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "define"
+              },
+              "kind": {
+                "const": "recipe"
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+              },
+              "summary": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "One line shown in read_me('index')."
+              },
+              "params": {
+                "type": "object",
+                "description": "A JSON Schema (the same restricted subset) for the parameters, not their values."
+              },
+              "template": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                },
+                "minItems": 1,
+                "maxItems": 500
+              },
+              "guide": {
+                "type": "string",
+                "maxLength": 20000,
+                "description": "Markdown shown by read_me(name)."
+              }
+            },
+            "required": [
+              "op",
+              "kind",
+              "name",
+              "summary",
+              "params",
+              "template"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "title": "define embed",
+            "description": "Save an Embed Template to the person's Library, so any Agent can add it with add embed {template: name, params}. template is one HTML file; it talks to Reflex only through the reflex bridge (reflex.element.props(), state(), setState(), notify(), emit(), panel.open(), anchors.register()).",
+            "type": "object",
+            "properties": {
+              "op": {
+                "const": "define"
+              },
+              "kind": {
+                "const": "embed"
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+              },
+              "summary": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "params": {
+                "type": "object",
+                "description": "A JSON Schema (the same restricted subset) for the parameters, not their values."
+              },
+              "template": {
+                "type": "string",
+                "maxLength": 200000
+              },
+              "guide": {
+                "type": "string",
+                "maxLength": 20000
+              },
+              "allow": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9.-]{1,253}$"
+                },
+                "maxItems": 32
+              }
+            },
+            "required": [
+              "op",
+              "kind",
+              "name",
+              "summary",
+              "params",
+              "template"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 500
+    },
+    "in_reply_to": {
+      "$ref": "#/$defs/send_id",
+      "description": "The Send this batch answers. Passing it acknowledges that Send."
+    },
+    "look": {
+      "type": "boolean",
+      "description": "When true, the result also carries a rendered crop of what changed."
+    },
+    "request": {
+      "$ref": "#/$defs/request_id"
+    }
+  },
+  "required": [
+    "space",
+    "ops"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "agents_read_only": {
+      "type": "boolean",
+      "description": "When true, no Agent may write inside this Region. Default false."
+    },
+    "align": {
+      "type": "string",
+      "enum": [
+        "start",
+        "middle",
+        "end"
+      ]
+    },
+    "allow": {
+      "description": "Extra network hosts this Embed may reach, on top of the person's allowlist.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9.-]{1,253}$"
+      },
+      "maxItems": 32
+    },
+    "alt": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "arrow": {
+      "type": "string",
+      "enum": [
+        "end",
+        "start",
+        "both",
+        "none"
+      ]
+    },
+    "at": {
+      "$ref": "#/$defs/placement"
+    },
+    "behavior": {
+      "description": "What happens when someone interacts with an Element: one trigger (on) paired with one action (do). An Element can have several. Fields beyond on and do belong to the trigger or action named: event for embed_event; panel for open_panel; payload for notify and send; target and set for set; recipe and params for apply_recipe.",
+      "type": "object",
+      "properties": {
+        "on": {
+          "type": "string",
+          "enum": [
+            "tap",
+            "long_press",
+            "drag_end",
+            "ink_inside",
+            "panel_change",
+            "embed_event"
+          ]
+        },
+        "do": {
+          "type": "string",
+          "enum": [
+            "open_panel",
+            "notify",
+            "send",
+            "set",
+            "apply_recipe"
+          ]
+        },
+        "event": {
+          "description": "embed_event only: the event name the Embed emits with reflex.emit(name, payload).",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,39}$"
+        },
+        "panel": {
+          "$ref": "#/$defs/panel"
+        },
+        "payload": {
+          "description": "notify and send: JSON passed to the Agent with the tap or Send.",
+          "type": "object"
+        },
+        "target": {
+          "description": "set only: the Element to change. Defaults to this Element.",
+          "$ref": "#/$defs/element_id"
+        },
+        "set": {
+          "description": "set only: fields to set on the target, as in patch.set.",
+          "type": "object",
+          "minProperties": 1
+        },
+        "recipe": {
+          "description": "apply_recipe only: the Recipe's name.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        },
+        "params": {
+          "$ref": "#/$defs/params"
+        }
+      },
+      "required": [
+        "on",
+        "do"
+      ],
+      "additionalProperties": false
+    },
+    "behaviors": {
+      "description": "Trigger-action pairs, run when someone interacts with this Element.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/behavior"
+      },
+      "maxItems": 32
+    },
+    "bounds": {
+      "description": "[x, y, width, height] in the reading Agent's coordinates. x and y are the top-left corner.",
+      "type": "array",
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/coord"
+        },
+        {
+          "$ref": "#/$defs/coord"
+        },
+        {
+          "$ref": "#/$defs/length"
+        },
+        {
+          "$ref": "#/$defs/length"
+        }
+      ],
+      "items": false,
+      "minItems": 4
+    },
+    "color": {
+      "$ref": "#/$defs/common_color"
+    },
+    "common_color": {
+      "description": "A named color. Reflex picks the exact shade for light and dark mode.",
+      "type": "string",
+      "enum": [
+        "black",
+        "grey",
+        "white",
+        "red",
+        "orange",
+        "yellow",
+        "green",
+        "teal",
+        "blue",
+        "violet",
+        "pink"
+      ]
+    },
+    "common_data": {
+      "description": "A free JSON map the Agent defines, such as a task ID, a test case or a score. Reflex stores, syncs and returns it but never interprets it. At most 16 KiB of JSON per Element. Patch it with map_put and map_delete.",
+      "type": "object",
+      "maxProperties": 256
+    },
+    "common_snap": {
+      "description": "Snap rules for a draggable Element: to a grid, or to the given Elements.",
+      "type": "object",
+      "properties": {
+        "grid": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "to": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/element_id"
+          },
+          "maxItems": 256
+        }
+      },
+      "minProperties": 1,
+      "additionalProperties": false
+    },
+    "connector_text": {
+      "type": "string",
+      "maxLength": 400,
+      "description": "A label drawn on the line."
+    },
+    "coord": {
+      "description": "One coordinate in the reading Agent's own integer coordinate space for this Space. Its origin never moves (ADR-0007).",
+      "type": "integer",
+      "minimum": -1000000000,
+      "maximum": 1000000000
+    },
+    "count": {
+      "description": "A non-negative integer in the shared safe range.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "data": {
+      "$ref": "#/$defs/common_data"
+    },
+    "draggable": {
+      "type": "boolean",
+      "description": "Whether the person can drag it. Default false for Agent Elements."
+    },
+    "element_id": {
+      "description": "A short ID the Agent chose, such as 'n-auth'. IDs are scoped to the Agent that made them, so two Agents never collide. Reflex-made IDs (Ink, user imports, generated) use the same alphabet.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$"
+    },
+    "element_params": {
+      "$ref": "#/$defs/params"
+    },
+    "fill": {
+      "type": "string",
+      "enum": [
+        "none",
+        "tint",
+        "solid"
+      ]
+    },
+    "from": {
+      "$ref": "#/$defs/target_ref",
+      "description": "The Element or Mark the line starts at."
+    },
+    "h": {
+      "$ref": "#/$defs/length",
+      "description": "Height. Reflex sizes it to fit its content when unset."
+    },
+    "html": {
+      "type": "string",
+      "maxLength": 200000
+    },
+    "ink": {
+      "type": "boolean",
+      "description": "Whether the person may draw Ink here. Default true."
+    },
+    "latex": {
+      "type": "string",
+      "maxLength": 20000,
+      "description": "LaTeX source, without surrounding $ signs."
+    },
+    "length": {
+      "description": "A width, height or gap in the same units as coord.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000000
+    },
+    "locked": {
+      "type": "boolean",
+      "description": "When true, the person can't move, resize or delete it."
+    },
+    "markdown": {
+      "type": "boolean"
+    },
+    "model": {
+      "type": "string",
+      "maxLength": 4096,
+      "description": "A 3D model: an https URL or 'asset:<sha256>' of a USDZ or glTF file.",
+      "pattern": "^(https://|asset:[0-9a-f]{64}$)"
+    },
+    "new_id": {
+      "$ref": "#/$defs/element_id",
+      "description": "Your ID for it. Reflex generates one when unset and reports it in the result's ids."
+    },
+    "note_text": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "page": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000,
+      "description": "For a PDF page: its 1-based page number."
+    },
+    "panel": {
+      "description": "Native interface Reflex renders from JSON, such as a detail sidebar or a form. Values the person enters fire panel_change Behaviors and appear in the next Send's changes.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/element_id"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/panel_component"
+          },
+          "minItems": 1,
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "components"
+      ],
+      "additionalProperties": false
+    },
+    "panel_component": {
+      "description": "One Panel component. kind picks which other fields apply: text and markdown use text; button uses label and do; choice uses label, options, value and multiple; text_field uses label and value; number and slider use label, value, min, max and step; toggle uses label and value; embed uses template and params, or html, plus h.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "text",
+            "markdown",
+            "button",
+            "choice",
+            "text_field",
+            "number",
+            "slider",
+            "toggle",
+            "embed"
+          ]
+        },
+        "id": {
+          "description": "Names this component's value in panel changes. Required for components that take input.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,39}$"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "maxItems": 64
+        },
+        "multiple": {
+          "type": "boolean"
+        },
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "array"
+          ]
+        },
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        },
+        "step": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "do": {
+          "description": "button only: send ends the person's turn with a Send; notify tells the Agent without ending it.",
+          "type": "string",
+          "enum": [
+            "send",
+            "notify"
+          ]
+        },
+        "template": {
+          "description": "embed only: an Embed Template's name.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        },
+        "params": {
+          "$ref": "#/$defs/params"
+        },
+        "html": {
+          "description": "embed only: inline HTML, sandboxed like any Embed.",
+          "type": "string",
+          "maxLength": 200000
+        },
+        "h": {
+          "$ref": "#/$defs/length"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "params": {
+      "description": "Parameter values for a Recipe or an Embed Template, checked against that Recipe's or Template's own parameter schema.",
+      "type": "object"
+    },
+    "placement": {
+      "description": "Where to put something. Prefer a relation to an Element or a Mark and let Reflex compute the geometry: set exactly one of right_of, left_of, above, below, near or inside, plus an optional gap. Or set x and y for an absolute top-left corner in your own coordinates.",
+      "type": "object",
+      "properties": {
+        "right_of": {
+          "$ref": "#/$defs/target_ref"
+        },
+        "left_of": {
+          "$ref": "#/$defs/target_ref"
+        },
+        "above": {
+          "$ref": "#/$defs/target_ref"
+        },
+        "below": {
+          "$ref": "#/$defs/target_ref"
+        },
+        "near": {
+          "$ref": "#/$defs/target_ref"
+        },
+        "inside": {
+          "$ref": "#/$defs/target_ref"
+        },
+        "gap": {
+          "$ref": "#/$defs/length"
+        },
+        "x": {
+          "$ref": "#/$defs/coord"
+        },
+        "y": {
+          "$ref": "#/$defs/coord"
+        }
+      },
+      "minProperties": 1,
+      "dependentRequired": {
+        "x": [
+          "y"
+        ],
+        "y": [
+          "x"
+        ]
+      },
+      "additionalProperties": false
+    },
+    "point": {
+      "description": "[x, y] in the reading Agent's coordinates.",
+      "type": "array",
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/coord"
+        },
+        {
+          "$ref": "#/$defs/coord"
+        }
+      ],
+      "items": false,
+      "minItems": 2
+    },
+    "points": {
+      "description": "A free polyline in your coordinates, used when from and to are not set.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/point"
+      },
+      "minItems": 2,
+      "maxItems": 1000
+    },
+    "request_id": {
+      "description": "An idempotency key chosen by the caller. A retry with the same key and the same payload returns the first result; with a different payload it is rejected (request_reused).",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
+    },
+    "send_button": {
+      "type": "string",
+      "maxLength": 60,
+      "description": "The label of a Send button scoped to this Region, such as 'Check my work'. Unset means no button."
+    },
+    "send_id": {
+      "type": "string",
+      "pattern": "^s_[A-Za-z0-9]{1,40}$"
+    },
+    "set_data": {
+      "$ref": "#/$defs/common_data",
+      "description": "Replace the whole data map. To change one key, use map_put."
+    },
+    "set_props": {
+      "type": "object",
+      "description": "Extension types only: replace these props."
+    },
+    "shape": {
+      "type": "string",
+      "enum": [
+        "rect",
+        "rounded",
+        "ellipse",
+        "diamond",
+        "triangle",
+        "hexagon"
+      ]
+    },
+    "shape_text": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "size": {
+      "$ref": "#/$defs/text_size"
+    },
+    "snap": {
+      "$ref": "#/$defs/common_snap"
+    },
+    "space_name": {
+      "description": "A Space's short, stable name, such as 'auth-plan'.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "src": {
+      "type": "string",
+      "maxLength": 4096,
+      "description": "An https URL, or an asset reference 'asset:<sha256>'.",
+      "pattern": "^(https://|asset:[0-9a-f]{64}$)"
+    },
+    "stroke": {
+      "type": "string",
+      "enum": [
+        "solid",
+        "dashed",
+        "dotted"
+      ]
+    },
+    "target_ref": {
+      "description": "An Element ID or a Mark ID from a Send Bundle.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$"
+    },
+    "template": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 20000,
+      "description": "The text. With markdown: true it is rendered as Markdown."
+    },
+    "text_size": {
+      "type": "string",
+      "enum": [
+        "s",
+        "m",
+        "l",
+        "xl"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "to": {
+      "$ref": "#/$defs/target_ref",
+      "description": "The Element or Mark the line ends at."
+    },
+    "url": {
+      "type": "string",
+      "maxLength": 4096,
+      "pattern": "^(ui://|https://)"
+    },
+    "w": {
+      "$ref": "#/$defs/length",
+      "description": "Width. Reflex sizes it to fit its content when unset."
+    },
+    "watch": {
+      "type": "boolean",
+      "description": "When true, debounced snapshots of this Region reach its Agent as Send Bundles with kind 'watch'. Default false."
+    }
+  }
+}

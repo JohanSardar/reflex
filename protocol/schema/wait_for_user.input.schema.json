@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reflex.eilmer.si/protocol/v0/wait_for_user.input.schema.json",
+  "title": "wait_for_user input",
+  "type": "object",
+  "properties": {
+    "timeout_s": {
+      "description": "How long to wait. 0 returns at once: the oldest pending Send, or still_waiting if there is none.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3600
+    },
+    "after": {
+      "description": "The last Send you handled. Passing it acknowledges that Send, so it is never redelivered.",
+      "$ref": "common.schema.json#/$defs/send_id"
+    },
+    "space": { "description": "Only Sends from this Space.", "$ref": "common.schema.json#/$defs/space_name" },
+    "region": { "description": "Only Sends from this Region.", "$ref": "common.schema.json#/$defs/element_id" },
+    "element": { "description": "Only taps on this Element.", "$ref": "common.schema.json#/$defs/element_id" }
+  },
+  "required": ["timeout_s"],
+  "additionalProperties": false
+}

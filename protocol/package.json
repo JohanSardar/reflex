@@ -1,0 +1,17 @@
+{
+  "name": "@reflex/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Reflex Protocol v0: JSON Schemas, examples and hand-written tool text.",
+  "type": "module",
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "build": "node scripts/check.mjs --write",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "ajv": "^8.17.1",
+    "typescript": "^5.9.2"
+  }
+}

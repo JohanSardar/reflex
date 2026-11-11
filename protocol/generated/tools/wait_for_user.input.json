@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "wait_for_user input",
+  "type": "object",
+  "properties": {
+    "timeout_s": {
+      "description": "How long to wait. 0 returns at once: the oldest pending Send, or still_waiting if there is none.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3600
+    },
+    "after": {
+      "description": "The last Send you handled. Passing it acknowledges that Send, so it is never redelivered.",
+      "$ref": "#/$defs/send_id"
+    },
+    "space": {
+      "description": "Only Sends from this Space.",
+      "$ref": "#/$defs/space_name"
+    },
+    "region": {
+      "description": "Only Sends from this Region.",
+      "$ref": "#/$defs/element_id"
+    },
+    "element": {
+      "description": "Only taps on this Element.",
+      "$ref": "#/$defs/element_id"
+    }
+  },
+  "required": [
+    "timeout_s"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "element_id": {
+      "description": "A short ID the Agent chose, such as 'n-auth'. IDs are scoped to the Agent that made them, so two Agents never collide. Reflex-made IDs (Ink, user imports, generated) use the same alphabet.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$"
+    },
+    "send_id": {
+      "type": "string",
+      "pattern": "^s_[A-Za-z0-9]{1,40}$"
+    },
+    "space_name": {
+      "description": "A Space's short, stable name, such as 'auth-plan'.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    }
+  }
+}

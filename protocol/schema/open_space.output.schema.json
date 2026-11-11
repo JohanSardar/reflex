@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reflex.eilmer.si/protocol/v0/open_space.output.schema.json",
+  "title": "open_space result",
+  "description": "Everything needed to start: who you are here, an outline of the scene, and pending Sends.",
+  "type": "object",
+  "properties": {
+    "space": { "$ref": "common.schema.json#/$defs/space_name" },
+    "created": { "type": "boolean" },
+    "you": {
+      "description": "Your identity in this Space. Your Elements show as by: 'you'.",
+      "type": "object",
+      "properties": {
+        "agent": { "$ref": "common.schema.json#/$defs/agent_id" },
+        "name": { "$ref": "common.schema.json#/$defs/display_name" },
+        "color": { "$ref": "common.schema.json#/$defs/color" }
+      },
+      "required": ["agent", "name", "color"],
+      "additionalProperties": false
+    },
+    "people": {
+      "description": "The people in this Space. One in an unshared Space.",
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/person_ref" },
+      "minItems": 1,
+      "maxItems": 256
+    },
+    "viewport": { "description": "What the person's screen shows now, in your coordinates.", "$ref": "common.schema.json#/$defs/bounds" },
+    "scene": { "type": "array", "items": { "$ref": "scene-item.schema.json" }, "maxItems": 500 },
+    "elsewhere": {
+      "type": "object",
+      "properties": { "on_screen": { "$ref": "common.schema.json#/$defs/count" }, "off_screen": { "$ref": "common.schema.json#/$defs/count" } },
+      "required": ["on_screen", "off_screen"],
+      "additionalProperties": false
+    },
+    "pending_sends": { "$ref": "common.schema.json#/$defs/pending_sends" },
+    "next": { "type": "string", "maxLength": 400 }
+  },
+  "required": ["space", "created", "you", "people", "scene", "elsewhere", "pending_sends", "next"],
+  "additionalProperties": false
+}

@@ -1,0 +1,15 @@
+{
+  "kind": "tap", "send": "s_13", "space": "auth-plan",
+  "from": { "person": "p_ana", "name": "Ana" },
+  "trigger": "behavior",
+  "element": "sim-1",
+  "payload": { "source": "latency chart", "event": "outlier_picked", "row": "r22" },
+  "marks": [], "changes": [],
+  "scene": [ { "id": "sim-1", "type": "embed", "by": "you", "bounds": [1000, 200, 480, 320], "state": { "gravity": 4.2 } } ],
+  "elsewhere": { "on_screen": 9, "off_screen": 31 },
+  "images": [],
+  "also_sent_to": [],
+  "redelivered": true,
+  "pending_after": 0,
+  "next": "Ana's turn is not over. Answer if useful, then wait_for_user(after: 's_13')."
+}

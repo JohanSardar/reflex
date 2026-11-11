@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reflex.eilmer.si/protocol/v0/read_me.output.schema.json",
+  "title": "read_me result",
+  "type": "object",
+  "properties": {
+    "topic": { "type": "string", "maxLength": 63 },
+    "text": { "description": "The Guide, in Markdown.", "type": "string", "maxLength": 100000 },
+    "source": {
+      "description": "Where it comes from: built in, an installed extension, or the person's Library (saved by an Agent with define).",
+      "type": "string",
+      "enum": ["builtin", "extension", "library"]
+    },
+    "pending_sends": { "$ref": "common.schema.json#/$defs/pending_sends" }
+  },
+  "required": ["topic", "text", "source", "pending_sends"],
+  "additionalProperties": false
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "exec input",
+  "type": "object",
+  "properties": {
+    "space": {
+      "$ref": "#/$defs/space_name"
+    },
+    "code": {
+      "description": "JavaScript run in a sandbox. space.add({...}), space.patch(id, {...}), space.remove(ids), space.arrange({...}) take the same fields as apply ops; space.find(query) and space.layout helpers read the scene. Whatever the code returns comes back as result. Everything it writes is one batch.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100000
+    },
+    "in_reply_to": {
+      "$ref": "#/$defs/send_id"
+    },
+    "look": {
+      "type": "boolean"
+    },
+    "request": {
+      "$ref": "#/$defs/request_id"
+    }
+  },
+  "required": [
+    "space",
+    "code"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "request_id": {
+      "description": "An idempotency key chosen by the caller. A retry with the same key and the same payload returns the first result; with a different payload it is rejected (request_reused).",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.:-]{1,64}$"
+    },
+    "send_id": {
+      "type": "string",
+      "pattern": "^s_[A-Za-z0-9]{1,40}$"
+    },
+    "space_name": {
+      "description": "A Space's short, stable name, such as 'auth-plan'.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    }
+  }
+}
