@@ -56,14 +56,12 @@ Send claims the strokes drawn since the last Send in the kernel (`freeze_send`),
 
 ## Plan review
 
-- **Marks.** Circles, arrows, strikethroughs and writing go out with the Send as strokes, with when each was drawn (`times`), a crop of the screen around them, and Apple's on-device handwriting hint for each group of strokes that reads as writing (`hints`, from Vision). The Link and the Agent decide what the marks mean.
-- **Voice.** Hold the mic button and talk. Apple's on-device speech recognition transcribes it, with each word's start and end on the same clock as the strokes (`said`, `words`). Letting go sends the voice and the Ink together. Audio never leaves the iPad, and there is no voice where on-device recognition isn't available.
-- **Agents and history.** Each Agent that changed the Space gets a chip in its color. The chip says what its last change was and can revert it (the kernel's `revert` intent, undoable like any other action). The clock opens the Space's history: who did what, newest first, with reverted and undone entries greyed.
-- **Behaviors.** Tap, long-press, drag end, Ink drawn inside, and a Panel value changing fire the Element's Behaviors. `open_panel` opens a native Panel; `set` changes the Element as you; `send` sends; `notify` and `apply_recipe` go to the Agents as a `kind: "tap"` Send that claims no strokes. A finger on an Element with a Behavior for that touch doesn't draw.
-- **Photos and files.** The + menu adds photos, a camera photo, or files; files and pictures can also be dropped on the canvas. Pictures and each PDF page become image Elements; anything else becomes a file Element. The bytes are stored as an asset first, then the Element goes in the nearest free spot on screen.
+- **Marks.** Circles, arrows, strikethroughs and writing go out with the Send as strokes, with a crop of the screen around them and Apple's on-device handwriting hint for each group of strokes that reads as writing (`hints`, from Vision). The kernel's `marks` and the Link decide what the marks mean.
+- **Voice.** Hold the mic button and talk. Apple's on-device speech recognition transcribes it, with each word's `start_ms` and `end_ms` on the same clock as the strokes. Letting go sends the voice and the Ink together. Audio never leaves the iPad, and there is no voice where on-device recognition isn't available.
+- **Agents and history.** Each Agent that changed the Space gets a chip in its color. The chip says what its last change was and reverts it (the kernel's `revert`, as the person, so undo brings it back). The clock opens the Space's history (the kernel's `timeline`), newest first, with reverted and undone entries greyed.
+- **Behaviors.** Tap, long-press, drag end, Ink drawn inside, and a Panel value changing fire the Element's Behaviors. `open_panel` opens a native Panel on the iPad. For anything else the iPad freezes a raw Send with `trigger: "behavior"`, the `element` and `on` (and the Panel's `values`, or the strokes drawn inside), and the kernel decides what it is: a full Send, a tap that claims nothing, or an action (`set`, `apply_recipe`) the Link runs as the Element's owner. A finger on an Element with a Behavior for that touch doesn't draw.
+- **Photos and files.** The + menu adds photos, a camera photo, or files; files and pictures can also be dropped on the canvas. Each becomes one `add_file` intent: a picture an image Element, each rendered PDF page an image Element, anything else a file Element. The bytes are stored as assets first, and the Elements go in the nearest free spot on screen.
 - **Ink from other devices** is drawn from its raw points under this iPad's own Ink.
-
-`protocol/schema/raw-send.schema.json` describes what the iPad hands `freeze_send`.
 
 ## Not yet
 

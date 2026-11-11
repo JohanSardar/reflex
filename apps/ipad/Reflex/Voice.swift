@@ -90,13 +90,9 @@ final class VoiceCapture {
         partial = ""
         let base = started.timeIntervalSince1970
         let words: [[String: Any]] = (t?.segments ?? []).map { s in
-            var w: [String: Any] = [
-                "text": s.substring,
-                "start": Int(((base + s.timestamp) * 1000).rounded()),
-                "end": Int(((base + s.timestamp + s.duration) * 1000).rounded()),
-            ]
-            if s.confidence > 0 { w["confidence"] = (Double(s.confidence) * 100).rounded() / 100 }
-            return w
+            ["text": s.substring,
+             "start_ms": Int(((base + s.timestamp) * 1000).rounded()),
+             "end_ms": Int(((base + s.timestamp + s.duration) * 1000).rounded())]
         }
         log.info("Heard \(t?.formattedString ?? "", privacy: .public) (\(words.count) words)")
         return (t?.formattedString ?? "", words)
@@ -124,7 +120,7 @@ final class VoiceCapture {
         let heard = try await Self.transcribe(url)
         let base = started.timeIntervalSince1970
         let words: [[String: Any]] = heard.segments.map { s in
-            ["text": s.text, "start": Int(((base + s.at) * 1000).rounded()), "end": Int(((base + s.at + s.duration) * 1000).rounded())]
+            ["text": s.text, "start_ms": Int(((base + s.at) * 1000).rounded()), "end_ms": Int(((base + s.at + s.duration) * 1000).rounded())]
         }
         log.info("Heard from file: \(heard.text, privacy: .public) (\(words.count) words)")
         return (heard.text, words)

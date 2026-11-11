@@ -5,7 +5,7 @@ import Vision
 /// Apple's on-device handwriting recognition, as a hint for the Link
 /// (ARCHITECTURE §8.2). Strokes drawn close together in space and time are
 /// grouped; each group is rendered and read by Vision. A group that reads as
-/// text becomes one hint with its strokes, text, confidence and alternatives.
+/// text becomes one hint with its strokes, text and confidence.
 /// It is only a hint: the raw strokes always go with the Send, and the Link
 /// decides what each Mark is.
 enum Handwriting {
@@ -39,7 +39,7 @@ enum Handwriting {
         return out
     }
 
-    /// One hint per group that Vision reads as text (`raw-send.schema.json#/$defs/hint`).
+    /// One hint per group that Vision reads as text (`raw-send.schema.json`, `hints`).
     static func hints(_ strokes: [(id: String, stroke: PKStroke)]) async -> [[String: Any]] {
         var out: [[String: Any]] = []
         for g in groups(strokes) {
@@ -47,13 +47,7 @@ enum Handwriting {
             guard let read = await recognize(image) else { continue }
             // A lone stroke that reads as one character is a circle, a line or an arrow far more often than a letter.
             if g.ids.count == 1 && read.text.count < 2 { continue }
-            let b = g.bounds
-            var hint: [String: Any] = [
-                "strokes": g.ids, "text": read.text, "confidence": (read.confidence * 100).rounded() / 100,
-                "bounds": [b.minX, b.minY, b.width, b.height].map { Int($0.rounded()) },
-            ]
-            if !read.alternatives.isEmpty { hint["alternatives"] = read.alternatives }
-            out.append(hint)
+            out.append(["strokes": g.ids, "text": read.text, "confidence": (read.confidence * 100).rounded() / 100])
         }
         return out
     }
@@ -80,7 +74,7 @@ enum Handwriting {
         return image.cgImage
     }
 
-    private static func recognize(_ image: CGImage) async -> (text: String, confidence: Double, alternatives: [String])? {
+    private static func recognize(_ image: CGImage) async -> (text: String, confidence: Double)? {
         await withCheckedContinuation { done in
             DispatchQueue.global(qos: .userInitiated).async {
                 let request = VNRecognizeTextRequest()
@@ -104,10 +98,7 @@ enum Handwriting {
                 }
                 let text = best.map(\.string).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
                 let confidence = best.map { Double($0.confidence) }.reduce(0, +) / Double(best.count)
-                let alternatives = lines.count == 1
-                    ? Array((lines[0].topCandidates(4).map(\.string).filter { $0 != text }).prefix(3))
-                    : []
-                done.resume(returning: text.isEmpty ? nil : (text, confidence, alternatives))
+                done.resume(returning: text.isEmpty ? nil : (text, confidence))
             }
         }
     }

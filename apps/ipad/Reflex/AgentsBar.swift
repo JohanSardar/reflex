@@ -67,8 +67,8 @@ struct HistorySheet: View {
                 if rows.isEmpty { Text("Nothing has happened in this Space yet.").foregroundStyle(.secondary) }
                 ForEach(rows, id: \.offset) { _, entry in
                     let agent = (entry["by"] as? [String: Any])?["agent"] as? String
-                    let latest = agent.flatMap { session.lastChange(of: $0)?["batch"] as? String } == entry["batch"] as? String
-                    HistoryRow(entry: entry, link: link, person: link.person?.id, timeline: session.timeline, latest: latest) { agent, name in
+                    let latest = agent != nil && agent.flatMap { session.lastChange(of: $0)?["id"] as? String } == entry["id"] as? String
+                    HistoryRow(entry: entry, link: link, person: link.person?.id, latest: latest) { agent, name in
                         session.revert(agent, name: name)
                     }
                     .opacity(History.isUndone(entry) ? 0.45 : 1)
@@ -88,7 +88,6 @@ struct HistoryRow: View {
     let entry: [String: Any]
     let link: LinkSync
     let person: String?
-    let timeline: [[String: Any]]
     /// Whether this is its Agent's latest change, the one its chip reverts.
     let latest: Bool
     let revert: (String, String) -> Void
@@ -108,7 +107,7 @@ struct HistoryRow: View {
                     Spacer()
                     Text(History.when(entry)).font(.caption).foregroundStyle(.secondary)
                 }
-                Text(History.describe(entry, link: link, person: person, timeline: timeline)).font(.callout).foregroundStyle(.secondary)
+                Text(History.describe(entry, link: link, person: person)).font(.callout).foregroundStyle(.secondary)
             }
             if let agent, latest, entry["kind"] as? String == "batch" {
                 Button("Revert") { revert(agent, info?.name ?? agent) }
@@ -124,8 +123,8 @@ struct HistoryRow: View {
 enum History {
     static func who(_ e: [String: Any], link: LinkSync, person: String?) -> String {
         let by = e["by"] as? [String: Any] ?? [:]
-        if let a = by["agent"] as? String { return link.agents[a]?.name ?? a }
-        if let p = by["person"] as? String { return p == person ? "You" : p }
+        if let a = by["agent"] as? String { return link.agents[a]?.name ?? by["name"] as? String ?? a }
+        if let p = by["person"] as? String { return p == person ? "You" : by["name"] as? String ?? p }
         return "Someone"
     }
 
@@ -146,41 +145,38 @@ enum History {
         return Date(timeIntervalSince1970: at / 1000).formatted(date: .omitted, time: .shortened)
     }
 
-    /// "added n-auth, moved n-db" or "drew a stroke".
-    static func describe(_ e: [String: Any], link: LinkSync, person: String?, timeline: [[String: Any]] = []) -> String {
-        let kind = e["kind"] as? String ?? ""
-        let changes = e["changes"] as? [[String: Any]] ?? []
+    /// A kernel timeline entry in words: "added n-cache, changed n-billing" or "drew a stroke".
+    static func describe(_ e: [String: Any], link: LinkSync, person: String?) -> String {
         let ids = (e["ids"] as? [String] ?? []).map(label)
-        switch kind {
-        case "add_stroke": return "drew a stroke"
-        case "erase": return "erased \(count(ids.count, "stroke"))"
-        case "erase_precise": return "erased part of a stroke"
+        let counts = e["counts"] as? [String: Any] ?? [:]
+        let n = { (k: String) in counts[k] as? Int ?? 0 }
+        let list = { (k: Int) in ids.prefix(3).joined(separator: ", ") + (k > 3 ? " and \(k - 3) more" : "") }
+        switch e["kind"] as? String {
+        case "send":
+            let s = e["strokes"] as? Int ?? 0
+            return "sent \(count(s, "stroke"))"
         case "revert":
-            let batch = timeline.first { $0["batch"] as? String == e["batch"] as? String && $0["kind"] as? String == "batch" }
-            let agent = (batch?["by"] as? [String: Any])?["agent"] as? String
-            let name = agent.map { link.agents[$0]?.name ?? $0 } ?? "an Agent"
-            return "reverted \(AgentsBar.short(name))'s change" + (ids.isEmpty ? "" : ": " + ids.prefix(4).joined(separator: ", "))
-        case "add_file": return "added a file"
-        case "add": return "added " + ids.prefix(3).joined(separator: ", ")
-        case "move": return "moved " + ids.prefix(3).joined(separator: ", ")
-        case "patch": return "changed " + ids.prefix(3).joined(separator: ", ")
+            return "reverted its own change"
+        case "action":
+            switch e["action"] as? String {
+            case "add_stroke": return "drew a stroke"
+            case "erase": return "erased \(count(n("removed"), "stroke"))"
+            case "erase_precise": return "erased part of a stroke"
+            case "revert":
+                let agent = (e["info"] as? [String: Any])?["agent"] as? String
+                let name = agent.map { link.agents[$0]?.name ?? $0 } ?? "an Agent"
+                return "reverted \(AgentsBar.short(name))'s change" + (ids.isEmpty ? "" : ": " + list(ids.count))
+            case "add_file": return "added " + ((e["info"] as? [String: Any])?["file"] as? String ?? ids.first ?? "a file")
+            case let a?: return a.replacingOccurrences(of: "_", with: " ") + (ids.isEmpty ? "" : " " + list(ids.count))
+            case nil: break
+            }
         default: break
         }
-        if changes.isEmpty { return kind == "batch" ? "changed nothing" : kind.replacingOccurrences(of: "_", with: " ") }
         var parts: [String] = []
-        for c in changes.prefix(5) {
-            let id = label(c["id"] as? String ?? "")
-            switch c["kind"] as? String {
-            case "added": parts.append("added \(c["type"] as? String ?? "") \(id)")
-            case "removed": parts.append("removed \(id)")
-            case "moved": parts.append("moved \(id)")
-            case "resized": parts.append("resized \(id)")
-            case "edited": parts.append("edited \(id)")
-            default: parts.append("\(c["kind"] as? String ?? "changed") \(id)")
-            }
-        }
-        if changes.count > 5 { parts.append("and \(changes.count - 5) more") }
-        return parts.joined(separator: ", ")
+        if n("added") > 0 { parts.append("added " + ids.prefix(n("added")).prefix(3).joined(separator: ", ")) }
+        if n("changed") > 0 { parts.append("changed " + ids.dropFirst(n("added")).prefix(3).joined(separator: ", ")) }
+        if n("removed") > 0 { parts.append("removed \(count(n("removed"), "Element"))") }
+        return parts.isEmpty ? "changed nothing" : parts.joined(separator: ", ")
     }
 
     /// An Agent's Element ids carry the Agent ("a_cbea6b8f86/n-cache", or

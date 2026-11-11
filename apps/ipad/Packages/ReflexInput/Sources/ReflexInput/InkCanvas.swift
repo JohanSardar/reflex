@@ -355,17 +355,6 @@ public final class InkCanvasController: NSObject {
         return zip(ledger.records, canvasView.drawing.strokes).filter { want.contains($0.0.id) }.map { ($0.0.id, $0.1) }
     }
 
-    /// When each of these strokes was drawn: ID -> [start, end], in milliseconds since 1970.
-    public func strokeTimes(_ ids: [String]) -> [String: [Int]] {
-        var out: [String: [Int]] = [:]
-        for (id, s) in pkStrokes(ids) {
-            let start = s.path.creationDate.timeIntervalSince1970
-            let end = start + (s.path.last?.timeOffset ?? 0)
-            out[id] = [Int((start * 1000).rounded()), Int((end * 1000).rounded())]
-        }
-        return out
-    }
-
     // MARK: Send
 
     /// Hands over the strokes added since the last Send and starts a new batch.

@@ -170,15 +170,29 @@ public final class LinkSync {
     /// Every Agent batch and person's action in this Space, oldest first (the kernel's `timeline`).
     public func timeline(_ id: String) -> [[String: Any]] {
         guard let space = replicas[id] else { return [] }
-        let q: [String: Any] = ["viewer": ["person": person?.id ?? identity.person.id], "limit": 300]
+        let q: [String: Any] = ["viewer": ["person": person?.id ?? identity.person.id], "limit": 300, "names": agents.mapValues(\.name)]
         guard let out = try? space.timeline(queryJson: Self.json(q)) else { return [] }
         return Self.object(out)?["entries"] as? [[String: Any]] ?? []
     }
 
     /// The person reverts an Agent's latest change. It is the person's own action, so their undo brings it back.
     @discardableResult
+    /// The person reverts an Agent's latest batch here (the kernel's `revert`).
+    /// It goes into the person's history, so undo brings the batch back.
     public func revert(_ space: String, agent: String) -> [String: Any]? {
-        intent(space, ["intent": "revert", "agent": agent])
+        guard let replica = replicas[space], let person else { return nil }
+        do {
+            let by = Self.json(["person": person.id, "device": identity.device])
+            let names = Self.json(["agent": agent, "last": 1, "names": agents.mapValues(\.name)])
+            let out = try replica.revert(byJson: by, requestId: "r_" + UUID().uuidString.prefix(12).lowercased(), selectorJson: names, nowMs: Self.now())
+            let r = Self.object(out)
+            if r?["ok"] as? Bool == false { linkLog.error("Revert rejected: \(out, privacy: .public)") }
+            changed(space)
+            return r
+        } catch {
+            linkLog.error("Revert failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     /// One finished user action (`apply_user_intent`), made durable and synced.

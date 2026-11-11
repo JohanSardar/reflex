@@ -37,7 +37,6 @@ final class SpaceSession {
     @ObservationIgnored private var undone: [Int] = []
     @ObservationIgnored private var seen = -1
     /// Panel values entered since the last Send, by Element.
-    @ObservationIgnored private var unsentPanels: [String: [String: JSONValue]] = [:]
     /// Strokes drawn inside an Element with an `ink_inside` Behavior, waiting for the person to pause.
     @ObservationIgnored private var inkInside: [String: [String]] = [:]
     @ObservationIgnored private var inkInsideTimer: Task<Void, Never>?
@@ -115,7 +114,12 @@ final class SpaceSession {
     /// One action that isn't Ink, made undoable from the same toolbar and gestures.
     @discardableResult
     private func act(_ intent: [String: Any]) -> [String: Any]? {
-        let r = link.intent(id, intent)
+        record(link.intent(id, intent))
+    }
+
+    /// Puts a kernel result that made a history entry on the undo stack, or says why it was refused.
+    @discardableResult
+    private func record(_ r: [String: Any]?) -> [String: Any]? {
         if r?["entry"] is String {
             undone = []
             ink.recordAction(
@@ -161,17 +165,14 @@ final class SpaceSession {
 
     /// The Agent's latest change that isn't reverted, if any.
     func lastChange(of agent: String) -> [String: Any]? {
-        timeline.last { ($0["by"] as? [String: Any])?["agent"] as? String == agent && $0["kind"] as? String == "batch" && $0["state"] as? String != "reverted" && !(($0["changes"] as? [Any]) ?? []).isEmpty }
+        timeline.last { ($0["by"] as? [String: Any])?["agent"] as? String == agent && $0["kind"] as? String == "batch" && $0["state"] as? String != "reverted" }
     }
 
     /// Reverts the Agent's latest change, as the person's own action (undo brings it back).
     func revert(_ agent: String, name: String) {
-        guard let r = act(["intent": "revert", "agent": agent]) else { return }
-        if r["entry"] is String {
-            say("Reverted \(name)'s last change")
-        } else if r["ok"] as? Bool != false {
-            say("\(name) has nothing left to revert here")
-        }
+        guard let r = record(link.revert(id, agent: agent)), r["ok"] as? Bool == true else { return }
+        let kept = (r["kept"] as? [Any])?.count ?? 0
+        say("Reverted \(AgentsBar.short(name))'s last change" + (kept > 0 ? "; \(kept) field\(kept == 1 ? "" : "s") you changed since stayed" : ""))
     }
 
     // MARK: Behaviors
@@ -199,7 +200,7 @@ final class SpaceSession {
         let dx = Int(by.width.rounded()), dy = Int(by.height.rounded())
         guard dx != 0 || dy != 0 else { return }
         act(["intent": "move", "ids": [e.id], "by": [dx, dy]])
-        fire(e, on: "drag_end", extra: ["by": [dx, dy]])
+        fire(e, on: "drag_end")
     }
 
     /// A finished stroke inside an Element with an `ink_inside` Behavior fires it
@@ -220,30 +221,44 @@ final class SpaceSession {
             let pending = self.inkInside
             self.inkInside = [:]
             for (eid, strokes) in pending {
-                if let el = self.scene.elements.first(where: { $0.id == eid }) { self.fire(el, on: "ink_inside", extra: ["strokes": strokes]) }
+                if let el = self.scene.elements.first(where: { $0.id == eid }) { self.fire(el, on: "ink_inside", strokes: strokes) }
             }
         }
     }
 
-    /// Runs every Behavior of this Element for one trigger. The iPad does what only it
-    /// can (open a Panel, set a field); notify, send and apply_recipe go to the Link as a Send.
-    func fire(_ e: SceneElement, on trigger: String, extra: [String: Any] = [:]) {
-        for (index, b) in e.behaviors(on: trigger) {
-            var fired: [String: Any] = ["element": e.id, "index": index, "on": trigger, "do": b.action]
-            if let payload = b.payload { fired["payload"] = payload.any }
-            fired.merge(extra) { a, _ in a }
-            log.info("Behavior \(trigger, privacy: .public) → \(b.action, privacy: .public) on \(e.id, privacy: .public)")
-            switch b.action {
-            case "open_panel":
-                if let p = b.panel { openPanel(p, on: e) }
-            case "set":
-                if case .object(let fields)? = b.set {
-                    act(["intent": "patch", "id": b.target ?? e.id, "set": fields.mapValues(\.any)])
+    /// Fires this Element's Behaviors for one trigger. The iPad opens Panels itself;
+    /// everything else goes to the kernel as a raw Send naming the Element and the
+    /// trigger, and the kernel decides what it is: a full Send (`send`), a tap that
+    /// claims nothing (`notify`), or an action the Link runs (`set`, `apply_recipe`).
+    func fire(_ e: SceneElement, on trigger: String, panel: String? = nil, values: [String: Any]? = nil, strokes: [String] = []) {
+        let behaviors = e.behaviors(on: trigger).map(\.1)
+        guard !behaviors.isEmpty else { return }
+        log.info("Behavior \(trigger, privacy: .public) on \(e.id, privacy: .public): \(behaviors.map(\.action), privacy: .public)")
+        for b in behaviors where b.action == "open_panel" {
+            if let p = b.panel { openPanel(p, on: e) }
+        }
+        guard behaviors.contains(where: { $0.action != "open_panel" }) else { return }
+        var fired: [String: Any] = ["element": e.id, "on": trigger]
+        if let panel { fired["panel"] = panel }
+        if let values { fired["values"] = values }
+        if behaviors.contains(where: { $0.action == "send" }) {
+            send(trigger: "behavior", extra: fired)
+        } else {
+            var raw = fired
+            raw["send"] = Self.newSendID()
+            raw["trigger"] = "behavior"
+            raw["viewport"] = Self.ints(viewport())
+            if !strokes.isEmpty { raw["strokes"] = strokes }
+            do {
+                let frozen = try link.freezeSend(id, raw: raw)
+                #if DEBUG
+                if let data = try? JSONSerialization.data(withJSONObject: frozen, options: [.sortedKeys]) {
+                    log.info("Frozen Send: \(String(decoding: data, as: UTF8.self), privacy: .public)")
                 }
-            case "send":
-                send(trigger: "behavior", behavior: fired)
-            default: // notify, apply_recipe
-                tap(behavior: fired)
+                #endif
+                if frozen["kind"] as? String == "tap" { say("Told the Agent") }
+            } catch {
+                say("Couldn't do that: \(error.localizedDescription)")
             }
         }
     }
@@ -257,29 +272,35 @@ final class SpaceSession {
         panel = (e.id, p)
     }
 
-    /// The person changed a Panel value: it goes with the next Send, and fires
-    /// `panel_change` once they pause.
+    /// The person changed a Panel value: it fires the Element's `panel_change`
+    /// Behaviors, with every value, once they pause.
     func setPanelValue(_ value: JSONValue, for key: String) {
         guard let (eid, p) = panel else { return }
         panelValues[eid, default: [:]][key] = value
-        unsentPanels[eid, default: [:]][key] = value
         panelTimer?.cancel()
         panelTimer = Task { [weak self] in
             try? await Task.sleep(for: .seconds(0.8))
-            guard !Task.isCancelled, let self, let el = self.scene.elements.first(where: { $0.id == eid }) else { return }
-            let values = (self.panelValues[eid] ?? [:]).mapValues(\.any)
-            var entry: [String: Any] = ["element": eid, "values": values]
-            if let pid = p.id { entry["panel"] = pid }
-            self.fire(el, on: "panel_change", extra: ["panel": entry])
+            guard !Task.isCancelled, let self else { return }
+            self.panelChanged(eid, p)
         }
     }
 
-    /// A Panel button: `send` ends the person's turn, `notify` tells the Agent without ending it.
+    /// A Panel button counts as a value (`true` under its ID) and fires `panel_change` now.
     func panelButton(_ c: Panel.Component) {
-        guard let (eid, _) = panel else { return }
-        let fired: [String: Any] = ["element": eid, "index": 0, "on": "panel_change", "do": c.action ?? "notify",
-                                    "payload": ["button": c.key ?? c.label ?? ""]]
-        if c.action == "send" { send(trigger: "behavior", behavior: fired) } else { tap(behavior: fired) }
+        guard let (eid, p) = panel, let key = c.key else { return }
+        panelTimer?.cancel()
+        panelValues[eid, default: [:]][key] = .bool(true)
+        panelChanged(eid, p)
+        panelValues[eid]?[key] = nil
+    }
+
+    private func panelChanged(_ eid: String, _ p: Panel) {
+        guard let el = scene.elements.first(where: { $0.id == eid }) else { return }
+        guard !el.behaviors(on: "panel_change").isEmpty else {
+            say("This Panel doesn't send its values anywhere")
+            return
+        }
+        fire(el, on: "panel_change", panel: p.id, values: (panelValues[eid] ?? [:]).mapValues(\.any))
     }
 
     func panelValue(_ key: String?) -> JSONValue? {
@@ -301,29 +322,14 @@ final class SpaceSession {
         "s_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(12)
     }
 
-    private func panelsJSON() -> [[String: Any]] {
-        unsentPanels.map { ["element": $0.key, "values": $0.value.mapValues(\.any)] }
-    }
-
-    /// A notify Behavior: it tells the Agent without ending the person's turn, and claims nothing.
-    private func tap(behavior: [String: Any]) {
-        let raw: [String: Any] = ["send": Self.newSendID(), "kind": "tap", "trigger": "behavior", "viewport": Self.ints(viewport()), "behavior": behavior]
-        do {
-            _ = try link.freezeSend(id, raw: raw)
-            say("Told the Agent")
-        } catch {
-            say("Could not send: \(error.localizedDescription)")
-        }
-    }
-
     /// Captures a Send: the strokes since the last one (claimed by the kernel),
     /// when each was drawn, Apple's handwriting hint for each group that reads as
     /// writing, the voice transcript with word timings, the viewport, and a crop of
     /// what the screen showed around the strokes (stored as an asset first, so it
     /// is durable before the Send refers to it).
-    func send(trigger: String, said: String? = nil, words: [[String: Any]] = [], behavior: [String: Any]? = nil) {
+    func send(trigger: String, said: String? = nil, words: [[String: Any]] = [], extra: [String: Any] = [:]) {
         let strokes = ink.takeUnsent()
-        if trigger == "voice", said?.isEmpty ?? true, strokes.isEmpty, unsentPanels.isEmpty {
+        if trigger == "voice", said?.isEmpty ?? true, strokes.isEmpty {
             say("Didn't hear anything, so nothing was sent.")
             return
         }
@@ -332,10 +338,7 @@ final class SpaceSession {
         var raw: [String: Any] = ["send": Self.newSendID(), "trigger": trigger, "viewport": Self.ints(view)]
         if let said, !said.isEmpty { raw["said"] = said }
         if !words.isEmpty { raw["words"] = words }
-        if let behavior { raw["behavior"] = behavior }
-        if !unsentPanels.isEmpty { raw["panels"] = panelsJSON() }
-        let times = ink.strokeTimes(strokes)
-        if !times.isEmpty { raw["times"] = times }
+        raw.merge(extra) { a, _ in a }
         let marked = ink.strokes.filter { strokes.contains($0.id) }.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
         if !marked.isNull, let crop = Crop.capture(space: marked.insetBy(dx: -60, dy: -60).intersection(view), zoom: zoom, offset: offset) {
             do {
@@ -346,7 +349,6 @@ final class SpaceSession {
             }
         }
         let pk = ink.pkStrokes(strokes)
-        unsentPanels = [:]
         Task {
             let hints = await Handwriting.hints(pk)
             if !hints.isEmpty { raw["hints"] = hints }
@@ -374,8 +376,6 @@ final class SpaceSession {
     }
 
     // MARK: Imports
-
-    /// Where the next import goes: the middle of the screen, stepping down for each one.
 
     /// Where something new of `size` goes: the middle of the screen if that's
     /// free, else the nearest free spot on screen, else below everything.
@@ -416,26 +416,11 @@ final class SpaceSession {
             return
         }
         let size = Imports.fit(image.size, in: CGSize(width: 640, height: 640))
-        addImage(bytes, size: size, alt: name, page: nil)
+        addFile(name: name, mime: bytes.starts(with: [0x89, 0x50]) ? "image/png" : "image/jpeg", bytes: bytes, size: size)
     }
 
-    private func addImage(_ bytes: Data, size: CGSize, alt: String, page: Int?, at: CGPoint? = nil) {
-        do {
-            let hash = try link.storeAsset(bytes)
-            let spot = at ?? nextSpot(size)
-            var add: [String: Any] = ["intent": "add", "type": "image", "id": Self.newID("img"), "src": "asset:\(hash)",
-                                      "alt": String(alt.prefix(400)), "at": ["x": Int(spot.x), "y": Int(spot.y)],
-                                      "w": Int(size.width.rounded()), "h": Int(size.height.rounded())]
-            if let page { add["page"] = page }
-            act(add)
-            show(CGRect(origin: spot, size: size))
-        } catch {
-            say("Couldn't save that image: \(error.localizedDescription)")
-        }
-    }
-
-    /// A file from Files or a drop: a PDF's pages become image Elements in a column;
-    /// a picture becomes an image Element; anything else a file Element.
+    /// A file from Files or a drop: each page of a PDF becomes an image Element,
+    /// a picture an image Element, and anything else a file Element.
     func importFile(_ url: URL) {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -450,27 +435,42 @@ final class SpaceSession {
         if type?.conforms(to: .pdf) == true, let pages = Imports.pdfPages(data) {
             let size = pages.first.map { Imports.fit($0.size, in: CGSize(width: 600, height: 800)) } ?? .zero
             let cols = min(pages.count, 4), rows = (pages.count + 3) / 4
-            let start = nextSpot(CGSize(width: CGFloat(cols) * (size.width + 40) - 40, height: CGFloat(rows) * (size.height + 40) - 40))
-            for (i, page) in pages.enumerated() {
-                guard let bytes = Imports.encode(page) else { continue }
-                let at = CGPoint(x: start.x + CGFloat(i % 4) * (size.width + 40), y: start.y + CGFloat(i / 4) * (size.height + 40))
-                addImage(bytes, size: size, alt: "\(name), page \(i + 1) of \(pages.count)", page: i + 1, at: at)
-            }
-            say("Added \(name): \(pages.count) page\(pages.count == 1 ? "" : "s")")
-        } else if type?.conforms(to: .image) == true, UIImage(data: data) != nil {
-            importImage(data, name: name)
-        } else {
+            let grid = CGSize(width: CGFloat(cols) * (size.width + 40) - 40, height: CGFloat(rows) * (size.height + 40) - 40)
+            let start = nextSpot(grid)
             do {
-                let hash = try link.storeAsset(data)
-                let size = CGSize(width: 260, height: 64)
-                let spot = nextSpot(size)
-                act(["intent": "add_file", "id": Self.newID("file"), "name": String(name.prefix(255)),
-                     "mime": type?.preferredMIMEType ?? "application/octet-stream", "size": data.count,
-                     "src": "asset:\(hash)", "at": ["x": Int(spot.x), "y": Int(spot.y)], "w": 260, "h": 64])
-                show(CGRect(origin: spot, size: size))
+                var rendered: [[String: Any]] = []
+                for (i, page) in pages.enumerated() {
+                    guard let bytes = Imports.encode(page) else { continue }
+                    let hash = try link.storeAsset(bytes)
+                    rendered.append(["id": Self.newID("pdf"), "src": "asset:\(hash)", "page": i + 1,
+                                     "at": ["x": Int(start.x) + (i % 4) * Int(size.width + 40), "y": Int(start.y) + (i / 4) * Int(size.height + 40)],
+                                     "w": Int(size.width), "h": Int(size.height)])
+                }
+                guard record(link.intent(id, ["intent": "add_file", "id": Self.newID("file"), "name": String(name.prefix(255)),
+                                              "mime": "application/pdf", "size": data.count, "pages": rendered]))?["ok"] as? Bool != false else { return }
+                show(CGRect(origin: start, size: grid))
+                say("Added \(name): \(pages.count) page\(pages.count == 1 ? "" : "s")")
             } catch {
                 say("Couldn't save \(name): \(error.localizedDescription)")
             }
+        } else if type?.conforms(to: .image) == true, UIImage(data: data) != nil {
+            importImage(data, name: name)
+        } else {
+            addFile(name: name, mime: type?.preferredMIMEType ?? "application/octet-stream", bytes: data, size: CGSize(width: 260, height: 64))
+        }
+    }
+
+    /// Stores the bytes as an asset first, then adds the Element in the nearest free spot (`add_file`).
+    private func addFile(name: String, mime: String, bytes: Data, size: CGSize) {
+        do {
+            let hash = try link.storeAsset(bytes)
+            let spot = nextSpot(size)
+            let r = act(["intent": "add_file", "id": Self.newID(mime.hasPrefix("image/") ? "img" : "file"), "name": String(name.prefix(255)),
+                         "mime": mime, "size": bytes.count, "src": "asset:\(hash)",
+                         "at": ["x": Int(spot.x), "y": Int(spot.y)], "w": Int(size.width.rounded()), "h": Int(size.height.rounded())])
+            if r?["ok"] as? Bool != false { show(CGRect(origin: spot, size: size)) }
+        } catch {
+            say("Couldn't save \(name): \(error.localizedDescription)")
         }
     }
 
