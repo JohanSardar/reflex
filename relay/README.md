@@ -8,20 +8,52 @@ The hosted service that lets devices and Agents outside your local network reach
 
 The same code runs on Cloudflare (a Worker with Durable Objects and R2) and on Node (self-hosted).
 
+The official Relay runs at `https://reflex.eilmer.si`, and a Link uses it unless you pick another:
+
+```sh
+reflex link                                    # syncs through wss://reflex.eilmer.si
+reflex link --relay wss://relay.example.com    # your own Relay instead (remembered)
+reflex link --relay off                        # no Relay, LAN only (remembered)
+```
+
+`REFLEX_RELAY` sets the default for a Link profile that hasn't chosen one. An iPad uses whatever Relay its Link tells it about.
+
+## Running it locally
+
 ```sh
 npm install && sh kernel/wasm/build.sh
 
-# Cloudflare, locally (T9 never deploys; that's T14)
-cd relay/cloudflare && ../../node_modules/.bin/wrangler dev -c wrangler.toml --port 8787
+# Cloudflare, locally
+cd relay/cloudflare && ../../node_modules/.bin/wrangler dev   # on :8787; [dev] in wrangler.toml keeps local URLs local
 
 # or self-hosted on Node
 node relay/node/bin/reflex-relay.ts --port 8787 --dir ~/.reflex/relay
 
-# point a Link at it (remembered; --relay off forgets it)
+# point a Link at it
 reflex link --relay ws://localhost:8787
 ```
 
-Behind TLS, use `wss://` for the Link and pass `--origin https://relay.example.com` to the Node Relay (or set `ORIGIN` on the Worker) so the OAuth metadata names the public URL.
+## Deploying
+
+`relay/cloudflare/wrangler.toml` is the official deployment: the Worker `reflex-relay`, its three Durable Object classes, the R2 bucket `reflex-relay-assets`, served only at the custom domain `reflex.eilmer.si` (no `workers.dev` address, so the OAuth metadata always names one origin). To redeploy, with `wrangler login` done for that account:
+
+```sh
+npm install && sh kernel/wasm/build.sh
+cd relay/cloudflare && ../../node_modules/.bin/wrangler deploy
+```
+
+`wrangler deploy` runs `build.ts` first. The bundle is about 2.6 MB gzipped (Workers allow 3 MB on the Free plan). Durable Object state and R2 objects survive a redeploy; a change to a Durable Object class needs a new `[[migrations]]` entry.
+
+The Relay holds no secrets: every key it checks belongs to a device or is derived from a Space key, and it keeps tokens only as hashes. If one is ever needed, set it with `wrangler secret put <NAME>`, never in `wrangler.toml` or the repo. Its settings are plain vars: `SESSION_MEMORY_LIMIT` (bytes, default 96 MB) and `ORIGIN` (only if the public origin differs from the request's).
+
+Logs: `wrangler tail reflex-relay`, or Workers Observability in the dashboard.
+
+### Your own Relay
+
+- **On your Cloudflare account:** `wrangler r2 bucket create reflex-relay-assets`, change `routes` in `wrangler.toml` to a hostname on one of your zones (it must have no DNS record yet; Cloudflare makes one), and `wrangler deploy`. Without a domain, set `workers_dev = true` and drop `routes` to serve it at `reflex-relay.<you>.workers.dev`.
+- **On Node:** `node relay/node/bin/reflex-relay.ts --port 8787 --dir <dir> --origin https://relay.example.com` behind a TLS proxy. It has no memory limit, so Spaces too big for a Worker work there.
+
+Then `reflex link --relay wss://relay.example.com` on each of your Links.
 
 ## A cloud Agent
 
@@ -67,7 +99,7 @@ A cloud session loads the Space's newest snapshot directly (the Link writes the 
 | 1,000 strokes of 80 points | 1,000 | 0.46 MB | 39 MB |
 | `big` | 3,500 (70 Sends) | 5.5 MB | 232 MB |
 
-Automerge's whole-document load peaks at about three times what the same Space takes when built change by change. A Space of up to roughly 2,000 strokes fits in a Worker. A bigger one does not: the session refuses it with `507` and a message pointing to a self-hosted Relay, and doesn't try again until the Space has a new snapshot. If it died while loading, it is refused next time instead of taking the Durable Object down on every call. `SESSION_MEMORY_LIMIT` sets the budget (default 96 MB of the isolate's 128). The Node Relay has no limit. Per ADR-0004, if real Spaces outgrow a Worker, cloud execution moves to a separate service and the Durable Object stays the router and log. `GET /v0/log/<log>/stats` with a grant's token reports the session's own numbers and digest.
+Automerge's whole-document load peaks at about three times what the same Space takes when built change by change. A Space of up to roughly 2,000 strokes fits in a Worker. A bigger one does not: the session refuses it with `507` and a message pointing to a self-hosted Relay, and doesn't try again until the Space has a new snapshot. If it died while loading, it is refused next time instead of taking the Durable Object down on every call. `SESSION_MEMORY_LIMIT` sets the budget (default 96 MB of the isolate's 128). On the deployed Worker, 3,500 strokes whose newest snapshot was small opened in 62 MB, and 8,000 strokes (a 2.6 MB snapshot) got the `507`. The Node Relay has no limit. Per ADR-0004, if real Spaces outgrow a Worker, cloud execution moves to a separate service and the Durable Object stays the router and log. `GET /v0/log/<log>/stats` with a grant's token reports the session's own numbers and digest.
 
 ## Not here yet
 
@@ -76,4 +108,4 @@ Automerge's whole-document load peaks at about three times what the same Space t
 - Both Links push what they hold, so a log can hold the same change twice. Duplicates are harmless.
 - Space titles and sizes (the Link's `space_meta`) aren't in the log; a cloud session uses the defaults.
 - A Space whose snapshot is over 15 MB can't go in one entry.
-- Key rotation, invites and other people's devices come with shared Spaces (T22). Deploying to relay.eilmer.si is T14.
+- Key rotation, invites and other people's devices come with shared Spaces (T22).

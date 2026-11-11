@@ -17,6 +17,12 @@ import { ASSET_ID, grantText, type Grant } from "./wire.ts";
 
 /** One sealed entry: a whole-Space snapshot of a large Space must fit. */
 const MAX_ENTRY = 16 * 1024 * 1024;
+/**
+ * Bytes of entries one read returns (always at least one entry). The reply crosses a
+ * Durable Object RPC and a WebSocket message on Cloudflare, both capped at 32 MiB,
+ * and is base64 in JSON there, so a page of whole-Space snapshots must stay well under.
+ */
+const READ_BYTES = 8 * 1024 * 1024;
 
 const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
@@ -129,7 +135,16 @@ export class SpaceLog {
 
   async read(token: string, after: number, limit: number): Promise<{ entries: { seq: number; data: string }[]; last: number }> {
     this.#check(token);
-    return { entries: this.entries(after, limit).map((e) => ({ seq: e.seq, data: b64(e.data) })), last: this.last() };
+    const page = this.#d.sql
+      .all<{ seq: number; data: ArrayBuffer | Uint8Array }>(
+        // Picks the page by lengths alone, then reads only its entries.
+        "SELECT seq, data FROM entries WHERE seq IN (SELECT seq FROM (SELECT seq, sum(length(data)) OVER (ORDER BY seq) AS upto, length(data) AS len FROM entries WHERE seq > ?) WHERE upto = len OR upto <= ? ORDER BY seq LIMIT ?) ORDER BY seq",
+        after,
+        READ_BYTES,
+        limit,
+      )
+      .map((r) => ({ seq: r.seq, data: b64(new Uint8Array(r.data)) }));
+    return { entries: page, last: this.last() };
   }
 
   async watch(token: string, room: string): Promise<{ last: number }> {
