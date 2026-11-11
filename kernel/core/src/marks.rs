@@ -17,7 +17,7 @@
 use crate::apply::{connector_aware_bounds, display_id, resolve, Edit};
 use crate::doc;
 use crate::model::{Principal, Record};
-use automerge::{Automerge, ChangeHash, ReadDoc};
+use automerge::{Automerge, ChangeHash, ObjId as ExId, ReadDoc};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -183,6 +183,19 @@ fn targets<R: ReadDoc>(d: &R) -> Vec<Target> {
             typ: r.typ,
         })
         .collect()
+}
+
+/// The Space as it was when the stroke `key` was drawn: forked at the change that added it.
+fn drawn_at(d: &Automerge, key: &str) -> Option<Automerge> {
+    let elements = doc::root(d, "elements");
+    let ExId::Id(counter, actor, _) = doc::obj(d, &elements, key)? else {
+        return None;
+    };
+    let change = d.get_changes(&[]).into_iter().find(|c| {
+        let start = c.start_op().get();
+        c.actor_id() == &actor && counter >= start && counter < start + c.len() as u64
+    })?;
+    d.fork_at(&[change.hash()]).ok()
 }
 
 fn is_container(t: &Target) -> bool {
@@ -606,7 +619,13 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
     let mut placed: Vec<(String, B)> = vec![];
     for (n, g) in groups.iter().enumerate() {
         let id = format!("m{}", n + 1);
-        let gesture = classify(g, &strokes, &ts);
+        // Anchors are frozen when the Mark is drawn: resolve them against the Space as it was then.
+        let last = g.strokes.iter().max_by_key(|&&i| strokes[i].end);
+        let drawn: Option<Vec<Target>> = last
+            .and_then(|&i| drawn_at(at, &strokes[i].key))
+            .map(|d| targets(&d));
+        let ts: &Vec<Target> = drawn.as_ref().unwrap_or(&ts);
+        let gesture = classify(g, &strokes, ts);
         let mut m = Map::new();
         m.insert("id".into(), json!(id));
         let mut anchored: Vec<usize> = vec![];
@@ -708,7 +727,7 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
             }
         }
         m.insert("bounds".into(), json!(ib(g.bounds)));
-        // Anchors are frozen at the frontier; say when a target moved or went away since.
+        // Say when a target moved or went away after the Mark was drawn.
         for &i in &anchored {
             match current.get(&ts[i].key) {
                 Some(b) if ib(*b) != ib(ts[i].bounds) => {

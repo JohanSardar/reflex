@@ -101,8 +101,10 @@ class LinkInbox implements AgentInbox {
     for (const e of this.#inbox.pending(recipient(agent), f.space)) {
       const send = this.#frozen(e.space, e.send);
       if (!send) continue;
-      if (f.region && send.region !== f.region) continue;
-      if (f.element && !(send.kind === "tap" && send.element === f.element)) continue;
+      // Sends store keys (`<agent>/<id>`); the Agent filters by its own IDs.
+      const local = (k?: string) => (k?.startsWith(`${agent}/`) ? k.slice(agent.length + 1) : k);
+      if (f.region && local(send.region) !== f.region) continue;
+      if (f.element && !(send.kind === "tap" && local(send.element) === f.element)) continue;
       this.#inbox.mark(e.space, e.send, recipient(agent), "delivered");
       return { send, redelivered: e.state === "delivered" };
     }
