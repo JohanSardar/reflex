@@ -12,7 +12,7 @@
 use crate::model::has_text;
 use crate::protocol::{self as p, Code, UnionError};
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -582,6 +582,62 @@ fn parse_ink(o: &Map<String, Value>, errs: &mut Vec<OpError>) -> Option<AddOp> {
     })
 }
 
+/// A file the person added that isn't a picture: `{id, name, mime, size, src, at: {x, y}, w?, h?}`.
+/// Only devices add files; the protocol's `add` has no `file` type for Agents.
+fn parse_file(o: &Map<String, Value>, errs: &mut Vec<OpError>) -> Option<AddOp> {
+    let allowed = [
+        "intent", "id", "name", "mime", "size", "src", "at", "w", "h",
+    ];
+    if let Some(k) = o.keys().find(|k| !allowed.contains(&k.as_str())) {
+        errs.push(OpError::new(
+            0,
+            Code::InvalidInput,
+            format!("A file has no field '{k}'."),
+            "Pass id, name, mime, size, src, at, w and h.",
+        ));
+    }
+    let id = o.get("id").and_then(Value::as_str).map(String::from);
+    let src_ok = o
+        .get("src")
+        .and_then(Value::as_str)
+        .is_some_and(|s| s.len() == 70 && s.starts_with("asset:"));
+    let at = o.get("at").and_then(|a| {
+        Some(At::Abs {
+            x: as_int(a.get("x")?)?,
+            y: as_int(a.get("y")?)?,
+        })
+    });
+    let (Some(_), true, Some(name), Some(mime), Some(size), Some(_)) = (
+        &id,
+        src_ok,
+        o.get("name").and_then(Value::as_str),
+        o.get("mime").and_then(Value::as_str),
+        o.get("size").and_then(as_int),
+        &at,
+    ) else {
+        errs.push(OpError::new(
+            0,
+            Code::InvalidInput,
+            "A file needs id, name, mime, size, src ('asset:<sha256>') and at {x, y}.",
+            "Store the bytes as an asset first, then add the file.",
+        ));
+        return None;
+    };
+    let mut fields = BTreeMap::new();
+    fields.insert("name".to_string(), json!(name));
+    fields.insert("mime".to_string(), json!(mime));
+    fields.insert("size".to_string(), json!(size));
+    fields.insert("src".to_string(), o["src"].clone());
+    Some(AddOp {
+        id,
+        typ: "file".into(),
+        at,
+        size: (o.get("w").and_then(as_int), o.get("h").and_then(as_int)),
+        fields,
+        ..Default::default()
+    })
+}
+
 fn refs(o: &Map<String, Value>, k: &str, errs: &mut Vec<OpError>) -> Vec<String> {
     match o.get(k) {
         Some(Value::Array(a)) if !a.is_empty() && a.iter().all(|v| v.is_string()) => a
@@ -624,6 +680,7 @@ pub fn parse_intent(v: &Value) -> Result<Op, Vec<OpError>> {
     let kind = o.get("intent").and_then(Value::as_str).unwrap_or("");
     let op = match kind {
         "add_stroke" => parse_ink(o, &mut errs).map(Op::Add),
+        "add_file" => parse_file(o, &mut errs).map(Op::Add),
         "add" => match protocol_op(o, "add") {
             Ok(Op::Add(a)) if a.id.is_some() => Some(Op::Add(a)),
             Ok(_) => {
@@ -705,7 +762,7 @@ pub fn parse_intent(v: &Value) -> Result<Op, Vec<OpError>> {
                 0,
                 Code::InvalidInput,
                 format!("'{other}' is not a user intent."),
-                "Use add_stroke, add, patch, move, erase, erase_precise, undo or redo.",
+                "Use add_stroke, add, add_file, patch, move, erase, erase_precise, revert, undo or redo.",
             ));
             None
         }

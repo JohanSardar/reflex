@@ -84,6 +84,10 @@ impl Space {
         self.inner.scene(query_json).map_err(err)
     }
 
+    pub fn timeline(&self, query_json: &str) -> Result<String, JsError> {
+        self.inner.timeline(query_json).map_err(err)
+    }
+
     pub fn digest(&self) -> String {
         self.inner.digest()
     }

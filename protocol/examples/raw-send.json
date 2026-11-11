@@ -1,0 +1,18 @@
+{
+  "send": "s_1f2e3d4c5b6a",
+  "trigger": "voice",
+  "viewport": [0, 0, 1366, 1024],
+  "said": "merge these services",
+  "words": [
+    { "text": "merge", "start": 1762858801200, "end": 1762858801480, "confidence": 0.93 },
+    { "text": "these", "start": 1762858801500, "end": 1762858801760, "confidence": 0.9 },
+    { "text": "services", "start": 1762858801800, "end": 1762858802300, "confidence": 0.88 }
+  ],
+  "times": { "ink_1f2e3d4c5b6a": [1762858799000, 1762858799650], "ink_2a3b4c5d6e7f": [1762858801600, 1762858802100] },
+  "hints": [
+    { "strokes": ["ink_3c4d5e6f7a8b", "ink_4d5e6f7a8b9c"], "text": "contradicts", "confidence": 0.71, "alternatives": ["contradict"], "bounds": [620, 300, 180, 48] }
+  ],
+  "crops": [
+    { "asset": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", "bounds": [340, 140, 560, 260], "strokes": ["ink_1f2e3d4c5b6a", "ink_2a3b4c5d6e7f", "ink_3c4d5e6f7a8b", "ink_4d5e6f7a8b9c"] }
+  ]
+}

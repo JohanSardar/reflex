@@ -19,6 +19,7 @@ mod ops;
 pub mod protocol;
 mod scene;
 mod send;
+mod timeline;
 
 use crate::apply::{Ctx, Edit};
 use crate::doc::sha_hex;
@@ -261,6 +262,7 @@ impl Space {
         match intent.get("intent").and_then(|v| v.as_str()) {
             Some("undo") => return self.undo(person, device, now_ms),
             Some("redo") => return self.redo(person, device, now_ms),
+            Some("revert") => return self.revert_agent(person, device, &intent, now_ms),
             _ => {}
         }
         let op = match ops::parse_intent(&intent) {
@@ -312,6 +314,71 @@ impl Space {
             Ok(s) => s.result.to_string(),
             Err(f) => reject(f.error),
         })
+    }
+
+    /// A person reverts an Agent's latest change that isn't reverted yet:
+    /// `{"intent": "revert", "agent": "<agent id>"}`. It is the person's own
+    /// history entry (kind `revert`), so their undo brings the change back.
+    fn revert_agent(
+        &mut self,
+        person: &str,
+        device: &str,
+        intent: &Value,
+        now_ms: i64,
+    ) -> Result<String> {
+        let Some(agent) = intent.get("agent").and_then(Value::as_str) else {
+            return Ok(reject(vec![OpError::new(
+                0,
+                Code::InvalidInput,
+                "A revert needs the Agent whose change to revert.",
+                "Pass {\"intent\": \"revert\", \"agent\": \"<agent id>\"}.",
+            )]));
+        };
+        let Some(batch) = timeline::last_batch(&self.doc, agent) else {
+            return Ok(json!({ "ok": true, "entry": null, "batch": null }).to_string());
+        };
+        let principal = Principal::Person(person.to_string());
+        let entry_id = format!(
+            "h_{}",
+            &sha_hex(&[
+                self.actor_hex.as_bytes(),
+                batch.id.as_bytes(),
+                &now_ms.to_le_bytes()
+            ])[..12]
+        );
+        let kind = self.kind();
+        let actor_hex = self.actor_hex.clone();
+        let res = self.doc.transact_with(
+            |_| commit(now_ms, format!("revert {} by {device}", batch.id)),
+            |tx| {
+                let ctx = Ctx {
+                    principal: &principal,
+                    tag: &entry_id,
+                    now_ms,
+                    actor_hex: &actor_hex,
+                    space_kind: &kind,
+                };
+                let applied = timeline::revert(tx, &batch, &ctx)?;
+                history_push(tx, person, device, &entry_id, "revert", &applied, now_ms)?;
+                timeline::mark(tx, person, &entry_id, &batch.id)?;
+                Ok::<_, automerge::AutomergeError>(applied.len())
+            },
+        );
+        match res {
+            Ok(s) => Ok(json!({ "ok": true, "entry": entry_id, "batch": batch.id, "applied": s.result, "skipped": batch.edits.len() - s.result }).to_string()),
+            Err(f) => Err(KernelError::BadBytes(f.error.to_string())),
+        }
+    }
+
+    /// Every Agent batch and every person's action, oldest first:
+    /// `query_json` is `{viewer?: {person}, limit?}`.
+    pub fn timeline(&self, query_json: &str) -> Result<String> {
+        let q = if query_json.trim().is_empty() {
+            json!({})
+        } else {
+            parse_json(query_json)?
+        };
+        Ok(timeline::timeline(&self.doc, &q).to_string())
     }
 
     /// Undoes this person's most recent action, whichever of their devices

@@ -109,6 +109,10 @@ impl Space {
         Ok(self.lock().scene(&query_json)?)
     }
 
+    pub fn timeline(&self, query_json: String) -> R<String> {
+        Ok(self.lock().timeline(&query_json)?)
+    }
+
     pub fn digest(&self) -> String {
         self.lock().digest()
     }

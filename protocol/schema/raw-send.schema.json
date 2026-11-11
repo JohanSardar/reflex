@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reflex.eilmer.si/protocol/v0/raw-send.schema.json",
+  "title": "Raw Send",
+  "description": "What a device captures when the person sends, before freeze_send makes it immutable (ARCHITECTURE §7.4, §8.2). The kernel adds from, device, frontier, the claimed strokes and changes, and at. Recognition, Anchors and the Bundle are worked out from it where the Agent is. Coordinates are Space points; times are milliseconds since 1970, the same clock as a stroke's history entry.",
+  "type": "object",
+  "properties": {
+    "send": { "$ref": "common.schema.json#/$defs/send_id" },
+    "kind": {
+      "description": "send (default) ends the person's turn and claims their unsent strokes and changes. tap is a notify Behavior: it claims nothing, and their turn goes on.",
+      "type": "string",
+      "enum": ["send", "tap"]
+    },
+    "trigger": {
+      "type": "string",
+      "enum": ["button", "pencil", "voice", "behavior", "region", "watch"]
+    },
+    "viewport": { "$ref": "common.schema.json#/$defs/bounds" },
+    "selection": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/element_id" },
+      "maxItems": 500
+    },
+    "strokes": {
+      "description": "Extra strokes of the person's to include; their unsent strokes are always claimed.",
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/element_id" },
+      "maxItems": 2000
+    },
+    "said": {
+      "description": "The on-device transcript of what the person said while holding the mic button.",
+      "type": "string",
+      "maxLength": 20000
+    },
+    "words": {
+      "description": "The transcript's words with on-device timings, to interleave with the Marks.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/word" },
+      "maxItems": 5000
+    },
+    "times": {
+      "description": "When each claimed stroke was drawn: stroke ID -> [start, end].",
+      "type": "object"
+    },
+    "hints": {
+      "description": "Apple's on-device handwriting recognition, one per group of strokes that read as writing. A hint, never the truth: the raw strokes are always kept.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/hint" },
+      "maxItems": 200
+    },
+    "crops": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/crop" },
+      "maxItems": 8
+    },
+    "behavior": { "$ref": "#/$defs/behavior_fired" },
+    "panels": {
+      "description": "Values the person entered in Panels since their last Send.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/panel_values" },
+      "maxItems": 64
+    },
+    "embed_anchors": {
+      "description": "Each Embed's answers to the Anchors it registered (T16).",
+      "type": "array",
+      "maxItems": 64
+    }
+  },
+  "required": ["send", "trigger", "viewport"],
+  "additionalProperties": false,
+  "$defs": {
+    "word": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "maxLength": 200 },
+        "start": { "$ref": "#/$defs/ms" },
+        "end": { "$ref": "#/$defs/ms" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "required": ["text", "start", "end"],
+      "additionalProperties": false
+    },
+    "ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "hint": {
+      "type": "object",
+      "properties": {
+        "strokes": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/element_id" },
+          "minItems": 1,
+          "maxItems": 500
+        },
+        "text": { "type": "string", "maxLength": 2000 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "alternatives": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 2000 },
+          "maxItems": 5
+        },
+        "bounds": { "$ref": "common.schema.json#/$defs/bounds" }
+      },
+      "required": ["strokes", "text", "confidence", "bounds"],
+      "additionalProperties": false
+    },
+    "crop": {
+      "type": "object",
+      "properties": {
+        "asset": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "bounds": { "$ref": "common.schema.json#/$defs/bounds" },
+        "strokes": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/element_id" },
+          "maxItems": 2000
+        }
+      },
+      "required": ["asset", "bounds"],
+      "additionalProperties": false
+    },
+    "behavior_fired": {
+      "description": "The Behavior that made this Send: which Element, which of its behaviors (index), its trigger and action. The device has already done what only it can (opening a Panel, setting a field); the Link runs the rest (notify, send, apply_recipe).",
+      "type": "object",
+      "properties": {
+        "element": { "$ref": "common.schema.json#/$defs/element_id" },
+        "index": { "type": "integer", "minimum": 0, "maximum": 63 },
+        "on": {
+          "type": "string",
+          "enum": ["tap", "long_press", "drag_end", "ink_inside", "panel_change", "embed_event"]
+        },
+        "do": {
+          "type": "string",
+          "enum": ["open_panel", "notify", "send", "set", "apply_recipe"]
+        },
+        "payload": { "type": "object" },
+        "strokes": {
+          "description": "ink_inside: the strokes drawn inside the Element.",
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/element_id" },
+          "maxItems": 500
+        },
+        "by": {
+          "description": "drag_end: how far the Element was dragged.",
+          "$ref": "common.schema.json#/$defs/offset"
+        },
+        "panel": { "$ref": "#/$defs/panel_values" }
+      },
+      "required": ["element", "index", "on", "do"],
+      "additionalProperties": false
+    },
+    "panel_values": {
+      "type": "object",
+      "properties": {
+        "element": { "$ref": "common.schema.json#/$defs/element_id" },
+        "panel": { "$ref": "common.schema.json#/$defs/element_id" },
+        "values": { "description": "component id -> entered value.", "type": "object" }
+      },
+      "required": ["element", "values"],
+      "additionalProperties": false
+    }
+  }
+}

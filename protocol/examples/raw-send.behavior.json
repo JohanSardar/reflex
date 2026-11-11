@@ -1,0 +1,7 @@
+{
+  "send": "s_7a8b9c0d1e2f",
+  "kind": "tap",
+  "trigger": "behavior",
+  "viewport": [0, 0, 1366, 1024],
+  "behavior": { "element": "claude:n-auth", "index": 0, "on": "tap", "do": "notify", "payload": { "task": "T-12" } }
+}

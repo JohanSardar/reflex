@@ -2651,6 +2651,218 @@ pub struct OpenSpaceOutput {
     pub next: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Word {
+    pub text: String,
+    pub start: i64,
+    pub end: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hint {
+    pub strokes: Vec<String>,
+    pub text: String,
+    pub confidence: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alternatives: Option<Vec<String>>,
+    /// [x, y, width, height] in the reading Agent's coordinates. x and y are the top-left corner.
+    pub bounds: [i64; 4],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Crop {
+    pub asset: String,
+    /// [x, y, width, height] in the reading Agent's coordinates. x and y are the top-left corner.
+    pub bounds: [i64; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strokes: Option<Vec<String>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BehaviorFiredOn {
+    #[serde(rename = "tap")]
+    Tap,
+    #[serde(rename = "long_press")]
+    LongPress,
+    #[serde(rename = "drag_end")]
+    DragEnd,
+    #[serde(rename = "ink_inside")]
+    InkInside,
+    #[serde(rename = "panel_change")]
+    PanelChange,
+    #[serde(rename = "embed_event")]
+    EmbedEvent,
+}
+
+impl BehaviorFiredOn {
+    pub const ALL: &'static [&'static str] = &["tap", "long_press", "drag_end", "ink_inside", "panel_change", "embed_event"];
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BehaviorFiredOn::Tap => "tap",
+            BehaviorFiredOn::LongPress => "long_press",
+            BehaviorFiredOn::DragEnd => "drag_end",
+            BehaviorFiredOn::InkInside => "ink_inside",
+            BehaviorFiredOn::PanelChange => "panel_change",
+            BehaviorFiredOn::EmbedEvent => "embed_event",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BehaviorFiredDo {
+    #[serde(rename = "open_panel")]
+    OpenPanel,
+    #[serde(rename = "notify")]
+    Notify,
+    #[serde(rename = "send")]
+    Send,
+    #[serde(rename = "set")]
+    Set,
+    #[serde(rename = "apply_recipe")]
+    ApplyRecipe,
+}
+
+impl BehaviorFiredDo {
+    pub const ALL: &'static [&'static str] = &["open_panel", "notify", "send", "set", "apply_recipe"];
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BehaviorFiredDo::OpenPanel => "open_panel",
+            BehaviorFiredDo::Notify => "notify",
+            BehaviorFiredDo::Send => "send",
+            BehaviorFiredDo::Set => "set",
+            BehaviorFiredDo::ApplyRecipe => "apply_recipe",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelValues {
+    /// A short ID the Agent chose, such as 'n-auth'. IDs are scoped to the Agent that made them, so two Agents never collide. Reflex-made IDs (Ink, user imports, generated) use the same alphabet.
+    pub element: String,
+    /// A short ID the Agent chose, such as 'n-auth'. IDs are scoped to the Agent that made them, so two Agents never collide. Reflex-made IDs (Ink, user imports, generated) use the same alphabet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<String>,
+    /// component id -> entered value.
+    pub values: Map<String, Value>,
+}
+
+/// The Behavior that made this Send: which Element, which of its behaviors (index), its trigger and action. The device has already done what only it can (opening a Panel, setting a field); the Link runs the rest (notify, send, apply_recipe).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BehaviorFired {
+    /// A short ID the Agent chose, such as 'n-auth'. IDs are scoped to the Agent that made them, so two Agents never collide. Reflex-made IDs (Ink, user imports, generated) use the same alphabet.
+    pub element: String,
+    pub index: i64,
+    pub on: BehaviorFiredOn,
+    pub r#do: BehaviorFiredDo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Map<String, Value>>,
+    /// ink_inside: the strokes drawn inside the Element.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strokes: Option<Vec<String>>,
+    /// drag_end: how far the Element was dragged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<[i64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<PanelValues>,
+}
+
+/// send (default) ends the person's turn and claims their unsent strokes and changes. tap is a notify Behavior: it claims nothing, and their turn goes on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RawSendKind {
+    #[serde(rename = "send")]
+    Send,
+    #[serde(rename = "tap")]
+    Tap,
+}
+
+impl RawSendKind {
+    pub const ALL: &'static [&'static str] = &["send", "tap"];
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RawSendKind::Send => "send",
+            RawSendKind::Tap => "tap",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RawSendTrigger {
+    #[serde(rename = "button")]
+    Button,
+    #[serde(rename = "pencil")]
+    Pencil,
+    #[serde(rename = "voice")]
+    Voice,
+    #[serde(rename = "behavior")]
+    Behavior,
+    #[serde(rename = "region")]
+    Region,
+    #[serde(rename = "watch")]
+    Watch,
+}
+
+impl RawSendTrigger {
+    pub const ALL: &'static [&'static str] = &["button", "pencil", "voice", "behavior", "region", "watch"];
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RawSendTrigger::Button => "button",
+            RawSendTrigger::Pencil => "pencil",
+            RawSendTrigger::Voice => "voice",
+            RawSendTrigger::Behavior => "behavior",
+            RawSendTrigger::Region => "region",
+            RawSendTrigger::Watch => "watch",
+        }
+    }
+}
+
+/// What a device captures when the person sends, before freeze_send makes it immutable (ARCHITECTURE §7.4, §8.2). The kernel adds from, device, frontier, the claimed strokes and changes, and at. Recognition, Anchors and the Bundle are worked out from it where the Agent is. Coordinates are Space points; times are milliseconds since 1970, the same clock as a stroke's history entry.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawSend {
+    pub send: String,
+    /// send (default) ends the person's turn and claims their unsent strokes and changes. tap is a notify Behavior: it claims nothing, and their turn goes on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<RawSendKind>,
+    pub trigger: RawSendTrigger,
+    /// [x, y, width, height] in the reading Agent's coordinates. x and y are the top-left corner.
+    pub viewport: [i64; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<Vec<String>>,
+    /// Extra strokes of the person's to include; their unsent strokes are always claimed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strokes: Option<Vec<String>>,
+    /// The on-device transcript of what the person said while holding the mic button.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub said: Option<String>,
+    /// The transcript's words with on-device timings, to interleave with the Marks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<Vec<Word>>,
+    /// When each claimed stroke was drawn: stroke ID -> [start, end].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub times: Option<Map<String, Value>>,
+    /// Apple's on-device handwriting recognition, one per group of strokes that read as writing. A hint, never the truth: the raw strokes are always kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hints: Option<Vec<Hint>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crops: Option<Vec<Crop>>,
+    /// The Behavior that made this Send: which Element, which of its behaviors (index), its trigger and action. The device has already done what only it can (opening a Panel, setting a field); the Link runs the rest (notify, send, apply_recipe).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior: Option<BehaviorFired>,
+    /// Values the person entered in Panels since their last Send.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panels: Option<Vec<PanelValues>>,
+    /// Each Embed's answers to the Anchors it registered (T16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embed_anchors: Option<Vec<Value>>,
+}
+
 /// outline (default): compact items. full: every field of the given Elements, as you would patch them. strokes: the raw points of Ink Elements or Marks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ReadInputDetail {

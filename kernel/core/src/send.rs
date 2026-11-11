@@ -27,7 +27,7 @@ impl From<automerge::AutomergeError> for FreezeError {
     }
 }
 
-fn summarize(e: &Edit) -> Option<Value> {
+pub(crate) fn summarize(e: &Edit) -> Option<Value> {
     let label = |s: &Value| {
         let r = Record::from_snapshot(s)?;
         Some((r.key.clone(), r.typ.clone(), r.text.clone()))
@@ -91,13 +91,17 @@ pub fn freeze(
         return Err(FreezeError::Existing(existing));
     }
     let me = Principal::Person(person.to_string());
+    // A tap (a notify Behavior) doesn't end the person's turn, so it claims nothing.
+    let tap = raw.get("kind").and_then(Value::as_str) == Some("tap");
     let claims = doc::root(tx, "claims");
     let claimed = |tx: &Transaction, k: &str| doc::get_str(tx, &claims, k).is_some();
 
     // Unsent strokes: this person's live Ink no earlier Send has claimed.
     let mut strokes: Vec<String> = doc::live_records(tx)
         .into_iter()
-        .filter(|r| r.typ == "ink" && r.owner == me && !claimed(tx, &format!("stroke:{}", r.key)))
+        .filter(|r| {
+            !tap && r.typ == "ink" && r.owner == me && !claimed(tx, &format!("stroke:{}", r.key))
+        })
         .map(|r| r.key)
         .collect();
     if let Some(extra) = raw.get("strokes").and_then(|v| v.as_array()) {
@@ -125,7 +129,7 @@ pub fn freeze(
     // Unsent changes: this person's done actions no earlier Send has claimed.
     let entries: Vec<_> = crate::history_entries(tx, person)
         .into_iter()
-        .filter(|e| e.state == "done" && !claimed(tx, &format!("entry:{}", e.id)))
+        .filter(|e| !tap && e.state == "done" && !claimed(tx, &format!("entry:{}", e.id)))
         .collect();
     let changes: Vec<Value> = entries
         .iter()
@@ -152,6 +156,10 @@ pub fn freeze(
         "hints",
         "crops",
         "embed_anchors",
+        "kind",
+        "behavior",
+        "panels",
+        "times",
     ] {
         if let Some(v) = raw.get(k) {
             record[k] = v.clone();
