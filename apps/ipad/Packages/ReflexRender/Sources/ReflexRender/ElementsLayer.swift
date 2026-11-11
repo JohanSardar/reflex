@@ -1,20 +1,41 @@
 import SwiftUI
 import UIKit
 
+/// Loads an asset's image (`asset:<sha256>`), if this device has its bytes.
+public struct AssetImages: Sendable {
+    public var load: @MainActor @Sendable (String) -> UIImage?
+    public init(load: @escaping @MainActor @Sendable (String) -> UIImage?) { self.load = load }
+}
+
+extension EnvironmentValues {
+    @Entry public var assetImages = AssetImages { _ in nil }
+}
+
 /// Draws a scene's Elements in Space coordinates, following the Ink canvas's
-/// scroll offset and zoom. It sits under the Ink layer and never re-renders
-/// Ink: the person's own strokes are PencilKit's, so `ink` Elements are skipped.
+/// scroll offset and zoom. It sits under the Ink layer. Ink this device drew is
+/// PencilKit's and is skipped; Ink from other devices is drawn here from its
+/// raw points (`remoteInk`).
 public struct ElementsLayer: View {
     let scene: SceneDocument
     let offset: CGPoint
     let zoom: CGFloat
     let spaceSize: CGSize
+    let localInk: Set<String>
+    let remoteInk: [String: [[Double]]]
+    /// An Element the person is dragging, and how far.
+    let dragging: (id: String, by: CGSize)?
 
-    public init(scene: SceneDocument, offset: CGPoint, zoom: CGFloat, spaceSize: CGSize) {
+    public init(
+        scene: SceneDocument, offset: CGPoint, zoom: CGFloat, spaceSize: CGSize,
+        localInk: Set<String> = [], remoteInk: [String: [[Double]]] = [:], dragging: (id: String, by: CGSize)? = nil
+    ) {
         self.scene = scene
         self.offset = offset
         self.zoom = zoom
         self.spaceSize = spaceSize
+        self.localInk = localInk
+        self.remoteInk = remoteInk
+        self.dragging = dragging
     }
 
     /// Containers first, then shapes and text, then connectors (as in `agent/src/render.ts`).
@@ -24,8 +45,10 @@ public struct ElementsLayer: View {
         let drawn = scene.elements
             .filter { $0.type != "ink" }
             .sorted { (Self.layer[$0.type] ?? 3) < (Self.layer[$1.type] ?? 3) }
+        let ink = scene.elements.filter { $0.type == "ink" && !localInk.contains($0.id) && remoteInk[$0.id] != nil }
         var frames: [String: CGRect] = [:]
         for element in drawn { frames[element.id] = element.frame }
+        if let dragging, let f = frames[dragging.id] { frames[dragging.id] = f.offsetBy(dx: dragging.by.width, dy: dragging.by.height) }
         // Color.clear takes the screen's size; the Space-sized content hangs off
         // it as an overlay, so it never makes the screen layout larger.
         return Color.clear.overlay(alignment: .topLeading) {
@@ -33,11 +56,14 @@ public struct ElementsLayer: View {
                 ForEach(drawn) { element in
                     if element.type == "connector" {
                         ConnectorView(element: element, frames: frames)
-                    } else if let frame = element.frame {
+                    } else if let frame = frames[element.id] {
                         ElementView(element: element)
                             .frame(width: frame.width, height: frame.height)
                             .offset(x: frame.minX, y: frame.minY)
                     }
+                }
+                ForEach(ink) { stroke in
+                    RemoteInkView(element: stroke, points: remoteInk[stroke.id] ?? [])
                 }
             }
             .frame(width: spaceSize.width, height: spaceSize.height, alignment: .topLeading)
@@ -61,6 +87,7 @@ struct ElementView: View {
         case "image": ImageElementView(element: element)
         case "frame": frameView
         case "region": regionView
+        case "file": FileElementView(element: element)
         default: unknownView
         }
     }
@@ -203,11 +230,15 @@ struct Polygon: Shape {
 
 struct ImageElementView: View {
     let element: SceneElement
+    @Environment(\.assetImages) private var assets
 
     var body: some View {
         Group {
-            if let image = Self.load(element.src) {
+            if let image = Self.load(element.src) ?? element.src.flatMap({ $0.hasPrefix("asset:") ? assets.load(String($0.dropFirst(6))) : nil }) {
                 Image(uiImage: image).resizable().scaledToFit()
+                    // A PDF page is white on a near-white canvas; an edge shows where it ends.
+                    .overlay { if element.page != nil { Rectangle().stroke(Color.secondary.opacity(0.35), lineWidth: 1) } }
+                    .shadow(color: .black.opacity(element.page != nil ? 0.08 : 0), radius: 4, y: 1)
             } else {
                 Rectangle().fill(Color.secondary.opacity(0.15))
                     .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
@@ -217,11 +248,57 @@ struct ImageElementView: View {
         .accessibilityIdentifier(element.id)
     }
 
-    /// `data:` URLs. Assets (`asset:<hash>`) are drawn once the iPad fetches them.
+    /// `data:` URLs. Assets (`asset:<hash>`) come from `assetImages`, once this device has them.
     static func load(_ src: String?) -> UIImage? {
         guard let src, src.hasPrefix("data:"), let comma = src.firstIndex(of: ",") else { return nil }
         let payload = String(src[src.index(after: comma)...])
         return Data(base64Encoded: payload).flatMap(UIImage.init(data:))
+    }
+}
+
+/// A file the person added that isn't a picture: a card with its name and size.
+struct FileElementView: View {
+    let element: SceneElement
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: element.mime == "application/pdf" ? "doc.richtext" : "doc")
+                .font(.system(size: 26)).foregroundStyle(Palette.color("blue"))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(element.name ?? "File").font(.system(size: 15, weight: .medium)).lineLimit(1)
+                Text(detail).font(.system(size: 12)).foregroundStyle(Palette.color("grey")).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.color("grey").opacity(0.5), lineWidth: 1))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(element.id)
+    }
+
+    private var detail: String {
+        let size = element.fileSize.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) }
+        return [element.mime, size].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+/// A stroke drawn on another device, from its raw points (`[x, y, t, pressure]`).
+struct RemoteInkView: View {
+    let element: SceneElement
+    let points: [[Double]]
+
+    var body: some View {
+        Path { p in
+            let pts = points.compactMap { $0.count >= 2 ? CGPoint(x: $0[0], y: $0[1]) : nil }
+            guard let first = pts.first else { return }
+            p.move(to: first)
+            if pts.count == 1 { p.addLine(to: first) }
+            for pt in pts.dropFirst() { p.addLine(to: pt) }
+        }
+        .stroke(Palette.color(element.color, default: "black"), style: StrokeStyle(lineWidth: max(1, element.width ?? 3), lineCap: .round, lineJoin: .round))
+        .accessibilityIdentifier(element.id)
     }
 }
 

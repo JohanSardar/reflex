@@ -54,14 +54,24 @@ On load, strokes are paired with their saved records by creation time, point cou
 
 Send claims the strokes drawn since the last Send in the kernel (`freeze_send`), with the viewport and a crop of the screen around them. The crop is stored as an asset first and pushed to the Link ahead of the Send. The Link groups the strokes into Marks, finds what each circle encloses, and hands the Bundle to the Agents.
 
+## Plan review
+
+- **Marks.** Circles, arrows, strikethroughs and writing go out with the Send as strokes, with a crop of the screen around them and Apple's on-device handwriting hint for each group of strokes that reads as writing (`hints`, from Vision). The kernel's `marks` and the Link decide what the marks mean.
+- **Voice.** Hold the mic button and talk. Apple's on-device speech recognition transcribes it, with each word's `start_ms` and `end_ms` on the same clock as the strokes. Letting go sends the voice and the Ink together. Audio never leaves the iPad, and there is no voice where on-device recognition isn't available.
+- **Agents and history.** Each Agent that changed the Space gets a chip in its color. The chip says what its last change was and reverts it (the kernel's `revert`, as the person, so undo brings it back). The clock opens the Space's history (the kernel's `timeline`), newest first, with reverted and undone entries greyed.
+- **Behaviors.** Tap, long-press, drag end, Ink drawn inside, and a Panel value changing fire the Element's Behaviors. `open_panel` opens a native Panel on the iPad. For anything else the iPad freezes a raw Send with `trigger: "behavior"`, the `element` and `on` (and the Panel's `values`, or the strokes drawn inside), and the kernel decides what it is: a full Send, a tap that claims nothing, or an action (`set`, `apply_recipe`) the Link runs as the Element's owner. A finger on an Element with a Behavior for that touch doesn't draw.
+- **Photos and files.** The + menu adds photos, a camera photo, or files; files and pictures can also be dropped on the canvas. Each becomes one `add_file` intent: a picture an image Element, each rendered PDF page an image Element, anything else a file Element. The bytes are stored as assets first, and the Elements go in the nearest free spot on screen.
+- **Ink from other devices** is drawn from its raw points under this iPad's own Ink.
+
 ## Not yet
 
-- Ink drawn on other devices isn't drawn on this iPad yet; only its own Ink is.
 - The device key and pairing are files in Application Support, not the Keychain.
-- Agent names and colors aren't shown on the canvas.
+- Remote Ink can't be erased or lassoed from this iPad; only its own Ink is in PencilKit.
 
 ## Debug
 
 Debug builds have a `#` button on the toolbar that draws each stroke's ID, and its parent, next to it.
+
+Debug builds also take `reflex://debug/voice?file=<name>`, which transcribes an audio file in the app's Documents through the same on-device recognizer and sends it as a voice Send. The Simulator has no on-device speech model, so there it shows "Speech recognition failed"; use a real iPad.
 
 Debug builds also take `reflex://debug/ellipse?cx=&cy=&rx=&ry=` (screen points), which draws one closed pen stroke through the same PencilKit path as a finger. Simulator automation has no freeform gesture, so this is how a circle is drawn there.

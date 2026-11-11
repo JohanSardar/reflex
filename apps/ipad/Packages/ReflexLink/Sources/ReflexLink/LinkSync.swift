@@ -14,6 +14,15 @@ public struct AgentRequest: Identifiable, Sendable, Equatable {
     public var color: String
 }
 
+/// An Agent the Link knows: its name and color, for its chip and the history.
+public struct AgentInfo: Codable, Identifiable, Sendable, Equatable {
+    public var id: String
+    public var name: String
+    /// A named protocol color.
+    public var color: String
+    public var status: String
+}
+
 /// The iPad's replicas of every Space, kept in the Rust kernel (through
 /// UniFFI), saved on this iPad, and in sync with the paired Link over the
 /// local network (ARCHITECTURE §1, §8).
@@ -21,7 +30,8 @@ public struct AgentRequest: Identifiable, Sendable, Equatable {
 /// Messages after the handshake are the Link coordinator's
 /// (`link/sync/coordinator.ts`): `spaces`, `sync` (one Automerge sync
 /// conversation per Space), `assets_have` / `asset_want` / `asset`,
-/// `ping` / `pong`, and `agent_request` / `agent_decision`.
+/// `ping` / `pong`, `agent_request` / `agent_decision`, and `agents` (each
+/// Agent's name and color, for the chips).
 @MainActor @Observable
 public final class LinkSync {
     public enum State: Equatable {
@@ -37,6 +47,10 @@ public final class LinkSync {
     /// Bumps each time a Space changes, from here or from the Link.
     public private(set) var revision: [String: Int] = [:]
     public private(set) var agentRequests: [AgentRequest] = []
+    /// Every Agent the Link knows, by ID (sent by the Link, kept for offline use).
+    public private(set) var agents: [String: AgentInfo] = [:]
+    /// Bumps each time an asset arrives from the Link, so images waiting for it draw.
+    public private(set) var assetRevision = 0
     public private(set) var person: Person?
     public var deviceID: String { identity.device }
 
@@ -51,6 +65,8 @@ public final class LinkSync {
     @ObservationIgnored private var assetsWritten: Set<String> = []
     /// The Relay the Link said to use when the local network can't reach it (RelayConnection.swift).
     @ObservationIgnored private var relay: RelayInfo?
+    /// Assets arriving in parts from the Link, by hash.
+    @ObservationIgnored private var incoming: [String: (size: Int, data: Data)] = [:]
 
     struct Paired: Codable {
         var device: String
@@ -90,6 +106,7 @@ public final class LinkSync {
         }
         paired = (try? Data(contentsOf: Self.linkDir.appending(path: "paired.json"))).flatMap { try? JSONDecoder().decode(Paired.self, from: $0) }
         relay = (try? Data(contentsOf: Self.linkDir.appending(path: "relay.json"))).flatMap { try? JSONDecoder().decode(RelayInfo.self, from: $0) }
+        agents = (try? Data(contentsOf: Self.linkDir.appending(path: "agents.json"))).flatMap { try? JSONDecoder().decode([String: AgentInfo].self, from: $0) } ?? [:]
         loadReplicas()
         if paired != nil {
             state = .connecting
@@ -143,6 +160,46 @@ public final class LinkSync {
         return try? space.scene(queryJson: Self.json(q))
     }
 
+    /// Raw strokes (`scene({detail: "strokes"})`) for these Ink IDs: ID -> `[x, y, t, pressure]` points.
+    public func strokes(_ id: String, ids: [String]) -> [String: [[Double]]] {
+        guard let space = replicas[id], !ids.isEmpty else { return [:] }
+        let q: [String: Any] = ["detail": "strokes", "ids": ids, "viewer": ["person": person?.id ?? identity.person.id]]
+        guard let out = try? space.scene(queryJson: Self.json(q)), let r = Self.object(out) else { return [:] }
+        var points: [String: [[Double]]] = [:]
+        for s in r["elements"] as? [[String: Any]] ?? [] {
+            if let sid = s["id"] as? String, let p = s["points"] as? [[Double]] { points[sid] = p }
+        }
+        return points
+    }
+
+    /// Every Agent batch and person's action in this Space, oldest first (the kernel's `timeline`).
+    public func timeline(_ id: String) -> [[String: Any]] {
+        guard let space = replicas[id] else { return [] }
+        let q: [String: Any] = ["viewer": ["person": person?.id ?? identity.person.id], "limit": 300, "names": agents.mapValues(\.name)]
+        guard let out = try? space.timeline(queryJson: Self.json(q)) else { return [] }
+        return Self.object(out)?["entries"] as? [[String: Any]] ?? []
+    }
+
+    /// The person reverts an Agent's latest change. It is the person's own action, so their undo brings it back.
+    @discardableResult
+    /// The person reverts an Agent's latest batch here (the kernel's `revert`).
+    /// It goes into the person's history, so undo brings the batch back.
+    public func revert(_ space: String, agent: String) -> [String: Any]? {
+        guard let replica = replicas[space], let person else { return nil }
+        do {
+            let by = Self.json(["person": person.id, "device": identity.device])
+            let names = Self.json(["agent": agent, "last": 1, "names": agents.mapValues(\.name)])
+            let out = try replica.revert(byJson: by, requestId: "r_" + UUID().uuidString.prefix(12).lowercased(), selectorJson: names, nowMs: Self.now())
+            let r = Self.object(out)
+            if r?["ok"] as? Bool == false { linkLog.error("Revert rejected: \(out, privacy: .public)") }
+            changed(space)
+            return r
+        } catch {
+            linkLog.error("Revert failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     /// One finished user action (`apply_user_intent`), made durable and synced.
     @discardableResult
     public func intent(_ space: String, _ intent: [String: Any]) -> [String: Any]? {
@@ -187,7 +244,7 @@ public final class LinkSync {
     public func storeAsset(_ bytes: Data) throws -> String {
         let hash = sha256(bytes).hex
         let url = Self.assetsDir.appending(path: hash)
-        if !FileManager.default.fileExists(atPath: url.path()) {
+        if !FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) {
             try bytes.write(to: url, options: [.atomic, .completeFileProtection])
         }
         // Pushed now, ahead of the Send that refers to it, on the same ordered connection.
@@ -204,8 +261,40 @@ public final class LinkSync {
         } while off < bytes.count
     }
 
+    /// An asset's bytes, if this iPad has them. The Link offers every asset it holds (`assets_have`), and the iPad fetches the ones it lacks.
+    public func asset(_ hash: String) -> Data? {
+        guard hash.count == 64, hash.allSatisfy(\.isHexDigit) else { return nil }
+        if let bytes = try? Data(contentsOf: Self.assetsDir.appending(path: hash)) { return bytes }
+        return nil
+    }
+
+    private func receiveAsset(_ h: [String: Any], _ body: Data) {
+        guard let hash = h["hash"] as? String, hash.count == 64, hash.allSatisfy(\.isHexDigit),
+              let off = h["off"] as? Int, let size = h["size"] as? Int, size >= 0, size <= 512 * 1024 * 1024 else { return }
+        let url = Self.assetsDir.appending(path: hash)
+        if FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) { return }
+        if off == 0 { incoming[hash] = (size, Data()) }
+        guard var inc = incoming[hash], inc.data.count == off, inc.size == size, off + body.count <= size else {
+            incoming[hash] = nil
+            linkLog.error("Dropped a malformed part of asset \(hash, privacy: .public)")
+            return
+        }
+        inc.data.append(body)
+        guard inc.data.count == size else {
+            incoming[hash] = inc
+            return
+        }
+        incoming[hash] = nil
+        guard sha256(inc.data).hex == hash else {
+            linkLog.error("Asset \(hash, privacy: .public) does not match its hash")
+            return
+        }
+        try? inc.data.write(to: url, options: [.atomic, .completeFileProtection])
+        assetRevision += 1
+    }
+
     private func assetHashes() -> [String] {
-        ((try? FileManager.default.contentsOfDirectory(atPath: Self.assetsDir.path())) ?? []).filter { $0.count == 64 }
+        ((try? FileManager.default.contentsOfDirectory(atPath: Self.assetsDir.path(percentEncoded: false))) ?? []).filter { $0.count == 64 }
     }
 
     // MARK: Agent approval
@@ -310,6 +399,7 @@ public final class LinkSync {
         session = s
         state = .connected(s.peer.name)
         linkLog.info("Connected to \(s.peer.name, privacy: .public) over \(s.conn.remote, privacy: .public)")
+        incoming = [:] // parts of an asset from an earlier session never complete
         for (_, space) in replicas { space.resetSync(peer: s.peer.device) }
         s.send(["t": "spaces", "spaces": replicas.map { ["id": $0.key, "kind": $0.value.kind()] }])
         s.send(["t": "assets_have", "hashes": assetHashes()])
@@ -364,6 +454,20 @@ public final class LinkSync {
                 revision[id, default: 0] += 1
             }
             pump(id, s)
+        case "assets_have":
+            let have = Set(assetHashes())
+            let want = (h["hashes"] as? [String] ?? []).filter { $0.count == 64 && !have.contains($0) && incoming[$0] == nil }
+            if !want.isEmpty { s.send(["t": "asset_want", "hashes": want]) }
+        case "asset":
+            receiveAsset(h, body)
+        case "agents":
+            var known: [String: AgentInfo] = [:]
+            for a in h["agents"] as? [[String: Any]] ?? [] {
+                guard let id = a["id"] as? String else { continue }
+                known[id] = AgentInfo(id: id, name: a["name"] as? String ?? id, color: a["color"] as? String ?? "violet", status: a["status"] as? String ?? "approved")
+            }
+            agents = known
+            if let data = try? JSONEncoder().encode(known) { try? data.write(to: Self.linkDir.appending(path: "agents.json"), options: .atomic) }
         case "asset_want":
             for hash in h["hashes"] as? [String] ?? [] {
                 if let bytes = try? Data(contentsOf: Self.assetsDir.appending(path: hash)) { sendAsset(hash, bytes, s) }
@@ -382,7 +486,7 @@ public final class LinkSync {
             guard let id = h["id"] as? String, !agentRequests.contains(where: { $0.id == id }) else { return }
             agentRequests.append(AgentRequest(id: id, name: h["name"] as? String ?? id, color: h["color"] as? String ?? "violet"))
         default:
-            return // assets_have, asset, pong, and anything from a newer Link
+            return // pong, and anything from a newer Link
         }
     }
 
