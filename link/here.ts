@@ -60,8 +60,8 @@ export class Here {
     this.#set({ device, space, person, name, cursor, selection, at: Date.now() }, null);
   }
 
-  /** From a Link peer. `allowed`: whether that peer may speak about this Space at all. */
-  remote(from: string, h: Record<string, unknown>, allowed: (space: string) => boolean): void {
+  /** From a Link peer. `allowed`: whether that peer may speak about this Space, for this person. */
+  remote(from: string, h: Record<string, unknown>, allowed: (space: string, person: string) => boolean): void {
     const device = String(h.device ?? "");
     if (!device) return;
     if (h.gone === true) {
@@ -71,7 +71,7 @@ export class Here {
     }
     const space = String(h.space ?? "");
     const p = h.person as Person | undefined;
-    if (!space || !allowed(space) || typeof p?.id !== "string") return;
+    if (!space || typeof p?.id !== "string" || !allowed(space, p.id)) return;
     const was = this.#entries.get(device);
     if (was && was.via !== from) return; // heard first through another path
     const c = h.cursor;

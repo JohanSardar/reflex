@@ -222,7 +222,9 @@ export class Link {
       if (ownIpad) return void this.#ipadMessage(p, d, h);
       if (d?.kind !== "link") return;
       if (this.#shared.message(p, h)) return;
-      if (h.t === "here") return this.#here.remote(p.device, h, (space) => this.#shares.allowed(d, space));
+      if (h.t === "here")
+        // Another person's Link speaks only for its person, unless it is the owner's Link passing on the others'.
+        return this.#here.remote(p.device, h, (space, person) => this.#shares.allowed(d, space) && (d.person.id === this.#id.person.id || person === d.person.id || this.#shares.get(space)?.device === d.device));
       // Keys of shared Spaces come with their share records, from the owner.
       if (h.t === "relay_keys" && this.#relay && d.person.id === this.#id.person.id)
         this.#relay.importKeys(h.keys as { space: string; key: string }[], p.name, (space) => this.#shares.get(space) !== undefined);
