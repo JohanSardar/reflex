@@ -131,6 +131,10 @@ interface Status {
   paired: { device: string; name: string; connected: boolean }[];
   peers: { device: string; name: string; remote: string; rttMs: number | null }[];
   agents: { id: string; name: string; status: string }[];
+  push?: {
+    targets: { id: string; agent: string; adapter: string; config: Record<string, unknown>; live: boolean }[];
+    attempts: { space: string; send: string; recipient: string; target: string; started_at: number; outcome: string; reason: string | null }[];
+  };
 }
 
 function showStatus(s: Status): string {
@@ -147,6 +151,12 @@ function showStatus(s: Status): string {
   lines.push(`Inbox (${s.inbox.length})`);
   for (const i of s.inbox)
     lines.push(`  ${i.space}/${i.send}  via ${i.via}  ${i.receipts.map((r) => `${r.recipient}: ${r.state}`).join(", ") || "not delivered yet"}`);
+  const push = s.push ?? { targets: [], attempts: [] };
+  lines.push(`Push targets (${push.targets.length})`);
+  for (const t of push.targets) lines.push(`  ${t.id}  ${t.adapter.padEnd(15)} ${t.live ? "live   " : "offline"}  agent ${t.agent}  ${JSON.stringify(t.config)}`);
+  if (push.attempts.length) lines.push(`Recent pushes`);
+  for (const a of push.attempts)
+    lines.push(`  ${new Date(a.started_at).toISOString()}  ${a.space}/${a.send} → ${a.recipient} via ${a.target}: ${a.outcome}${a.reason ? ` (${a.reason})` : ""}`);
   return lines.join("\n");
 }
 

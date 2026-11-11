@@ -4,6 +4,8 @@ import { frames, home, NoLink, socketPath, token, type ClientFrame, type HostFra
 
 export type CallResult = { json: Record<string, any>; images: string[]; files?: WireFile[]; isError: boolean };
 type Progress = (f: { elapsed_s: number; timeout_s: number }) => void;
+/** A pushed Send Bundle; resolve with whether it reached the harness. */
+export type OnPush = (p: { json: Record<string, any>; images: string[]; deadline: number }) => Promise<{ ok: boolean; reason?: string }>;
 
 function dial(path: string): Promise<Socket> {
   return new Promise((resolve, reject) => {
@@ -16,7 +18,8 @@ function dial(path: string): Promise<Socket> {
 export class Client {
   #sock: Socket;
   #next = 1;
-  #waiting = new Map<number, { resolve: (r: CallResult) => void; reject: (e: Error) => void; progress?: Progress }>();
+  #waiting = new Map<number, { resolve: (r: any) => void; reject: (e: Error) => void; progress?: Progress }>();
+  #onPush = new Map<number, OnPush>();
   #ready: Promise<void>;
   onClose?: () => void;
 
@@ -29,6 +32,14 @@ export class Client {
     });
     sock.on("data", frames((f: HostFrame) => {
       if (f.t === "ready") return ready();
+      if (f.t === "push") {
+        const on = this.#onPush.get(f.id);
+        const answer = (r: { ok: boolean; reason?: string }) => this.#send({ t: "pushed", push: f.push, ...r });
+        if (!on) return answer({ ok: false, reason: "not listening" });
+        if (Date.now() > f.deadline) return answer({ ok: false, reason: "arrived after its deadline" });
+        void on(f).then(answer, (e) => answer({ ok: false, reason: String((e as Error).message) }));
+        return;
+      }
       const w = this.#waiting.get(f.id);
       if (!w) return;
       if (f.t === "progress") return w.progress?.(f);
@@ -74,6 +85,22 @@ export class Client {
 
   call(tool: string, args: unknown, who: Who, o: { signal?: AbortSignal; progress?: Progress } = {}) {
     return this.#request((id) => ({ t: "call", id, tool, args, who }), o);
+  }
+
+  /**
+   * Opens a push target for this Agent on this connection: the Link pushes its Sends to `onPush` until
+   * the connection closes. Resolves once the Link accepted it (which can wait for the person to approve the Agent).
+   */
+  async listen(who: Who, adapter: string, config: Record<string, unknown>, onPush: OnPush): Promise<{ target: string; agent: string }> {
+    const id = this.#next;
+    this.#onPush.set(id, onPush);
+    const r = await this.#request((id) => ({ t: "listen", id, who, adapter, config }));
+    if ((r as any).t !== "listening") {
+      this.#onPush.delete(id);
+      const err = (r as CallResult).json?.errors?.[0];
+      throw new Error(err ? `${err.code}: ${err.msg}` : "The Link did not accept the push target.");
+    }
+    return { target: (r as any).target, agent: (r as any).agent };
   }
 
   person(action: string, args: Record<string, any>) {

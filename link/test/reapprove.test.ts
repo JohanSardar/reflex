@@ -61,6 +61,7 @@ test("a revoked Agent is asked about again, and the person can let it back in", 
   const asked: AgentRecord[] = [];
   const host = await startAgentHost({
     db,
+    home: dir,
     store,
     inbox,
     assets: new AssetStore(join(dir, "assets")),

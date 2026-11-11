@@ -87,6 +87,7 @@ export class Link {
   #coord!: Coordinator;
   #server: Server | null = null;
   #agentServer: Server | null = null;
+  #push: Awaited<ReturnType<typeof startAgentHost>> | null = null;
   #db!: DatabaseSync;
   #web: Awaited<ReturnType<typeof startWebViewer>> | null = null;
   #questions: AgentRecord[] = [];
@@ -179,6 +180,7 @@ export class Link {
     // The Agent layer, on the durable Spaces and Inbox. Recipients are set before recovery indexes any Send.
     const host = await startAgentHost({
       db,
+      home: this.dir,
       store: this.#store,
       inbox: this.#inbox,
       assets: this.#assets,
@@ -195,6 +197,7 @@ export class Link {
       log: (event, data = {}) => this.#log(`agent layer: ${event} ${JSON.stringify(data)}`),
     });
     this.#agentServer = host.server;
+    this.#push = host;
     this.#ports = (await this.#coord.start()).ports;
     await this.#listen();
     if (this.#opts.webPort !== null)
@@ -306,6 +309,7 @@ export class Link {
 
   async stop(): Promise<void> {
     this.#rl?.close();
+    this.#push?.dispatcher.stop();
     await this.#web?.close();
     this.#signIn = null;
     await new Promise<void>((r) => (this.#agentServer ? this.#agentServer.close(() => r()) : r()));
@@ -594,6 +598,10 @@ export class Link {
       peers: this.#coord.peers().map((p) => ({ device: p.device, name: p.name, since: p.since, transport: p.session.path.transport, remote: p.session.path.remote, ...p.session.measurements() })),
       agents: this.#catalog.agents().map((a) => ({ id: a.id, name: a.name, status: a.status, color: a.color })),
       relay: this.#relay ? { ...this.#relay.status(), grants: this.#relay.grants() } : null,
+      push: {
+        targets: (this.#push?.pushes.all() ?? []).map((t) => ({ ...t, live: this.#push?.live(t) ?? false })),
+        attempts: this.#push?.pushes.attempts({ limit: 20 }) ?? [],
+      },
     };
   }
 }

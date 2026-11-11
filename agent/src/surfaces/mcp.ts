@@ -2,8 +2,10 @@
 // It also writes a log of what the harness does on the wire (the protocol
 // version it asks for, progress tokens, cancellations, a pipe that closes
 // mid-call), which is how docs/harness-notes.md was written.
-import { appendFileSync } from "node:fs";
-import { basename } from "node:path";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -18,7 +20,39 @@ const KNOWN: Record<string, string> = { "claude-code": "Claude Code", "codex-mcp
 // REFLEX_MAX_WAIT_S overrides it, for a Codex whose tool_timeout_sec was raised.
 const MAX_WAIT_S: Record<string, number> = { Codex: 280 };
 
-export async function runMcp() {
+// With --channel, a Claude Code session also gets Sends pushed as new turns (a Claude Code channel,
+// docs/harness-notes.md): `notifications/claude/channel` with the Send Bundle as its content.
+const CHANNEL = "claude/channel";
+const CHANNEL_HARNESSES = new Set(["Claude Code"]);
+const CHANNEL_INSTRUCTIONS = `
+
+Sends are also pushed to you: when the person presses Send while you are not in wait_for_user, the Send Bundle arrives on its own as a <channel source="reflex" ...> message. Treat it exactly like a Bundle wait_for_user returned, and follow its next: answer with apply(in_reply_to), or acknowledge it with wait_for_user(after, timeout_s: 0), then end your turn. Its images are PNG files: read the paths in images[].file. You don't need to sit in wait_for_user to hear from the person.`;
+
+/**
+ * Whether the Claude Code session that started this server turned channels on. Claude Code drops channel
+ * notifications from a server that isn't in its --channels (or --dangerously-load-development-channels) list
+ * without telling the server, so a push there would never reach the session. The flags are looked for on the
+ * parent's command line and a few ancestors' (a wrapper such as npx may sit in between); when the command
+ * lines can't be read, the channel is assumed on.
+ */
+function sessionHasChannels(): { on: boolean; why: string } {
+  const flag = /\s--(channels|dangerously-load-development-channels)[\s=]/;
+  let pid = process.ppid;
+  try {
+    for (let depth = 0; depth < 4 && pid > 1; depth++) {
+      const line = execFileSync("ps", ["-o", "ppid=,args=", "-p", String(pid)], { encoding: "utf8", timeout: 2000 }).trim();
+      const m = /^(\d+)\s+(.*)$/s.exec(line);
+      if (!m) break;
+      if (flag.test(` ${m[2]} `)) return { on: true, why: "the session was started with a channels flag" };
+      pid = Number(m[1]);
+    }
+  } catch {
+    return { on: true, why: "the session's command line could not be read" };
+  }
+  return { on: false, why: "the session was started without --channels or --dangerously-load-development-channels" };
+}
+
+export async function runMcp(o: { channel?: boolean } = {}) {
   const started = Date.now();
   const log = (event: string, data: Record<string, unknown> = {}) =>
     appendFileSync(logPath("mcp"), JSON.stringify({ at: new Date().toISOString(), pid: process.pid, t_s: Math.round((Date.now() - started) / 100) / 10, event, ...data }) + "\n");
@@ -39,7 +73,13 @@ export async function runMcp() {
       },
     ));
 
-  const server = new Server({ name: "reflex", version: "0.1.0" }, { capabilities: { tools: {} }, instructions });
+  // Whether the session turned channels on is known from its command line before initialize, so the
+  // instructions promise pushes only when a push target will be opened.
+  const session = o.channel ? sessionHasChannels() : { on: false, why: "" };
+  const server = new Server(
+    { name: "reflex", version: "0.1.0" },
+    { capabilities: { tools: {}, ...(o.channel ? { experimental: { [CHANNEL]: {} } } : {}) }, instructions: instructions + (session.on ? CHANNEL_INSTRUCTIONS : "") },
+  );
   const who = () => {
     const c = server.getClientVersion();
     const name = process.env.REFLEX_AGENT_NAME ?? `${KNOWN[c?.name ?? ""] ?? c?.name ?? "MCP client"} · ${basename(process.cwd())}`.slice(0, 80);
@@ -102,11 +142,13 @@ export async function runMcp() {
   });
 
   const transport = new StdioServerTransport();
+  let asked = ""; // the protocol version the harness asked for in initialize
   await server.connect(transport);
   // Log every message the harness sends, before the SDK handles it.
   const handle = transport.onmessage!;
   transport.onmessage = (msg: any) => {
     const p = msg.params ?? {};
+    if (msg.method === "initialize") asked = String(p.protocolVersion ?? "");
     log("recv", {
       method: msg.method ?? "(response)",
       id: msg.id ?? null,
@@ -116,11 +158,66 @@ export async function runMcp() {
     });
     handle(msg);
   };
-  server.oninitialized = () => log("initialized", { negotiated: (transport as any)._protocolVersion ?? null, client: server.getClientVersion(), capabilities: server.getClientCapabilities() });
+  server.oninitialized = () => {
+    log("initialized", { negotiated: (transport as any)._protocolVersion ?? null, client: server.getClientVersion(), capabilities: server.getClientCapabilities() });
+    if (!o.channel) return;
+    const harness = KNOWN[server.getClientVersion()?.name ?? ""] ?? server.getClientVersion()?.name ?? "MCP client";
+    // Only Claude Code has channels. Elsewhere Sends reach the Agent the guaranteed way, through wait_for_user.
+    if (!CHANNEL_HARNESSES.has(harness)) return log("channel_unsupported", { harness });
+    if (!session.on) return log("channel_off", { harness, why: session.why });
+    void openChannel(harness);
+  };
+
+  // The channel: a second connection to the Link that holds a push target for this Agent. The Link pushes
+  // each new Send that no wait_for_user took; it becomes a channel notification, which Claude Code turns into
+  // a new turn. If the Link isn't running or restarts, it reconnects.
+  async function openChannel(harness: string) {
+    for (;;) {
+      let c: Client | undefined;
+      try {
+        c = await Client.open(`mcp-channel:${process.pid}`);
+        const closed = new Promise<void>((r) => (c!.onClose = r));
+        const config = { harness, version: server.getClientVersion()?.version ?? "", protocol: asked, pid: process.pid };
+        const { target, agent } = await c.listen(who(), "claude-channel", config, push);
+        log("channel_open", { target, agent });
+        await closed;
+        log("channel_closed");
+      } catch (e) {
+        const error = String((e as Error).message);
+        log("channel_failed", { error });
+        c?.close();
+        // The person turned this Agent away or didn't answer: stop, so the channel never asks them again on its
+        // own. Tool calls still work; restarting the session opens the channel once they approve.
+        if (/^(rate_limited|not_approved)/.test(error)) return log("channel_stopped", { error });
+      }
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+
+  async function push(p: { json: Record<string, any>; images: string[]; deadline: number }) {
+    const bundle = p.json;
+    if (!process.stdout.writable) return { ok: false, reason: "the session's pipe is closed" };
+    // Channel content is text, so the crops go to files the session can read, as on the CLI.
+    const dir = join(tmpdir(), "reflex");
+    mkdirSync(dir, { recursive: true });
+    p.images.forEach((b64, i) => {
+      const file = join(dir, `${bundle.send}-${i + 1}.png`);
+      writeFileSync(file, Buffer.from(b64, "base64"));
+      const entry = bundle.images?.[i];
+      if (entry) entry.file = file;
+    });
+    const meta: Record<string, string> = { space: String(bundle.space), send: String(bundle.send), kind: String(bundle.kind) };
+    if (bundle.from?.name) meta.from = String(bundle.from.name);
+    // Writing the images took time; past the deadline the Link has given up on this push, so it must not land.
+    if (Date.now() > p.deadline) return { ok: false, reason: "arrived after its deadline" };
+    await server.notification({ method: "notifications/claude/channel", params: { content: JSON.stringify(bundle), meta } });
+    log("channel_push", { send: bundle.send, space: bundle.space, kind: bundle.kind, bytes: JSON.stringify(bundle).length, images: p.images.length });
+    return { ok: true };
+  }
   process.stdin.on("end", () => {
     log("stdin_closed");
     void host?.then((c) => c.close(), () => {});
     process.exit(0);
   });
-  log("mcp_started", { cwd: process.cwd(), env_agent: process.env.REFLEX_AGENT_NAME ?? null });
+  log("mcp_started", { cwd: process.cwd(), env_agent: process.env.REFLEX_AGENT_NAME ?? null, channel: Boolean(o.channel) });
 }
