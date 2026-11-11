@@ -42,6 +42,8 @@ final class SpaceSession {
     @ObservationIgnored private var inkInside: [String: [String]] = [:]
     @ObservationIgnored private var inkInsideTimer: Task<Void, Never>?
     @ObservationIgnored private var panelTimer: Task<Void, Never>?
+    @ObservationIgnored private var hintsTimer: Task<Void, Never>?
+    @ObservationIgnored private var refusedAt = Date.distantPast
 
     init(id: String, link: LinkSync) {
         self.id = id
@@ -61,6 +63,12 @@ final class SpaceSession {
         ink.onTap = { [weak self] p in self?.touched(p, trigger: "tap") }
         ink.onLongPress = { [weak self] p in self?.touched(p, trigger: "long_press") }
         ink.onDrag = { [weak self] start, by, ended in self?.drag(from: start, by: by, ended: ended) }
+        ink.refusesInk = { [weak self] p in self?.noInk(at: p) ?? false }
+        ink.onRefused = { [weak self] in self?.refusedInk() }
+        ink.onPen = { [weak self] down in
+            guard let self else { return }
+            self.link.reportPresence(space: self.id, pen: down)
+        }
         refresh()
     }
 
@@ -92,14 +100,22 @@ final class SpaceSession {
         switch edit {
         case .action(let intents):
             var entries = 0
+            var refused: [String] = []
             for intent in intents {
-                if let r = link.intent(id, Self.json(intent)), r["entry"] is String { entries += 1 }
+                let r = link.intent(id, Self.json(intent))
+                if r?["entry"] is String { entries += 1 }
+                // Ink where a Region has `ink: false` is refused by the kernel; take it back off the canvas.
+                if case .add(let s) = intent, r?["ok"] as? Bool == false { refused.append(s.id) }
+            }
+            if !refused.isEmpty {
+                ink.withdraw(refused)
+                refusedInk()
             }
             if entries > 0 {
                 done.append(entries)
                 undone = []
             }
-            for case .add(let stroke) in intents { drewInside(stroke) }
+            for case .add(let stroke) in intents where !refused.contains(stroke.id) { drewInside(stroke) }
         case .undo:
             guard let n = done.popLast() else { return }
             for _ in 0 ..< n { link.undo(id) }
@@ -110,6 +126,7 @@ final class SpaceSession {
             done.append(n)
         }
         refresh()
+        readWatchedRegions()
     }
 
     /// One action that isn't Ink, made undoable from the same toolbar and gestures.
@@ -309,6 +326,96 @@ final class SpaceSession {
         guard let key, let (eid, _) = panel else { return nil }
         return panelValues[eid]?[key]
     }
+
+    // MARK: Regions
+
+    var regions: [SceneElement] { scene.elements.filter { $0.type == "region" && $0.frame != nil } }
+
+    /// Whether `b` lies in the Region: its center is inside, as the kernel decides.
+    private static func inside(_ r: CGRect, _ b: CGRect) -> Bool { r.contains(CGPoint(x: b.midX, y: b.midY)) }
+
+    private func noInk(at p: CGPoint) -> Bool {
+        regions.contains { $0.ink == false && $0.frame!.contains(p) }
+    }
+
+    private func refusedInk() {
+        guard Date().timeIntervalSince(refusedAt) > 2 else { return }
+        refusedAt = Date()
+        say("Writing isn't allowed in this area")
+    }
+
+    /// This iPad's strokes in a Region.
+    private func strokes(in r: SceneElement) -> [String] {
+        guard let f = r.frame else { return [] }
+        return ink.strokes.filter { Self.inside(f, $0.bounds) }.map(\.id)
+    }
+
+    /// Reads the person's handwriting in each watched Region once they pause, and
+    /// hands the lines to the Link, so its watch snapshots carry the recognizer's text.
+    private func readWatchedRegions() {
+        let watched = regions.filter { $0.watch == true }
+        guard !watched.isEmpty else { return }
+        hintsTimer?.cancel()
+        hintsTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(0.8))
+            guard !Task.isCancelled, let self else { return }
+            for r in watched {
+                let hints = await Handwriting.lineHints(self.ink.pkStrokes(self.strokes(in: r)))
+                guard !Task.isCancelled else { return }
+                self.link.reportHints(space: self.id, region: r.id, hints: hints)
+                log.info("Watch hints for \(r.id, privacy: .public): \(hints.compactMap { $0["text"] as? String }, privacy: .public)")
+            }
+        }
+    }
+
+    /// A Region's own Send button ("Check my work"): only the work inside it, with the
+    /// recognizer's text for each line of it, and a crop of the whole Region.
+    func sendRegion(_ r: SceneElement) {
+        guard let frame = r.frame else { return }
+        let all = strokes(in: r)
+        let strokes = ink.takeUnsent(among: Set(all))
+        let view = viewport()
+        let zoom = ink.zoomScale, offset = ink.contentOffset
+        var raw: [String: Any] = ["send": Self.newSendID(), "trigger": "region", "region": r.id, "viewport": Self.ints(view)]
+        if let crop = Crop.capture(space: frame.insetBy(dx: -8, dy: -8).intersection(view), zoom: zoom, offset: offset) {
+            do {
+                let hash = try link.storeAsset(crop.png)
+                raw["crops"] = [["asset": hash, "bounds": Self.ints(crop.bounds), "strokes": strokes]]
+            } catch {
+                log.error("Could not store the crop: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        let pk = ink.pkStrokes(all)
+        let previous = sending
+        sending = Task {
+            await previous?.value
+            let hints = await Handwriting.lineHints(pk)
+            if !hints.isEmpty { raw["hints"] = hints }
+            freeze(raw)
+        }
+    }
+
+    #if DEBUG
+    /// Writes one line of text by hand in a Region, below the person's lines there,
+    /// as simulated Pencil strokes (the Simulator has no Pencil): each glyph's outline
+    /// becomes strokes, drawn one after another with the pen going down and up.
+    func debugWrite(region: String, text: String, size: CGFloat = 30, pause: Double = 0.05) async {
+        guard let r = regions.first(where: { $0.id == region || $0.id.hasSuffix(":\(region)") }), let f = r.frame else {
+            say("No Region '\(region)'")
+            return
+        }
+        let mine = ink.strokes.filter { Self.inside(f, $0.bounds) }.map(\.bounds)
+        let baseline = (mine.map(\.maxY).max().map { $0 + size * 0.6 } ?? f.minY + 48) + size
+        guard baseline + 10 < f.maxY else {
+            say("Region '\(region)' is full")
+            return
+        }
+        for stroke in DebugHand.strokes(text, at: CGPoint(x: f.minX + 40, y: baseline), size: size) {
+            ink.debugDraw(space: stroke)
+            try? await Task.sleep(for: .seconds(pause))
+        }
+    }
+    #endif
 
     // MARK: Sending
 

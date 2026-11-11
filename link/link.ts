@@ -31,6 +31,7 @@ import { SpaceStore } from "./storage/journal.ts";
 import { Coordinator } from "./sync/coordinator.ts";
 import { startAgentHost } from "./agent-host.ts";
 import { route } from "./routing.ts";
+import { Presence } from "./presence.ts";
 import { socketPath as agentSocketPath } from "../agent/src/host/rpc.ts";
 import { LanTransport } from "./transports/lan.ts";
 import { startWebViewer } from "./web.ts";
@@ -167,8 +168,11 @@ export class Link {
       if (d?.kind === "link" && d.person.id === this.#id.person.id)
         void p.session.send({ t: "relay_keys", keys: this.#relay!.exportKeys() }, undefined, "control").catch(() => {});
     };
+    // What the person's iPads report: the Space on screen, the pen, recognized handwriting (presence.ts).
+    const presence = new Presence(() => new Set(this.#coord.peers().map((p) => p.device)));
     this.#coord.onMessage = (p, h) => {
       const d = this.#catalog.device(p.device);
+      if (d?.kind === "ipad" && d.person.id === this.#id.person.id && presence.receive(p.device, h)) return;
       if (h.t === "relay_keys" && this.#relay && d?.kind === "link" && d.person.id === this.#id.person.id) this.#relay.importKeys(h.keys as { space: string; key: string }[], p.name);
     };
     this.#coord.onPaired((d) => process.stdout.write(`\nPaired with ${d.name} (${d.device}).\n`));
@@ -191,7 +195,10 @@ export class Link {
       devPerson: Boolean(this.#opts.dev),
       presence: () => ({
         devices: this.#coord.peers().filter((p) => this.#catalog.devices().find((d) => d.device === p.device)?.kind !== "link").length,
+        viewing: presence.viewing(),
       }),
+      writing: (space) => presence.writing(space),
+      deviceHints: (space) => presence.hints(space),
       announce: (a) => this.#announce(a),
       decision: (id, ms, signal) => this.#waitDecision(id, ms, signal),
       log: (event, data = {}) => this.#log(`agent layer: ${event} ${JSON.stringify(data)}`),

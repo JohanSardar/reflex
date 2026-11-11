@@ -68,10 +68,16 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
     public var behaviors: [Behavior]?
     public var draggable: Bool?
     public var locked: Bool?
+    /// Region rules: whether the person may write there, watch mode, Agents read-only, and its Send button's label.
+    public var ink: Bool?
+    public var watch: Bool?
+    public var agentsReadOnly: Bool?
+    public var sendButton: String?
 
     enum CodingKeys: String, CodingKey {
         case id, type, owner, bounds, text, markdown, size, color, align, shape, fill, stroke, from, to, arrow, points
         case src, alt, latex, title, name, template, mime, page, width, behaviors, draggable, locked
+        case ink, watch, agentsReadOnly = "agents_read_only", sendButton = "send_button"
     }
 
     public init(from decoder: Decoder) throws {
@@ -106,6 +112,10 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
         behaviors = try? c.decodeIfPresent([Behavior].self, forKey: .behaviors)
         draggable = try? c.decodeIfPresent(Bool.self, forKey: .draggable)
         locked = try? c.decodeIfPresent(Bool.self, forKey: .locked)
+        ink = try? c.decodeIfPresent(Bool.self, forKey: .ink)
+        watch = try? c.decodeIfPresent(Bool.self, forKey: .watch)
+        agentsReadOnly = try? c.decodeIfPresent(Bool.self, forKey: .agentsReadOnly)
+        sendButton = try? c.decodeIfPresent(String.self, forKey: .sendButton)
     }
 
     public var frame: CGRect? {

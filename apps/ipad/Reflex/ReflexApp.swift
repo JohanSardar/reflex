@@ -21,7 +21,8 @@ struct ReflexApp: App {
 #if DEBUG
 extension Notification.Name {
     /// reflex://debug/ellipse?cx=&cy=&rx=&ry= draws one closed stroke at those screen points, and
-    /// reflex://debug/voice?file=<name in Documents> sends that recording as if spoken (Simulator automation only).
+    /// reflex://debug/voice?file=<name in Documents> sends that recording as if spoken, and
+    /// reflex://debug/write?region=<id>&text=<line> writes a line by hand in a Region (Simulator automation only).
     static let debugInk = Notification.Name("si.eilmer.reflex.debug-ink")
 }
 #endif

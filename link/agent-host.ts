@@ -171,8 +171,12 @@ export interface AgentHostOptions {
   socket: string;
   token: string;
   devPerson: boolean;
-  /** How many of the person's devices are connected (not other Links). */
-  presence?: () => { devices: number };
+  /** How many of the person's devices are connected (not other Links), and the Spaces on their screens. */
+  presence?: () => { devices: number; viewing?: string[] };
+  /** Whether the person is writing in a Space now, from a device's live pen signal; undefined when no device shows it. */
+  writing?: (space: string) => boolean | undefined;
+  /** The devices' recognized handwriting lines for the watched Regions of a Space. */
+  deviceHints?: (space: string) => { strokes: string[]; text: string; confidence: number }[];
   /** Asks the person to approve a new Agent (on the Link's terminal and on paired iPads). */
   announce: (a: AgentRecord) => void;
   /** Resolves once the person decides about this Agent, or after `ms`. */
@@ -224,7 +228,7 @@ export async function startAgentHost(o: AgentHostOptions) {
   for (const space of o.store.ids()) behaviors(space);
 
   // Watch mode: snapshots of watched Regions as the person writes in them (watch.ts).
-  const watcher = new Watcher({ core, store: o.store, inbox: o.inbox, log: o.log });
+  const watcher = new Watcher({ core, store: o.store, inbox: o.inbox, log: o.log, writing: o.writing, hints: o.deviceHints });
   o.store.onChange((space, origin) => {
     if (origin !== "send") watcher.changed(space);
   });

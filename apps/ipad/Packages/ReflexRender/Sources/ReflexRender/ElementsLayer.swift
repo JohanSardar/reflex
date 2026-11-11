@@ -67,6 +67,7 @@ public struct ElementsLayer: View {
                 }
             }
             .frame(width: spaceSize.width, height: spaceSize.height, alignment: .topLeading)
+            .environment(\.canvasZoom, zoom)
             .scaleEffect(zoom, anchor: .topLeading)
             .offset(x: -offset.x, y: -offset.y)
         }
@@ -125,11 +126,14 @@ struct ElementView: View {
     }
 
     private var mathView: some View {
-        Text(element.latex ?? "")
-            .font(.system(size: Palette.textSize[element.size ?? ""] ?? 22, design: .serif).italic())
-            .foregroundStyle(Palette.color(element.color))
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .accessibilityIdentifier(element.id)
+        MathElementView(
+            latex: element.latex ?? "",
+            fontSize: Palette.textSize[element.size ?? ""] ?? 22,
+            color: UIColor(Palette.color(element.color))
+        )
+        .accessibilityElement()
+        .accessibilityLabel(element.latex ?? "")
+        .accessibilityIdentifier(element.id)
     }
 
     private var frameView: some View {
@@ -143,16 +147,37 @@ struct ElementView: View {
             .accessibilityIdentifier(element.id)
     }
 
+    /// A Region shows its rules: a tinted writing area, hatched grey where Ink isn't
+    /// allowed, and badges for watch mode and for Agents being read-only there.
+    /// Its Send button is drawn above the Ink (`RegionButtons`), so it can be pressed.
     private var regionView: some View {
-        RoundedRectangle(cornerRadius: 8)
-            .fill(Palette.tint("blue").opacity(0.35))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Palette.color("blue"), style: StrokeStyle(lineWidth: 1.5, dash: [8, 6])))
+        let noInk = element.ink == false
+        let tone = noInk ? "grey" : "blue"
+        return RoundedRectangle(cornerRadius: 8)
+            .fill(Palette.tint(tone).opacity(noInk ? 0.55 : 0.35))
+            .overlay { if noInk { Hatching().stroke(Palette.color("grey").opacity(0.25), lineWidth: 1).clipShape(RoundedRectangle(cornerRadius: 8)) } }
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Palette.color(tone), style: StrokeStyle(lineWidth: 1.5, dash: [8, 6])))
             .overlay(alignment: .topLeading) {
-                if let title = element.title {
-                    Text(title).font(.system(size: 15)).foregroundStyle(Palette.color("blue")).padding(8)
+                HStack(spacing: 8) {
+                    if let title = element.title {
+                        Text(title).font(.system(size: 15)).foregroundStyle(Palette.color(tone))
+                    }
+                    if noInk { badge("No writing here", systemImage: "pencil.slash", tone: "grey") }
+                    if element.watch == true { badge("Agent is watching", systemImage: "eye", tone: "violet") }
+                    if element.agentsReadOnly == true { badge("Agents can't write here", systemImage: "lock", tone: "grey") }
                 }
+                .padding(8)
             }
             .accessibilityIdentifier(element.id)
+    }
+
+    private func badge(_ text: String, systemImage: String, tone: String) -> some View {
+        Label(text, systemImage: systemImage)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Palette.color(tone))
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(Color.white.opacity(0.8), in: Capsule())
+            .fixedSize()
     }
 
     private var unknownView: some View {
@@ -209,6 +234,20 @@ struct ShapeElementView: View {
         case "hexagon": Polygon(points: [(0.25, 0), (0.75, 0), (1, 0.5), (0.75, 1), (0.25, 1), (0, 0.5)])
         case "rounded": RoundedRectangle(cornerRadius: 18)
         default: RoundedRectangle(cornerRadius: 3)
+        }
+    }
+}
+
+/// Diagonal lines across the rect, for an area where Ink isn't allowed.
+struct Hatching: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { p in
+            var x = rect.minX - rect.height
+            while x < rect.maxX {
+                p.move(to: CGPoint(x: x, y: rect.maxY))
+                p.addLine(to: CGPoint(x: x + rect.height, y: rect.minY))
+                x += 18
+            }
         }
     }
 }
