@@ -452,6 +452,35 @@ Prove it from outside the LAN: an iPad Simulator or Link reaching a cloud Claude
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
 
+## Step 6 ticket (iPad side)
+
+```md
+# Math tutor on the iPad: LaTeX, Regions and their Check button
+
+## Goal
+Make scenario 2 (the math and physics tutor in SPEC §16) work on the iPad, on top of T13's core. When this is done:
+- The iPad draws LaTeX Elements crisply at any zoom, next to Ink.
+- Regions show on the iPad with their rules: a writing area the person can see, Ink refused where a Region has `ink: false`, and a Region's own Send button ("Check my work") that sends only that Region's work.
+- The iPad sends its handwriting recognizer's text and line grouping for the strokes in a Region, both on a Region Send and while watch mode is on, so the Agent's line-level evidence comes from the real recognizer, not from scripted hints.
+- `user_still_writing` comes from a live pen-down signal on the iPad, not only from timing.
+- The iPad reports which Space is on screen, so `request_attention` can say the person is already looking at it.
+
+Prove it in the iPad Simulator against a real `reflex link` and a real Claude Code session: the Agent places `check-my-work`, you write a solution with a deliberate sign error with the Pencil (or simulated Pencil input), press Check, and see ✓ and ✗ marks and a hint at the exact line; then turn on watch mode and see a snapshot while writing.
+
+## Context
+- Read docs/SPEC.md §5 (Regions), §9 (watch mode) and §16 (scenario 2); docs/ARCHITECTURE.md §4.2–§4.3 and §7; docs/adr/0006 and 0007.
+- What exists on main: everything through T7 (iPad plan review: Marks, voice, revert chips, Behavior triggers, imports, remote Ink), T13 (math tutor core: Region rules, line-level evidence, watch mode, `check-my-work`, the `math-tutoring` Guide) and T15 (Claude Code channel push). Read `apps/ipad/README.md`, `link/README.md`, `agent/README.md` and the T13 PR (#11) description.
+- Carried over (docs/TICKETS.md, "Follow-ups"): watch snapshots use scripted hints for handwriting text, and `user_still_writing` is timing-based (T13); `request_attention` can't report that the person is already viewing that Space (T15).
+- T14 (deploy the Relay) runs at the same time and owns `relay/`. You own `apps/ipad/` and the small Link and kernel changes this needs.
+- Codex's usage limit is exhausted until 2026-11-12 13:06; prove in Claude Code and say so.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
@@ -469,3 +498,8 @@ Found while building earlier tickets. Each goes into the named ticket's brief.
 - **Codex:** its usage limit ran out until 2026-11-12 13:06, so T8's scenario 1 was proven in Claude Code only; recheck in Codex in a later ticket.
 - **T9 (done):** a Space above about 2,000 strokes doesn't fit in a Worker's 128 MB (the kernel loads the whole document, peaking near 3x its size). The Worker answers 507 and points to a self-hosted Relay. Moving cloud execution to a separate service (ADR-0004) or loading less in the kernel is open.
 - **Real iPad pass:** three-finger redo, Pencil double-tap and squeeze. Native WWDC26 stroke IDs need Xcode 27 (the app targets iPadOS 26 for now).
+- **T12:** watch snapshots take handwriting text from scripted hints or earlier Sends, and `user_still_writing` is timing-based (T13); `request_attention` can't report that the person is already viewing that Space, because the iPad doesn't report it (T15).
+- **T16:** the Link drops a Panel's `values` when it hands a Send to the Agent; they are in the frozen Send but not in the Bundle (T7).
+- **T17:** `link/test/reapprove.test.ts` and the ask-again check in `link/test/terminal-queue.test.ts` fail unless `REFLEX_REASK_S=0` is set, on main too (T15).
+- **Declined review nits, open:** with more than 300 history entries a revert chip can miss an older Agent change; the iPad doesn't enforce the schema's size limits; remote Ink isn't refetched after a lasso move on another device (T7). The no-Ink check counts a stroke by its center; an explicit stroke list on a Region Send isn't limited to the Region (T13).
+- **Real iPad pass:** live mic transcription, camera capture, and drag-and-drop from another app (T7).
