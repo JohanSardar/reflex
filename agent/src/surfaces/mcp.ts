@@ -9,7 +9,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { TOOLS, description, inputSchema, instructions } from "../protocol.ts";
 import { Client } from "../host/client.ts";
-import { logPath } from "../host/rpc.ts";
+import { credential, logPath, NoLink } from "../host/rpc.ts";
 
 const KNOWN: Record<string, string> = { "claude-code": "Claude Code", "codex-mcp-client": "Codex", codex: "Codex" };
 // Longest wait_for_user the surface holds, a little under the harness's default hard tool timeout, so a long
@@ -22,18 +22,28 @@ export async function runMcp() {
   const started = Date.now();
   const log = (event: string, data: Record<string, unknown> = {}) =>
     appendFileSync(logPath("mcp"), JSON.stringify({ at: new Date().toISOString(), pid: process.pid, t_s: Math.round((Date.now() - started) / 100) / 10, event, ...data }) + "\n");
-  const host = await Client.open(`mcp:${process.pid}`);
-  host.onClose = () => {
-    log("host_closed");
-    process.exit(1);
-  };
+  // The Link is reached on the first call, and again after it restarts, so a harness can start before it.
+  let host: Promise<Client> | undefined;
+  const link = () =>
+    (host ??= Client.open(`mcp:${process.pid}`).then(
+      (c) => {
+        c.onClose = () => {
+          log("link_closed");
+          host = undefined;
+        };
+        return c;
+      },
+      (e) => {
+        host = undefined;
+        throw e;
+      },
+    ));
 
   const server = new Server({ name: "reflex", version: "0.1.0" }, { capabilities: { tools: {} }, instructions });
   const who = () => {
-    if (process.env.REFLEX_AGENT_NAME) return { name: process.env.REFLEX_AGENT_NAME };
     const c = server.getClientVersion();
-    const name = KNOWN[c?.name ?? ""] ?? c?.name ?? "MCP client";
-    return { name: `${name} · ${basename(process.cwd())}`.slice(0, 80) };
+    const name = process.env.REFLEX_AGENT_NAME ?? `${KNOWN[c?.name ?? ""] ?? c?.name ?? "MCP client"} · ${basename(process.cwd())}`.slice(0, 80);
+    return { name, credential: credential(name) };
   };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -54,7 +64,16 @@ export async function runMcp() {
       args = { ...args, timeout_s: cap };
     }
     try {
-      const r = await host.call(tool, args, who(), {
+      let client: Client;
+      try {
+        client = await link();
+      } catch (e) {
+        if (!(e instanceof NoLink)) throw e;
+        log("no_link", { tool, error: e.message });
+        const json = { ok: false, reason: "unavailable", errors: [{ code: "unavailable", msg: e.message, fix: "Ask the person to start the Reflex Link (`reflex link`), then call again." }] };
+        return { content: [{ type: "text", text: JSON.stringify(json) }], isError: true };
+      }
+      const r = await client.call(tool, args, who(), {
         signal: extra.signal,
         progress: (p) => {
           if (progressToken === undefined) return;
@@ -95,7 +114,7 @@ export async function runMcp() {
   server.oninitialized = () => log("initialized", { negotiated: (transport as any)._protocolVersion ?? null, client: server.getClientVersion(), capabilities: server.getClientCapabilities() });
   process.stdin.on("end", () => {
     log("stdin_closed");
-    host.close();
+    void host?.then((c) => c.close(), () => {});
     process.exit(0);
   });
   log("mcp_started", { cwd: process.cwd(), env_agent: process.env.REFLEX_AGENT_NAME ?? null });

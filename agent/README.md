@@ -2,16 +2,20 @@
 
 The Agent layer: the MCP server and the `reflex` CLI that Agents use to work in
 a Space (ARCHITECTURE §4, SPEC §11–§12). Both surfaces are thin. They forward
-each call to one long-lived **host** process, which holds the Spaces in the Rust
-kernel (through its WASM build) and holds the Inbox. A surface starts the host
-when none is running. Until T6 connects the Link, the host is the stand-in: its
-Spaces and Inbox are in memory and are lost when it exits.
+each call to the running **Reflex Link** (`reflex link`), which hosts the
+capability table on its durable Spaces, Inbox and assets
+([link/agent-host.ts](../link/agent-host.ts)). A surface never starts the Link:
+without it, every call answers `unavailable` and says to run `reflex link`.
 
 ```
-claude / codex ──MCP stdio──▶ reflex mcp ─┐
-claude / codex ──shell──────▶ reflex …   ─┼─ Unix socket + token ─▶ host: Core (capabilities) ─▶ kernel (WASM)
-reflex dev person … (stand-in iPad)      ─┘                                                    ─▶ MemorySpaces, MemoryInbox, SvgRenderer
+claude / codex ──MCP stdio──▶ reflex mcp ─┐                                     ┌▶ kernel (WASM): durable Spaces (SQLite journal)
+claude / codex ──shell──────▶ reflex …   ─┴─ agent.sock + rpc.key + credential ─▶ Link: Core ─┼▶ durable Inbox, assets
+                                                                                └▶ SvgRenderer (look, Send crops)
 ```
+
+The first time an Agent calls, the Link asks the person: Allow on the iPad, or
+`y` in the Link's terminal. The Agent waits (up to two minutes per call) and
+sees no Space content until it is approved.
 
 - `src/protocol.ts`: the 11 tools, their text from `protocol/tool-text`,
   their schemas from `protocol/generated/tools`, and Ajv validators.
@@ -20,12 +24,15 @@ reflex dev person … (stand-in iPad)      ─┘                               
 - `src/capabilities/`: the capability table, one implementation behind both
   surfaces. `normalize.ts` repairs common op mistakes before validating.
   `bundle.ts` projects a frozen Send into a Send Bundle.
-- `src/store.ts`: the §6 interfaces (`SpaceStore`, `Inbox`) and their
-  in-memory implementations. T6 plugs in T5's durable ones.
+- `src/store.ts`: the §6 interfaces (`SpaceStore`, `Inbox`, `Assets`). The
+  Link implements them on its storage.
 - `src/render.ts`: the `Renderer` interface and a basic SVG→PNG renderer
   (resvg). The full headless renderer is T8.
-- `src/host/`: the host process and the local RPC (newline-delimited JSON
-  over `$REFLEX_HOME/host.sock`, with a 0600 token).
+- `src/host/`: the local RPC (newline-delimited JSON over
+  `$REFLEX_HOME/agent.sock`, with the Link's 0600 `rpc.key`): `client.ts` for
+  the surfaces, `server.ts` for the Link. Each Agent also presents a
+  credential it keeps in `$REFLEX_HOME/agents/` (0600), which is what the
+  person approves.
 - `src/surfaces/`: `mcp.ts` (stdio MCP server) and `cli.ts`.
 
 It runs as TypeScript on Node 26 (type stripping); there is no build step.
@@ -61,24 +68,24 @@ does with a long `wait_for_user`.
 ## Try it
 
 ```sh
-reflex spaces create demo
+reflex link                              # in its own terminal: the Link, with a pairing code for the iPad
+reflex spaces create demo                # the Link asks you to approve this Agent: answer y
+
 reflex elements apply demo --ops '[{"op":"add","id":"n-auth","type":"shape","shape":"rect","text":"Auth service"}]'
 reflex look demo                         # writes a PNG under $TMPDIR/reflex/ and prints its path
-reflex wait --timeout 300 &              # an Agent waiting for the person
-reflex dev person circle demo "Auth service"
-reflex dev person send demo --said "what's missing here?"
+reflex wait --timeout 300                # an Agent waiting for the person: circle something on the iPad and press Send
 ```
 
-`reflex dev person` plays the person until the iPad connects. It can circle or
-underline an Element (by ID or by its text) and press Send.
+Without an iPad, start the Link with `reflex link --dev`; then
+`reflex dev person circle demo "Auth service"` and
+`reflex dev person send demo --said "what's missing here?"` play the person.
 
 ## Environment
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `REFLEX_HOME` | `~/.reflex/dev` | Profile directory: socket, token, logs (`host.log`, `mcp.log`) |
+| `REFLEX_HOME` | `~/.reflex/link` | The Link's profile directory: its socket, `rpc.key`, Agent credentials, `mcp.log` |
 | `REFLEX_AGENT_NAME` | From the harness | The Agent's display name; its identity is derived from it. `--agent` overrides it for the CLI |
-| `REFLEX_PERSON_NAME` | `You` | The stand-in person's name |
 | `REFLEX_PROGRESS_S` | `15` | Seconds between progress notifications during `wait_for_user` |
 | `REFLEX_MAX_WAIT_S` | 280 for Codex, none otherwise | The longest `wait_for_user` the MCP surface holds, kept under the harness's hard tool timeout |
 
@@ -88,6 +95,8 @@ taken from the client's `clientInfo`. A CLI Agent is called "Codex CLI · …",
 
 ## Differences from the protocol
 
+- An Element an answer adds without `at` (apply with `in_reply_to`) is placed
+  next to the Send's first Mark, as `at: {near: "m1"}` would.
 - The CLI adds a `file` path to `look` results and to Send Bundle images,
   because a shell can't receive image blocks.
 - Agent Element IDs are kept as `<agent>/<id>` in the kernel and shown to

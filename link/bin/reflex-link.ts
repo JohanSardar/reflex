@@ -1,43 +1,44 @@
 #!/usr/bin/env node
-// reflex-link: start the Link, pair devices, approve Agents, look inside.
-// Becomes `npx reflex link` when T6 joins the Link and the Agent layer.
+// reflex link (also reflex-link): start the Link with the Agent layer inside
+// it, pair devices, see and revoke Agents, look inside.
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { homeDir } from "../home.ts";
 import { Link, LinkError } from "../link.ts";
-import { qrText } from "../pairing/offer.ts";
 import { LinkClient, RpcError } from "../rpc/client.ts";
 
-const HELP = `Reflex Link keeps every Space durable on this computer and in sync with your devices.
+const HELP = `Reflex Link keeps every Space durable on this computer, in sync with your iPad, and open to your Agents.
 
 Usage
-  reflex-link                         Start the Link (stays in the foreground)
-  reflex-link status                  Show Spaces, peers, Agents and the Inbox
-  reflex-link pair                    Show a pairing QR code and wait for a device
-  reflex-link pair <code>             Pair with the device showing <code> (reflex://pair?...)
-  reflex-link agents                  List Agents and their approval
-  reflex-link approve <agent>         Approve an Agent waiting to connect
-  reflex-link deny <agent>            Deny an Agent
-  reflex-link revoke <agent>          Take an approved Agent's access away
+  reflex link                         Start the Link in this terminal and show a pairing code
+                                      (Enter shows a new code; y/n answers an Agent asking to connect)
+  reflex link status                  Show Spaces, peers, Agents and the Inbox
+  reflex link pair <code>             Pair with another Link showing <code> (reflex://pair?...)
+  reflex link agents                  List Agents and their approval
+  reflex link deny <agent>            Deny an Agent waiting to connect
+  reflex link revoke <agent>          Take an approved Agent's access away
 
-Stand-ins until the iPad and Agent layer are joined (T6)
-  reflex-link dev space <space>                     Create a Space
-  reflex-link dev draw <space> <stroke> [x,y ...]   Draw a stroke as this person
-  reflex-link dev undo <space>                      Undo this person's last action
-  reflex-link dev send <space> <send> [said]        Send, as this person
-  reflex-link dev asset <file>                      Store a file as an asset
-  reflex-link dev agent <name> apply <space> <json> Act as an Agent (asks for approval the first time)
-  reflex-link dev agent <name> inbox                That Agent's pending Sends
-  reflex-link dev agent <name> ack <space> <send>   Acknowledge a Send
+Agents are approved by you: tap Allow on your iPad, or answer y in the Link's terminal.
+
+Acting as the person without an iPad (a Link started with --dev)
+  reflex link dev space <space>                     Create a Space
+  reflex link dev draw <space> <stroke> [x,y ...]   Draw a stroke as this person
+  reflex link dev undo <space>                      Undo this person's last action
+  reflex link dev send <space> <send> [said]        Send, as this person
+  reflex link dev asset <file>                      Store a file as an asset
+  reflex link dev agent <name> apply <space> <json> Act as an Agent over the low-level RPC
+  reflex link dev agent <name> inbox                That Agent's pending Sends
+  reflex link dev agent <name> ack <space> <send>   Acknowledge a Send
 
 Options
   --home <dir>    Link profile folder (default $REFLEX_HOME or ~/.reflex/link)
   --name <name>   This device's name, on first start
   --port <n>      LAN port (default 7420; any free port if taken)
+  --dev           Allow acting as the person without an iPad
   --json          Machine-readable output
-  --no-prompt     Don't ask about new Agents on this terminal
+  --no-prompt     Don't use this terminal for pairing codes or questions
   -h, --help      Show this help
 `;
 
@@ -49,6 +50,7 @@ const { values: flags, positionals: args } = parseArgs({
     port: { type: "string" },
     json: { type: "boolean", default: false },
     "no-prompt": { type: "boolean", default: false },
+    dev: { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -66,7 +68,7 @@ async function admin<T>(method: string, params: Record<string, unknown> = {}): P
 }
 
 async function start(): Promise<void> {
-  const link = new Link({ dir, name: flags.name, port: flags.port ? Number(flags.port) : undefined, prompt: !flags["no-prompt"] });
+  const link = new Link({ dir, name: flags.name, port: flags.port ? Number(flags.port) : undefined, prompt: !flags["no-prompt"], dev: flags.dev });
   await link.start();
   const stop = async (sig: string): Promise<void> => {
     console.log(`link: ${sig}, stopping`);
@@ -168,7 +170,7 @@ async function dev(): Promise<void> {
       }
     }
     default:
-      throw new LinkError("usage", `Unknown dev command '${what}'.`, "Run reflex-link --help.");
+      throw new LinkError("usage", `Unknown dev command '${what}'.`, "Run reflex link --help.");
   }
 }
 
@@ -184,20 +186,9 @@ async function main(): Promise<void> {
       return out(showStatus(s), s);
     }
     case "pair": {
-      if (args[1]) {
-        const d = await admin<{ device: string; name: string }>("pair.join", { uri: args[1] });
-        return out(`Paired with ${d.name} (${d.device}).`, d);
-      }
-      const c = await LinkClient.connect(dir, "admin");
-      try {
-        const o = await c.call<{ offer: string; uri: string }>("pair.offer");
-        if (flags.json) console.log(JSON.stringify(o));
-        else console.log(`Scan this with the device to pair, or run there: reflex-link pair '${o.uri}'\n\n${await qrText(o.uri)}\n${o.uri}\n\nWaiting for a device (10 minutes)...`);
-        const d = await c.call<{ device: string; name: string }>("pair.wait", { offer: o.offer });
-        return out(`Paired with ${d.name} (${d.device}).`, d);
-      } finally {
-        c.close();
-      }
+      if (!args[1]) throw new LinkError("usage", "A new pairing code is shown only in the Link's own terminal.", "Press Enter there. To pair with another Link, run: reflex link pair '<its code>'");
+      const d = await admin<{ device: string; name: string }>("pair.join", { uri: args[1] });
+      return out(`Paired with ${d.name} (${d.device}).`, d);
     }
     case "agents": {
       const list = await admin<{ id: string; name: string; status: string; color: string }[]>("agents.list");
@@ -206,7 +197,7 @@ async function main(): Promise<void> {
     case "approve":
     case "deny":
     case "revoke": {
-      if (!args[1]) throw new LinkError("usage", `Which Agent? reflex-link ${cmd} <agent>`, "Run reflex-link agents to see them.");
+      if (!args[1]) throw new LinkError("usage", `Which Agent? reflex link ${cmd} <agent>`, "Run reflex link agents to see them.");
       const status = { approve: "approved", deny: "denied", revoke: "revoked" }[cmd];
       const a = await admin<{ id: string; name: string; status: string }>("agents.decide", { id: args[1], status });
       return out(`${a.name} (${a.id}) ${a.status}.`, a);
@@ -214,7 +205,7 @@ async function main(): Promise<void> {
     case "dev":
       return dev();
     default:
-      throw new LinkError("usage", `Unknown command '${cmd}'.`, "Run reflex-link --help.");
+      throw new LinkError("usage", `Unknown command '${cmd}'.`, "Run reflex link --help.");
   }
 }
 

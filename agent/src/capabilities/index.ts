@@ -1,10 +1,10 @@
 // The capability table (ADR-0003): every tool exists exactly once, here. The
 // MCP server and the CLI are thin surfaces over `Core.call`, so the two can't
 // drift apart.
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { IMPLEMENTED, TOOLS, explain, inputSchema, validateError, validateInput, validateOutput, type ProtocolError, type Tool } from "../protocol.ts";
 import type { Renderer, SceneElement } from "../render.ts";
-import type { Bounds, FrozenSend, Inbox, SpaceEntry, SpaceStore } from "../store.ts";
+import type { Assets, Bounds, FrozenSend, Inbox, SpaceEntry, SpaceStore } from "../store.ts";
 import { project, type MarkRef } from "./bundle.ts";
 import { normalizeOps } from "./normalize.ts";
 
@@ -18,14 +18,6 @@ export type Ctx = {
   progress?: (p: { elapsed_s: number; timeout_s: number }) => void;
 };
 export type Result = { json: Record<string, any>; images: Buffer[]; isError: boolean };
-
-const COLORS = ["violet", "teal", "blue", "orange", "pink", "green"] as const;
-
-/** A stable Agent identity from its display name. Approval (T5) replaces this. */
-export function identify(name: string): Identity {
-  const h = createHash("sha256").update(name).digest();
-  return { agent: `a_${h.toString("hex").slice(0, 10)}`, name: name.slice(0, 80), color: COLORS[h[0] % COLORS.length] };
-}
 
 export class ReflexError extends Error {
   body: { reason: string; errors: ProtocolError[]; next?: string[] };
@@ -49,6 +41,7 @@ const plural = (n: number, s: string) => `${n} ${s}${n === 1 ? "" : "s"}`;
 export class Core {
   spaces: SpaceStore;
   inbox: Inbox;
+  assets?: Assets;
   renderer: Renderer;
   person: Person;
   progressEvery: number;
@@ -58,9 +51,21 @@ export class Core {
   #marks = new Map<string, Map<string, MarkRef[]>>();
   #lastSend = new Map<string, string>();
 
-  constructor(o: { spaces: SpaceStore; inbox: Inbox; renderer: Renderer; person: Person; progressEvery?: number; log?: Core["log"] }) {
+  constructor(o: {
+    spaces: SpaceStore;
+    inbox: Inbox;
+    assets?: Assets;
+    renderer: Renderer;
+    person: Person;
+    /** Display names by principal ID, such as every approved Agent's. */
+    names?: Record<string, string>;
+    progressEvery?: number;
+    log?: Core["log"];
+  }) {
     this.spaces = o.spaces;
     this.inbox = o.inbox;
+    this.assets = o.assets;
+    for (const [id, name] of Object.entries(o.names ?? {})) this.#names.set(id, name);
     this.renderer = o.renderer;
     this.person = o.person;
     this.progressEvery = o.progressEvery ?? 15;
@@ -193,7 +198,7 @@ export class Core {
       this.log("space_created", { space: a.space, by: ctx.who.name });
     }
     entry = this.#entry(a.space);
-    entry.agents.add(ctx.who.agent);
+    this.spaces.attach(entry, ctx.who.agent);
     const outline = this.scene(entry, { agent: ctx.who.agent }, "outline");
     const onScreen = outline.filter((e) => overlaps(entry.viewport, e.bounds));
     const scene = onScreen.slice(0, 500);
@@ -323,7 +328,12 @@ export class Core {
     if (norm.errors.length) throw new ReflexError(norm.errors.length === 1 ? norm.errors[0].code : "batch_rejected", norm.errors, [`read(space: '${a.space}')`]);
 
     // Placement next to a Mark: Marks live in Send Bundles, not in the kernel.
-    const marks = this.#marksFor(agent, a.in_reply_to) ?? [];
+    let marks = this.#marksFor(agent, a.in_reply_to) ?? [];
+    // Mark IDs live in memory; after a restart, an answer to a Send delivered before it rebuilds them from the frozen Send.
+    if (a.in_reply_to && !this.#marks.get(agent)?.has(a.in_reply_to)) {
+      const frozen: FrozenSend | null = JSON.parse(entry.space.send(a.in_reply_to));
+      if (frozen) marks = this.#project(frozen, false, agent).marks;
+    }
     const outline: SceneElement[] = this.scene(entry, { agent }, "outline");
     const has = (id: string) => outline.some((e) => e.id === id);
     const errors: ProtocolError[] = [];
@@ -334,6 +344,8 @@ export class Core {
         if (!m) errors.push({ op: i, field, code: "unknown_id", msg: `No Mark '${id}'${a.in_reply_to ? ` in Send ${a.in_reply_to}` : ""}.`, fix: "Use a Mark ID from the Send you are answering, with in_reply_to." });
         return m;
       };
+      // An answer without a position goes next to what the person marked, not to the Space's origin.
+      if (op.op === "add" && op.type !== "connector" && !op.at && !op.points && marks.length && a.in_reply_to) op.at = { near: marks[0].id };
       const at = op.op === "add" || op.op === "arrange" ? op.at : op.op === "patch" ? op.set?.at : undefined;
       if (at) {
         for (const rel of ["right_of", "left_of", "above", "below", "near", "inside"]) {
@@ -390,7 +402,7 @@ export class Core {
     const now = Date.now();
     let result: Record<string, any> | undefined;
     if (rest.length || !defines.length) {
-      result = JSON.parse(entry.space.applyAgentBatch(agent, request, JSON.stringify({ ops: rest }), now));
+      result = JSON.parse(this.spaces.write(entry, "agent", (s) => s.applyAgentBatch(agent, request, JSON.stringify({ ops: rest }), now)));
       if (!result!.ok) {
         // Kernel op indexes count the ops sent; map them back to the caller's.
         const index = ops.map((o, i) => [o, i] as const).filter(([o]) => o.op !== "define").map(([, i]) => i);
@@ -401,13 +413,11 @@ export class Core {
         }))];
         throw new ReflexError(result!.reason, errs, next);
       }
-      this.spaces.changed(entry);
     }
     if (defines.length) {
       const lib = this.spaces.get("library") ?? this.spaces.create("library", { kind: "library" });
-      const r = JSON.parse(lib.space.applyAgentBatch(agent, `${request}.define`, JSON.stringify({ ops: defines }), now));
+      const r = JSON.parse(this.spaces.write(lib, "agent", (s) => s.applyAgentBatch(agent, `${request}.define`, JSON.stringify({ ops: defines }), now)));
       if (!r.ok) throw new ReflexError(r.reason, r.errors);
-      this.spaces.changed(lib);
       result ??= r;
     }
     if (a.in_reply_to) this.inbox.ack(agent, a.in_reply_to);
@@ -467,7 +477,14 @@ export class Core {
   }
 
   #deliver(frozen: FrozenSend, redelivered: boolean, ctx: Ctx) {
-    const agent = ctx.who.agent;
+    const { bundle, images } = this.#project(frozen, redelivered, ctx.who.agent);
+    this.#lastSend.set(ctx.who.agent, frozen.send);
+    this.log("send_delivered", { agent: ctx.who.name, send: frozen.send, redelivered });
+    return { json: bundle, images: images.map((i) => i.png) };
+  }
+
+  /** Builds a Send's Bundle for one Agent and remembers its Mark IDs, which answers place things by. */
+  #project(frozen: FrozenSend, redelivered: boolean, agent: string) {
     const entry = this.#entry(frozen.space);
     const viewer = { agent };
     const elements: SceneElement[] = this.scene(entry, viewer, "full");
@@ -484,17 +501,16 @@ export class Core {
       redelivered,
       pendingAfter: Math.max(0, this.inbox.pending(agent) - 1),
       renderer: this.renderer,
+      asset: (hash) => this.assets?.get(hash),
       displayId: (key) => (key.startsWith(`${agent}/`) ? key.slice(agent.length + 1) : key.replace("/", ":")),
     });
     const byAgent = this.#marks.get(agent) ?? new Map();
     byAgent.set(frozen.send, marks);
     this.#marks.set(agent, byAgent);
-    this.#lastSend.set(agent, frozen.send);
-    this.log("send_delivered", { agent: ctx.who.name, send: frozen.send, redelivered });
-    return { json: bundle, images: images.map((i) => i.png) };
+    return { bundle, images, marks };
   }
 
-  // ---------- the person's side, until the iPad connects (T6) ----------
+  // ---------- the person's side without an iPad: `reflex dev person`, on a Link started with --dev ----------
 
   #findForPerson(entry: SpaceEntry, id: string): SceneElement {
     const all: SceneElement[] = this.scene(entry, { person: this.person.person }, "full");
@@ -514,15 +530,16 @@ export class Core {
     // A real Pencil stroke carries time and pressure: [x, y, t, pressure].
     const timed = points.map((p, i) => [p[0], p[1], i * 8, 0.6]);
     const r = JSON.parse(
-      entry.space.applyUserIntent(
-        this.person.person,
-        "dev-person",
-        JSON.stringify({ intent: "add_stroke", id, stroke: { points: timed, width: o.width ?? 3 }, color: o.color ?? "red" }),
-        Date.now(),
+      this.spaces.write(entry, "person", (s) =>
+        s.applyUserIntent(
+          this.person.person,
+          "dev-person",
+          JSON.stringify({ intent: "add_stroke", id, stroke: { points: timed, width: o.width ?? 3 }, color: o.color ?? "red" }),
+          Date.now(),
+        ),
       ),
     );
     if (!r.ok) throw new ReflexError(r.reason, r.errors);
-    this.spaces.changed(entry);
     return { id };
   }
 
@@ -556,11 +573,10 @@ export class Core {
     const entry = this.#entry(space);
     const send = `s_${randomBytes(5).toString("hex")}`;
     const raw = { send, trigger: o.trigger ?? (o.said ? "voice" : "button"), viewport: entry.viewport, ...(o.said ? { said: o.said } : {}) };
-    const frozen = JSON.parse(entry.space.freezeSend(this.person.person, "dev-person", JSON.stringify(raw), Date.now())) as FrozenSend;
+    // Freezing it makes it durable and puts it in the Inbox of every Agent on this Space.
+    const frozen = JSON.parse(this.spaces.write(entry, "send", (s) => s.freezeSend(this.person.person, "dev-person", JSON.stringify(raw), Date.now()))) as FrozenSend;
     if ((frozen as any).ok === false) throw new ReflexError((frozen as any).reason, (frozen as any).errors);
-    this.spaces.changed(entry);
-    const recipients = [...entry.agents];
-    this.inbox.push(frozen, recipients);
+    const recipients = this.inbox.recipients(send);
     this.log("send_frozen", { send, space, recipients: recipients.map((r) => this.#names.get(r) ?? r), strokes: frozen.strokes.length });
     return { send, recipients: recipients.map((r) => this.#names.get(r) ?? r) };
   }

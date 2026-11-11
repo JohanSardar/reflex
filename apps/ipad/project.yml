@@ -16,6 +16,8 @@ packages:
     path: Packages/ReflexInput
   ReflexRender:
     path: Packages/ReflexRender
+  ReflexLink:
+    path: Packages/ReflexLink
 targets:
   Reflex:
     type: application
@@ -25,6 +27,16 @@ targets:
     dependencies:
       - package: ReflexInput
       - package: ReflexRender
+      - package: ReflexLink
+    info:
+      path: Reflex/Info.plist
+      properties:
+        NSBonjourServices: [_reflex-link._tcp]
+        NSLocalNetworkUsageDescription: Reflex finds and syncs with the Reflex Link on your computer over the local network.
+        NSCameraUsageDescription: Reflex uses the camera to scan the pairing code your Reflex Link shows.
+        CFBundleURLTypes:
+          - CFBundleURLName: si.eilmer.reflex.pair
+            CFBundleURLSchemes: [reflex]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: si.eilmer.reflex

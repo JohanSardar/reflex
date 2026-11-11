@@ -247,8 +247,8 @@ When you are done, use it yourself the way a user would: run the real app and go
 Found while building earlier tickets. Each goes into the named ticket's brief.
 
 - **T6:** move the iPad's Element drawing from T3's stand-in scene JSON onto the Protocol v0 Element format.
-- **T6:** the kernel doesn't check authorization on changes it receives from peers yet (T2).
-- **T6:** `link/admin.key` is readable by the user's account, so a local Agent with shell access could approve itself (T5).
+- **T6 (done):** the kernel checks changes it receives from peers (`receive_sync_message_checked`, `kernel/core/src/auth.rs`): an iPad may write only as its person, and a Link also for Agents. It checks against the receiver's state before applying, not at the writer's frontier; ownership never changes, so the two agree for owners. Roles wait for T22.
+- **T6 (done, narrowed):** no Reflex command can approve an Agent any more. Only the Link's terminal or an iPad that paired by scanning its code can, and `admin.key` can only deny or revoke. A local process running as the user can still read the Link's files and its terminal; OS-level separation and platform credential stores are left for later.
 - **T11:** the fault-injection transport isn't built (T5).
 - **T8:** T4 review items left open: Mark IDs are looked up per Agent, not per Space (S3); result indexes are off when a `define` op comes first (S5); a Space can't be named `library` and the error doesn't say why (S7); an `add` with type `ink` or `file` reports a missing type (S8).
 - **T8:** `read_me` and `recipe` aren't built, but the server instructions tell Agents to call `read_me` first.

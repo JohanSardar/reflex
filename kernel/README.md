@@ -4,7 +4,7 @@ The sans-IO Rust core that owns every Space (ADR-0005). JSON and bytes go in, an
 
 | Path | What it is |
 |---|---|
-| `core/` | the `reflex-kernel` crate: the Automerge mapping (`doc.rs`), Agent batches and user intents (`ops.rs`, `apply.rs`), per-person undo (`lib.rs`), scene projection and lints (`scene.rs`), and `freeze_send` (`send.rs`) |
+| `core/` | the `reflex-kernel` crate: the Automerge mapping (`doc.rs`), Agent batches and user intents (`ops.rs`, `apply.rs`), per-person undo (`lib.rs`), scene projection and lints (`scene.rs`), `freeze_send` (`send.rs`), and the check on received changes (`auth.rs`) |
 | `ffi/` | the Swift binding, through UniFFI |
 | `wasm/` | the TypeScript binding, through wasm-bindgen, with one entry for Node (`@reflex/kernel/node`) and one for Cloudflare Workers (`@reflex/kernel/workers`) |
 | `swift/` | the `ReflexKernel` Swift package: an XCFramework plus the generated Swift |
@@ -24,9 +24,10 @@ apply_agent_batch(agent, request_id, batch_json, now_ms) -> result JSON
 apply_user_intent(person, device, intent_json, now_ms)   -> result JSON
 undo(person, device, now_ms)   redo(person, device, now_ms)
 scene(query_json) -> scene JSON              digest() -> hash of the logical state
-freeze_send(person, device, raw_json, now_ms) -> frozen Send JSON
+freeze_send(person, device, raw_json, now_ms) -> frozen Send JSON    send(send_id) -> frozen Send JSON or null
 save() -> bytes   heads() -> JSON   changes_since(heads_json) -> bytes   receive(bytes)
 sync_message(peer) -> bytes?   receive_sync_message(peer, bytes)   reset_sync(peer)
+receive_sync_message_checked(peer, bytes, writers_json) -> {"ok":true} or {"ok":false,"reason":"not_yours","errors":[...]}
 ```
 
 - **Owners** are `person:<id>` or `agent:<id>` (ADR-0008). They come from the caller's authenticated context and never from the batch.
@@ -35,6 +36,7 @@ sync_message(peer) -> bytes?   receive_sync_message(peer, bytes)   reset_sync(pe
 - **A batch is one atomic Automerge change.** Rejection is all or nothing and lists every failing op, each with a `fix`. Retrying the same request returns the first result. Reusing a request ID with different ops is rejected. The same request accepted on two replicas merges into one Element.
 - **Undo is per person, across devices.** History is one flat map keyed `<person>|<time>|<entry>`. Undo only reverts a field if it still holds the value that person wrote, so it never overwrites someone else's later change. A new action ends that person's redo chain: their undone entries become `abandoned` and are never redone.
 - **`freeze_send`** pins the frontier and, in the same commit, claims the person's strokes and changes since their last Send. A frozen Send never changes. Freezing the same ID again returns the stored record.
+- **Received changes are checked before they apply.** `receive_sync_message_checked` applies a peer's changes to a fork, compares the state before and after, and applies them for real only if every difference is one the peer may write. `writers_json` says for whom: `{"people":["p_1"]}` for an iPad, `{"people":["p_1"],"agents":"*"}` for a Link that hosts Agents, `{"any":true}` to trust everything. A person's Ink changes only by that person; an Element's owner, type and ID never change; a Send must come from a writing person and never changes; `meta` never changes. Otherwise nothing is applied, and the errors say which change was refused.
 - **Text is collaborative and indexed in UTF-16.** A connector's two ends, an Element's bounds and a stroke's geometry are each stored as one atomic value (ARCHITECTURE §7.1).
 - **Deleting writes an immutable removal record for that incarnation.** Restoring makes a new incarnation, so a concurrent patch can't bring an Element back.
 - **Every replica of a Space starts from the same genesis change.** It is written by an actor derived from the Space ID at time 0, so replicas created separately still merge.

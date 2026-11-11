@@ -1,0 +1,236 @@
+import CryptoKit
+import Foundation
+import Network
+
+/// TCP with length-prefixed frames (u32, big-endian), as the Link's LAN
+/// transport (`link/transports/lan.ts`).
+final class FramedConnection: @unchecked Sendable {
+    private let conn: NWConnection
+    private let queue = DispatchQueue(label: "si.eilmer.reflex.link-connection")
+    private var buffer = Data()
+    private var continuation: AsyncThrowingStream<Data, Error>.Continuation!
+    let frames: AsyncThrowingStream<Data, Error>
+    let remote: String
+    static let maxFrame = 16 * 1024 * 1024
+
+    init(endpoint: NWEndpoint) {
+        let tcp = NWProtocolTCP.Options()
+        tcp.noDelay = true
+        tcp.enableKeepalive = true
+        tcp.keepaliveIdle = 10
+        conn = NWConnection(to: endpoint, using: NWParameters(tls: nil, tcp: tcp))
+        remote = "\(endpoint)"
+        var c: AsyncThrowingStream<Data, Error>.Continuation!
+        frames = AsyncThrowingStream { c = $0 }
+        continuation = c
+    }
+
+    /// Connects, or throws after `timeout` seconds.
+    func start(timeout: Double = 4) async throws {
+        try await withCheckedThrowingContinuation { (k: CheckedContinuation<Void, Error>) in
+            let once = Once(k)
+            conn.stateUpdateHandler = { [weak self] state in
+                switch state {
+                case .ready:
+                    once.resume(.success(()))
+                    self?.receive()
+                case .failed(let e), .waiting(let e):
+                    once.resume(.failure(LinkError.unreachable(e.localizedDescription)))
+                    self?.conn.cancel()
+                case .cancelled:
+                    once.resume(.failure(LinkError.unreachable("cancelled")))
+                    self?.continuation.finish()
+                default: break
+                }
+            }
+            conn.start(queue: queue)
+            queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
+                once.resume(.failure(LinkError.unreachable("timed out")))
+                if case .ready = self?.conn.state {} else { self?.conn.cancel() }
+            }
+        }
+    }
+
+    private func receive() {
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, done, error in
+            guard let self else { return }
+            if let data { self.buffer.append(data) }
+            while self.buffer.count >= 4 {
+                let n = self.buffer.prefix(4).reduce(0) { $0 << 8 | Int($1) }
+                if n > Self.maxFrame {
+                    self.continuation.finish(throwing: LinkError.protocolError("a frame of \(n) bytes is over the limit"))
+                    return self.conn.cancel()
+                }
+                guard self.buffer.count >= 4 + n else { break }
+                let frame = self.buffer.subdata(in: self.buffer.startIndex + 4 ..< self.buffer.startIndex + 4 + n)
+                self.buffer = Data(self.buffer.dropFirst(4 + n))
+                self.continuation.yield(frame)
+            }
+            if done || error != nil {
+                self.continuation.finish()
+                self.conn.cancel()
+            } else {
+                self.receive()
+            }
+        }
+    }
+
+    func send(_ frame: Data) {
+        var head = Data(count: 4)
+        let n = UInt32(frame.count).bigEndian
+        withUnsafeBytes(of: n) { head = Data($0) }
+        conn.send(content: head + frame, completion: .contentProcessed { _ in })
+    }
+
+    func close() {
+        conn.cancel()
+    }
+}
+
+/// Resumes a continuation at most once.
+private final class Once<T: Sendable>: @unchecked Sendable {
+    private var k: CheckedContinuation<T, Error>?
+    private let lock = NSLock()
+    init(_ k: CheckedContinuation<T, Error>) { self.k = k }
+    func resume(_ r: Result<T, Error>) {
+        lock.lock()
+        let k = self.k
+        self.k = nil
+        lock.unlock()
+        k?.resume(with: r)
+    }
+}
+
+/// An authenticated, encrypted connection to one Link. Messages are a JSON
+/// header plus optional bytes (`link/pairing/handshake.ts`, `Session`).
+@MainActor
+final class Session {
+    let conn: FramedConnection
+    let peer: PeerInfo
+    private var tx: FrameCipher
+    private var rx: FrameCipher
+    private var iterator: AsyncThrowingStream<Data, Error>.AsyncIterator
+
+    init(conn: FramedConnection, peer: PeerInfo, tx: FrameCipher, rx: FrameCipher, iterator: AsyncThrowingStream<Data, Error>.AsyncIterator) {
+        self.conn = conn
+        self.peer = peer
+        self.tx = tx
+        self.rx = rx
+        self.iterator = iterator
+    }
+
+    func send(_ header: [String: Any], _ body: Data = Data()) {
+        guard let head = try? JSONSerialization.data(withJSONObject: header) else { return }
+        var len = Data(count: 4)
+        withUnsafeBytes(of: UInt32(head.count).bigEndian) { len = Data($0) }
+        // Sealing happens in call order, so nonces match the order frames reach the wire.
+        guard let sealed = try? tx.seal(len + head + body) else { return }
+        conn.send(sealed)
+    }
+
+    func next() async throws -> (header: [String: Any], body: Data)? {
+        // Only the session's one receive loop reads, so the copy never races.
+        var it = iterator
+        let next = try await it.next(isolation: MainActor.shared)
+        iterator = it
+        guard let f = next else { return nil }
+        let plain = try rx.open(f)
+        let n = plain.prefix(4).reduce(0) { $0 << 8 | Int($1) }
+        guard plain.count >= 4 + n, let h = try JSONSerialization.jsonObject(with: plain.subdata(in: plain.startIndex + 4 ..< plain.startIndex + 4 + n)) as? [String: Any] else {
+            throw LinkError.protocolError("a malformed message")
+        }
+        return (h, plain.subdata(in: plain.startIndex + 4 + n ..< plain.endIndex))
+    }
+
+    func close() {
+        conn.close()
+    }
+}
+
+struct PeerInfo {
+    var device: String
+    var key: String
+    var person: Person
+    var name: String
+}
+
+/// This iPad's long-term identity: an Ed25519 key, the device ID derived from
+/// it, and the person it belongs to.
+struct DeviceIdentity {
+    var key: Curve25519.Signing.PrivateKey
+    var person: Person
+    var name: String
+    var publicRaw: Data { key.publicKey.rawRepresentation }
+    var device: String { deviceID(for: publicRaw) }
+}
+
+/// The handshake, as the side that dials (`link/pairing/handshake.ts`):
+///
+///     I → R  hello  { device, key, eph, person, name, kind, pair? }
+///     R → I  hello
+///     I → R  auth   { sig: Ed25519(transcript), mac?: HMAC(pairing secret, transcript) }
+///     R → I  auth   { sig, mac? }
+///
+/// `pairedKey` is the Link's key when already paired; `offer` when pairing.
+@MainActor
+func handshake(_ conn: FramedConnection, me: DeviceIdentity, pairedKey: String?, offer: PairingOffer?) async throws -> Session {
+    var it = conn.frames.makeAsyncIterator()
+    func next() async throws -> (raw: Data, msg: [String: Any]) {
+        // A Link that never answers is cut off; its stream then ends.
+        let timer = Task { [conn] in
+            try await Task.sleep(for: .seconds(10))
+            conn.close()
+        }
+        defer { timer.cancel() }
+        let raw = try await it.next(isolation: MainActor.shared)
+        guard let raw else { throw LinkError.unreachable("the Link closed the connection during the handshake") }
+        guard let msg = try JSONSerialization.jsonObject(with: raw) as? [String: Any] else { throw LinkError.protocolError("a malformed handshake frame") }
+        if msg["t"] as? String == "refused" { throw LinkError.refused("The Link refused: \(msg["reason"] as? String ?? "no reason given")") }
+        return (raw, msg)
+    }
+
+    let eph = Curve25519.KeyAgreement.PrivateKey()
+    var hello: [String: Any] = [
+        "t": "hello", "v": 0, "protocol": linkProtocol, "device": me.device, "key": B64.encode(me.publicRaw),
+        "eph": B64.encode(eph.publicKey.rawRepresentation), "person": ["id": me.person.id, "name": me.person.name],
+        "name": me.name, "kind": "ipad",
+    ]
+    if let offer { hello["pair"] = offer.offer }
+    let mine = try JSONSerialization.data(withJSONObject: hello)
+    conn.send(mine)
+    let (theirsRaw, theirs) = try await next()
+    guard theirs["t"] as? String == "hello", theirs["v"] as? Int == 0, theirs["protocol"] as? String == linkProtocol,
+          let key = theirs["key"] as? String, let keyRaw = B64.decode(key), let device = theirs["device"] as? String,
+          let ephRaw = (theirs["eph"] as? String).flatMap(B64.decode)
+    else { throw LinkError.protocolError("The other device does not speak \(linkProtocol).") }
+    guard deviceID(for: keyRaw) == device else { throw LinkError.protocolError("The Link's device ID does not belong to its key.") }
+    if let offer, offer.device != device || offer.key != key {
+        throw LinkError.refused("The device that answered is not the one in the pairing code.")
+    }
+    if offer == nil, pairedKey != key { throw LinkError.refused("The Link at that address is not the one this iPad is paired with.") }
+
+    let transcript = sha256(Data(linkProtocol.utf8), mine, theirsRaw)
+    let label = { (s: String) in Data("\(linkProtocol) \(s) ".utf8) + transcript }
+    var auth: [String: Any] = ["t": "auth", "sig": B64.encode(try me.key.signature(for: label("auth i")))]
+    if let offer {
+        auth["mac"] = B64.encode(Data(HMAC<SHA256>.authenticationCode(for: label("pair i"), using: SymmetricKey(data: offer.secret))))
+    }
+    conn.send(try JSONSerialization.data(withJSONObject: auth))
+    let (_, a) = try await next()
+    guard a["t"] as? String == "auth", let sig = (a["sig"] as? String).flatMap(B64.decode),
+          try Curve25519.Signing.PublicKey(rawRepresentation: keyRaw).isValidSignature(sig, for: label("auth r"))
+    else { throw LinkError.refused("The Link did not prove its key.") }
+    if let offer {
+        let want = Data(HMAC<SHA256>.authenticationCode(for: label("pair r"), using: SymmetricKey(data: offer.secret)))
+        guard let mac = (a["mac"] as? String).flatMap(B64.decode), mac == want else { throw LinkError.refused("The Link does not know this pairing code's secret.") }
+    }
+
+    let shared = try eph.sharedSecretFromKeyAgreement(with: Curve25519.KeyAgreement.PublicKey(rawRepresentation: ephRaw))
+    let okm = shared.withUnsafeBytes { Data($0) }
+    let keys = HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: okm), salt: transcript, info: Data("\(linkProtocol) session keys".utf8), outputByteCount: 64)
+        .withUnsafeBytes { Data($0) }
+    let i2r = SymmetricKey(data: keys.prefix(32)), r2i = SymmetricKey(data: keys.suffix(32))
+    let person = theirs["person"] as? [String: Any]
+    let peer = PeerInfo(device: device, key: key, person: Person(id: person?["id"] as? String ?? "", name: person?["name"] as? String ?? ""), name: theirs["name"] as? String ?? "Reflex Link")
+    return Session(conn: conn, peer: peer, tx: FrameCipher(key: i2r, aad: transcript), rx: FrameCipher(key: r2i, aad: transcript), iterator: it)
+}

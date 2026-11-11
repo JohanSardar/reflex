@@ -9,6 +9,10 @@
 //
 // The index can always be rebuilt from the Spaces, and is on every start.
 // A Send stays pending for a recipient until that recipient acknowledges it.
+//
+// Recipients are fixed when a Send is indexed: every Agent attached to its
+// Space then (SPEC §4, "Routing Sends"). A Send that arrives before any Agent
+// opened its Space goes to the first Agents that do.
 import type { DatabaseSync } from "node:sqlite";
 
 export type ReceiptState = "delivered" | "acknowledged" | "failed";
@@ -25,6 +29,8 @@ export interface InboxEntry {
 export class Inbox {
   #db: DatabaseSync;
   #waiters = new Set<() => void>();
+  /** Who a new Send in this Space goes to. */
+  recipientsFor: (space: string) => string[] = () => [];
 
   constructor(db: DatabaseSync) {
     this.#db = db;
@@ -35,23 +41,56 @@ export class Inbox {
     const ins = this.#db.prepare(
       "INSERT INTO inbox (space, send, arrived_at, via) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
     );
+    const to = this.#db.prepare("INSERT INTO inbox_to (space, send, recipient) VALUES (?, ?, ?) ON CONFLICT DO NOTHING");
     let added = 0;
-    for (const s of sends) added += Number(ins.run(space, s, now, via).changes);
+    for (const s of sends) {
+      const n = Number(ins.run(space, s, now, via).changes);
+      if (n) for (const r of this.recipientsFor(space)) to.run(space, s, r);
+      added += n;
+    }
     if (added > 0) queueMicrotask(() => this.#wake());
     return added;
   }
 
-  /** Sends this recipient hasn't acknowledged, oldest first. Optionally only one Space. */
+  /** Sends to this recipient it hasn't acknowledged, oldest first. Optionally only one Space. */
   pending(recipient: string, space?: string): InboxEntry[] {
     const rows = this.#db
       .prepare(
         `SELECT i.space, i.send, i.arrived_at, i.via, coalesce(r.state, 'ready') AS state, coalesce(r.attempts, 0) AS attempts
-         FROM inbox i LEFT JOIN receipts r ON r.space = i.space AND r.send = i.send AND r.recipient = ?
+         FROM inbox i JOIN inbox_to t ON t.space = i.space AND t.send = i.send AND t.recipient = ?
+         LEFT JOIN receipts r ON r.space = i.space AND r.send = i.send AND r.recipient = t.recipient
          WHERE coalesce(r.state, 'ready') != 'acknowledged' AND (? IS NULL OR i.space = ?)
          ORDER BY i.seq`,
       )
       .all(recipient, space ?? null, space ?? null);
     return rows as unknown as InboxEntry[];
+  }
+
+  /** Who a Send was sent to. */
+  recipients(space: string, send: string): string[] {
+    return (this.#db.prepare("SELECT recipient FROM inbox_to WHERE space = ? AND send = ? ORDER BY recipient").all(space, send) as { recipient: string }[]).map(
+      (r) => r.recipient,
+    );
+  }
+
+  /** Where a Send is, by its ID. */
+  find(send: string): InboxEntry | undefined {
+    return this.#db.prepare("SELECT space, send, arrived_at, via, 'ready' AS state, 0 AS attempts FROM inbox WHERE send = ?").get(send) as unknown as
+      | InboxEntry
+      | undefined;
+  }
+
+  /** A newly attached recipient gets this Space's Sends that had nobody to go to. */
+  adopt(space: string, recipient: string): number {
+    const r = this.#db
+      .prepare(
+        `INSERT INTO inbox_to (space, send, recipient)
+         SELECT i.space, i.send, ? FROM inbox i WHERE i.space = ?
+         AND NOT EXISTS (SELECT 1 FROM inbox_to t WHERE t.space = i.space AND t.send = i.send)`,
+      )
+      .run(recipient, space);
+    if (Number(r.changes) > 0) queueMicrotask(() => this.#wake());
+    return Number(r.changes);
   }
 
   all(): InboxEntry[] {
@@ -83,6 +122,19 @@ export class Inbox {
            reason = excluded.reason, updated_at = excluded.updated_at`,
       )
       .run(space, send, recipient, state, state === "delivered" ? 1 : 0, reason ?? null, now);
+  }
+
+  /** Resolves when a new Send is indexed or adopted, or the signal aborts. */
+  next(signal: AbortSignal): Promise<void> {
+    return new Promise((resolve) => {
+      const done = (): void => {
+        this.#waiters.delete(done);
+        signal.removeEventListener("abort", done);
+        resolve();
+      };
+      this.#waiters.add(done);
+      signal.addEventListener("abort", done, { once: true });
+    });
   }
 
   /** Resolves when a new Send is indexed, or after `ms`. */
