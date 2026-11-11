@@ -4,6 +4,17 @@ import SwiftUI
 struct ReflexApp: App {
     /// A pairing code opened as a link (reflex://pair?...), from the camera app or another app.
     @State private var code: String?
+    @Environment(\.scenePhase) private var phase
+
+    /// Keeps the screen on while Reflex is in front: in Debug builds, or when launched with
+    /// `-ReflexKeepAwake`, so a device run isn't cut short by Auto-Lock.
+    private static let keepAwake: Bool = {
+        #if DEBUG
+        true
+        #else
+        ProcessInfo.processInfo.arguments.contains("-ReflexKeepAwake")
+        #endif
+    }()
 
     var body: some Scene {
         WindowGroup {
@@ -14,6 +25,9 @@ struct ReflexApp: App {
                     #if DEBUG
                     if url.scheme == "reflex", url.host == "debug" { NotificationCenter.default.post(name: .debugInk, object: url) }
                     #endif
+                }
+                .onChange(of: phase, initial: true) { _, now in
+                    if Self.keepAwake { UIApplication.shared.isIdleTimerDisabled = now == .active }
                 }
         }
     }

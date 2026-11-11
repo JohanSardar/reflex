@@ -33,6 +33,7 @@ final class RelayConnection: FrameChannel, @unchecked Sendable {
     private var closed = false
     let frames: AsyncThrowingStream<Data, Error>
     let remote: String
+    let transport = "relay"
     /// This side opens channel 1 to the Link.
     private static let channel: UInt32 = 1
     private static let opener: UInt32 = 0x8000_0000
