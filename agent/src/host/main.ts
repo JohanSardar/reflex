@@ -51,6 +51,7 @@ function serve(sock: Socket) {
       if (f.t === "call") {
         const who = identify(f.who.name);
         const started = Date.now();
+        if (f.tool === "wait_for_user") log("wait_start", { client, who: who.name, args: f.args as Record<string, unknown> });
         const r = await core.call(f.tool, f.args, {
           who,
           signal: ac.signal,

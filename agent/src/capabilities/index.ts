@@ -80,7 +80,13 @@ export class Core {
       const input = (args ?? {}) as Record<string, any>;
       this.#check(t, input);
       if (!IMPLEMENTED.has(t))
-        throw fail("unavailable", `${t} is not available yet in this build of Reflex.`, "Use open_space, read, look, apply and wait_for_user.", ["open_space(space: '<name>', create: true)"]);
+        throw fail(
+          "unavailable",
+          `${t} is not available yet in this build of Reflex.`,
+          t === "read_me"
+            ? "Go ahead without it: the apply tool's description and its input schema list every built-in type and its fields."
+            : "Use open_space, read, look, apply and wait_for_user.",
+        );
       const out = await this.#run(t, input, ctx);
       const v = validateOutput(t);
       if (!v(out.json)) this.log("output_invalid", { tool: t, errors: v.errors });
@@ -481,7 +487,11 @@ export class Core {
 
   #findForPerson(entry: SpaceEntry, id: string): SceneElement {
     const all: SceneElement[] = this.scene(entry, { person: this.person.person }, "full");
-    const el = all.find((e) => e.id === id) ?? all.find((e) => e.id.endsWith(`:${id}`));
+    const text = (e: SceneElement) => String(e.text ?? e.title ?? e.latex ?? "").toLowerCase();
+    const el =
+      all.find((e) => e.id === id) ??
+      all.find((e) => e.id.endsWith(`:${id}`)) ??
+      all.find((e) => e.type !== "connector" && e.type !== "ink" && text(e).includes(id.toLowerCase()));
     if (!el) throw fail("unknown_id", `No Element '${id}'.`, `Elements: ${all.map((e) => e.id).join(", ")}`);
     return el;
   }

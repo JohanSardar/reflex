@@ -12,6 +12,11 @@ import { Client } from "../host/client.ts";
 import { logPath } from "../host/rpc.ts";
 
 const KNOWN: Record<string, string> = { "claude-code": "Claude Code", "codex-mcp-client": "Codex", codex: "Codex" };
+// Longest wait_for_user the surface holds, a little under the harness's default hard tool timeout, so a long
+// wait ends in still_waiting instead of a harness error (docs/harness-notes.md). Codex cuts every call at 300 s
+// and progress does not extend it; Claude Code's hard limit is far above wait_for_user's 3600 s maximum.
+// REFLEX_MAX_WAIT_S overrides it, for a Codex whose tool_timeout_sec was raised.
+const MAX_WAIT_S: Record<string, number> = { Codex: 280 };
 
 export async function runMcp() {
   const started = Date.now();
@@ -42,8 +47,14 @@ export async function runMcp() {
     let progressSent = 0;
     log("call_start", { tool, request: extra.requestId, progressToken: progressToken ?? null, args_bytes: JSON.stringify(req.params.arguments ?? {}).length });
     extra.signal.addEventListener("abort", () => log("call_aborted", { tool, request: extra.requestId, after_s: (Date.now() - callStarted) / 1000 }), { once: true });
+    let args: Record<string, unknown> = req.params.arguments ?? {};
+    const cap = Number(process.env.REFLEX_MAX_WAIT_S) || MAX_WAIT_S[KNOWN[server.getClientVersion()?.name ?? ""] ?? ""];
+    if (tool === "wait_for_user" && cap && typeof args.timeout_s === "number" && args.timeout_s > cap) {
+      log("wait_capped", { asked: args.timeout_s, cap });
+      args = { ...args, timeout_s: cap };
+    }
     try {
-      const r = await host.call(tool, req.params.arguments ?? {}, who(), {
+      const r = await host.call(tool, args, who(), {
         signal: extra.signal,
         progress: (p) => {
           if (progressToken === undefined) return;

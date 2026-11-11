@@ -1,8 +1,22 @@
 // `look` renders through this interface. The basic renderer here draws scene
 // Elements as SVG and rasterizes them with resvg; the full headless renderer
 // (shared with the native look) is T8.
+import { existsSync } from "node:fs";
 import { Resvg } from "@resvg/resvg-js";
 import type { Bounds } from "./store.ts";
+
+// Scanning every system font costs about a second per render, so load only the faces the SVG names
+// when they are where macOS or a common Linux keeps them, and fall back to the full scan otherwise.
+const FONT_FILES = [
+  "/System/Library/Fonts/Helvetica.ttc",
+  "/System/Library/Fonts/Supplemental/Arial.ttf",
+  "/System/Library/Fonts/Supplemental/Times New Roman Italic.ttf",
+  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+  "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Italic.ttf",
+].filter((f) => existsSync(f));
+const FONT = FONT_FILES.length
+  ? { loadSystemFonts: false, fontFiles: FONT_FILES, defaultFontFamily: FONT_FILES[0].includes("dejavu") ? "DejaVu Sans" : "Helvetica" }
+  : { loadSystemFonts: true, defaultFontFamily: "Helvetica" };
 
 export type SceneElement = Record<string, any> & { id: string; type: string; bounds: Bounds };
 export type RenderRequest = {
@@ -184,7 +198,7 @@ export class SvgRenderer implements Renderer {
 <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#fbfbfa"/>
 ${body}
 </svg>`;
-    const png = new Resvg(svg, { fitTo: { mode: "width", value: pxW }, font: { loadSystemFonts: true, defaultFontFamily: "Helvetica" } }).render().asPng();
+    const png = new Resvg(svg, { fitTo: { mode: "width", value: pxW }, font: FONT }).render().asPng();
     return { png: Buffer.from(png), px: [pxW, pxH] as [number, number] };
   }
 }

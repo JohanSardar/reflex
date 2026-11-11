@@ -9,6 +9,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { Client, type CallResult } from "../host/client.ts";
+import { TOOLS, description } from "../protocol.ts";
 
 type Flags = Record<string, string | boolean>;
 type Cmd = { usage: string; summary: string; flags?: string[]; run: (pos: string[], f: Flags) => Promise<number> };
@@ -30,8 +31,9 @@ function agentName(f: Flags): { name: string } {
   if (typeof f.agent === "string") return { name: f.agent };
   if (process.env.REFLEX_AGENT_NAME) return { name: process.env.REFLEX_AGENT_NAME };
   const project = basename(process.cwd());
+  // Codex first: a Codex launched from a Claude Code shell inherits CLAUDECODE, but CODEX_THREAD_ID is set per Codex session.
+  if (process.env.CODEX_THREAD_ID) return { name: `Codex CLI · ${project}` };
   if (process.env.CLAUDECODE) return { name: `Claude Code CLI · ${project}` };
-  if (Object.keys(process.env).some((k) => k.startsWith("CODEX_"))) return { name: `Codex CLI · ${project}` };
   return { name: `CLI · ${project}` };
 }
 
@@ -314,7 +316,10 @@ export async function main(argv: string[]): Promise<number> {
   }
   const cmd = COMMANDS[key];
   if (f.help) {
-    out(`${cmd.summary}\n\nUsage: ${cmd.usage}\n\nAlso: --json, --agent <name>`);
+    // A command that wraps a tool also prints that tool's text, so a CLI Agent learns the op shapes an MCP Agent sees.
+    const tool = /\((\w+)/.exec(cmd.summary)?.[1];
+    const guide = tool && (TOOLS as readonly string[]).includes(tool) ? `\n\n${description(tool as (typeof TOOLS)[number])}` : "";
+    out(`${cmd.summary}\n\nUsage: ${cmd.usage}\n\nAlso: --json, --agent <name>${guide}`);
     return 0;
   }
   const known = new Set([...(cmd.flags ?? []), "json", "agent", "help"]);
