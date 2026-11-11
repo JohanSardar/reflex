@@ -306,7 +306,7 @@ These exist so the code stays testable and replaceable. They carry no manifest, 
 
 ### 8.4 A cloud Agent through the Relay
 
-1. claude.ai or ChatGPT calls remote MCP at `relay.eilmer.si` over OAuth.
+1. claude.ai or ChatGPT calls remote MCP at `reflex.eilmer.si` over OAuth.
 2. You approve the Agent, and a device issues a scoped, expiring grant for one Space (ADR-0004).
 3. The cloud session decrypts and materializes the Space, then runs the same `kernel` and `agent` code. Changes go out encrypted to your devices.
 
@@ -378,7 +378,7 @@ Each step's tickets run at the same time, one agent each. The full list, with wh
 | **2** | T4 Agent layer · T5 Link | MCP and CLI with the first five tools, with each harness's timeout and MCP version recorded from one real run; journal, LAN, pairing and approval |
 | **3** | T6 Round trip | An Agent draws a graph, you circle a node, the Agent gets the Mark with its target ID and crop, and replies on its own layer. Killing the Link once after a Send still delivers it. |
 | **4** | T7 Plan review iPad · T8 Plan review core · T9 Relay · T10 Web + author kit · T11 Peer-to-peer | Scenario 1 works in Claude Code and Codex through MCP and the CLI; composable Behaviors and user imports; the Relay with its encrypted log; the web viewer, `reflex create/test/dev` and Agent-saved Recipes; a second transport |
-| **5** | T12 Math tutor iPad · T13 Math tutor core · T14 Deploy Relay · T15 Claude channel | Scenario 2 works; the Relay runs at relay.eilmer.si; Claude Code receives Sends by push |
+| **5** | T12 Math tutor iPad · T13 Math tutor core · T14 Deploy Relay · T15 Claude channel | Scenario 2 works; the Relay runs at reflex.eilmer.si; Claude Code receives Sends by push |
 | **6** | T16 Chart Embed · T17 Webhook, MCP App | The anchor bridge, Embed state, Embeds inside Panels and the HTML sandbox; the remaining push adapters, falling back to the Inbox |
 | **7** | T18 3D Embed · T22 Shared Spaces | RealityKit with glTF/USDZ part maps; several people drawing on one Space from their own devices, with invites, roles, presence and key rotation |
 | **8** | T19 Scenarios 3–5 · T20 Scenarios 6–13 | Every scenario works |

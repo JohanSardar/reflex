@@ -23,7 +23,7 @@ There are 55 work items (H1–H55), and each one is in exactly one ticket.
 | T11 Peer-to-peer | H28 Apple peer-to-peer Wi-Fi, including the same change arriving over two paths | After T6 |
 | T12 Math tutor iPad | H29 LaTeX on iPad · H30 Region and Region Send button | After T7 |
 | T13 Math tutor core | H31 Regions, line-level evidence, grading Recipe and Guide, watch mode | After T8 |
-| T14 Deploy Relay | H32 relay.eilmer.si | After T9 |
+| T14 Deploy Relay | H32 reflex.eilmer.si | After T9 |
 | T15 Claude channel | H33 push, then pull out the shared adapter contract | After T8 |
 | T16 Chart Embed | H34 chart Embed Template and anchor bridge · H35 HTML sandbox hardening · H36 an old app keeps an Element type it doesn't know · H48 `setState` and `emit` on the bridge · H49 Embeds inside Panels | After T10, T12 |
 | T17 Webhook, MCP App | H37 webhook adapter · H38 MCP App adapter | After T14, T15 |
@@ -309,7 +309,7 @@ Build the Relay, the hosted service that lets Agents and devices outside the loc
 - A self-hosted Node Relay runs the same code outside Cloudflare.
 - A real materialized Space runs inside the Durable Object within Workers' 128 MB. If it runs out of memory there, cloud execution moves to a separate service and the Durable Object stays the encrypted router and log.
 
-Run everything locally (`wrangler dev` and Node). Deploying to relay.eilmer.si is T14.
+Run everything locally (`wrangler dev` and Node). Deploying to reflex.eilmer.si is T14.
 
 ## Context
 - Read docs/adr/0001, 0004 and 0008; docs/SPEC.md §3 and §13; docs/ARCHITECTURE.md §2 (the `relay` unit), §6 (transport, storage, identity), §8.4 and §13 (the Relay row).
@@ -425,20 +425,21 @@ When you are done, use it yourself the way a user would: run the real app and go
 ```
 
 ```md
-# Deploy the Relay to relay.eilmer.si
+# Deploy the Relay to reflex.eilmer.si
 
 ## Goal
-Run the official Relay on Cloudflare at `relay.eilmer.si`, so cloud Agents and devices away from home can reach a Space. When this is done:
-- The T9 Worker, its Durable Objects and its R2 bucket are deployed to the user's Cloudflare account, served at `https://relay.eilmer.si` (the `eilmer.si` zone is already active on that account).
+Run the official Relay on Cloudflare at `reflex.eilmer.si`, so cloud Agents and devices away from home can reach a Space. When this is done:
+- The T9 Worker, its Durable Objects and its R2 bucket are deployed to the user's Cloudflare account, served at `https://reflex.eilmer.si` (the `eilmer.si` zone is already active on that account).
 - Remote MCP over OAuth works at that address: a real cloud Agent signs in, a device issues a grant for one Space, and the Agent reads and answers a Send.
-- The Link and the iPad sync through the deployed Relay, and the Relay URL they use by default is `relay.eilmer.si` (a self-hosted URL still works).
+- The Link and the iPad sync through the deployed Relay, and the Relay URL they use by default is `reflex.eilmer.si` (a self-hosted URL still works).
 - Secrets live in Cloudflare (`wrangler secret`), never in the repo; a short deploy guide in `relay/README.md` says how to redeploy and how to self-host instead.
 
-Prove it from outside the LAN: an iPad Simulator or Link reaching a cloud Claude Code session through `relay.eilmer.si`, with the same steps T9 ran locally.
+Prove it from outside the LAN: an iPad Simulator or Link reaching a cloud Claude Code session through `reflex.eilmer.si`, with the same steps T9 ran locally.
 
 ## Context
 - Read docs/adr/0004 and 0008; docs/SPEC.md §3 and §13; docs/ARCHITECTURE.md §2 (the `relay` unit), §6 and §8.4; `relay/README.md` and the T9 PR (#10) description.
 - What exists on main: everything through T9, T8 and T10. T9 ran only on `wrangler dev` and the Node Relay.
+- The address was `relay.eilmer.si` until 2026-11-11. That name already belongs to another project (Lamp T24), so the Relay uses `reflex.eilmer.si`; leave the `relay` record alone.
 - `wrangler` on this Mac is already logged in to the user's account with an OAuth token; use it. Don't create new Cloudflare accounts or change billing. If a Cloudflare product needs a paid plan or a dashboard toggle you can't make from wrangler, stop and report exactly what's needed.
 - Carried over (docs/TICKETS.md, "Follow-ups"): a Space above about 2,000 strokes doesn't fit in a Worker's 128 MB and gets a 507 pointing to a self-hosted Relay (T9). Keep that behavior; check it on the deployed Worker.
 - T7, T13 and T15 run at the same time. You own `relay/` and the Relay URL default; keep other changes small.

@@ -44,7 +44,7 @@ Reflex is **free and open source**, for everybody. There is no moat to protect; 
 
 - **iPad app.** Renders Spaces, captures Ink, voice and touch, and holds a full replica of each Space.
 - **Reflex Link.** Started with `npx reflex link` and runs on macOS, Windows, and Linux. It hosts the stdio MCP server, the CLI back end, the Send Adapters, and a replica of each Space, so Agents keep working while the iPad sleeps.
-- **Relay.** The official instance runs at `relay.eilmer.si`, and anyone can self-host one. It gives cloud Agents a public, OAuth-protected remote MCP endpoint, and it syncs devices that aren't on the same network.
+- **Relay.** The official instance runs at `reflex.eilmer.si`, and anyone can self-host one. It gives cloud Agents a public, OAuth-protected remote MCP endpoint, and it syncs devices that aren't on the same network.
 - **Web viewer.** Runs in a browser, for laptops and Android. Users can view, type, tap, and Send, but there's no Pencil.
 - **Sync.** Each Space is a CRDT document replicated on every node (ADR-0001). A transport only carries changes; it never decides what is true. Every available path stays open (peer-to-peer Wi-Fi, LAN, USB-C, Relay) and each change uses the fastest one. Duplicate deliveries are harmless.
 - **Not Bluetooth.** BLE is too slow for images. Peer-to-peer Wi-Fi gives a local link without a router.
