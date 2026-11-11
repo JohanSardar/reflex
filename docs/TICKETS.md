@@ -142,3 +142,65 @@ Ink is how users talk to Reflex. Every Mark, Send and Anchor is built on stroke 
 ## Evidence of done
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
+
+## Step 2 tickets
+
+```md
+# Agent layer: the MCP server and CLI that Agents use
+
+## Goal
+Build the TypeScript Agent layer, the part of Reflex every Agent talks to. When this is done, a real Claude Code session and a real Codex session can each connect to Reflex, through MCP and through the CLI, and use `open_space`, `apply`, `read`, `look` and `wait_for_user` against a real Space held by the Rust kernel (through its WASM build). The kernel accepts exactly the shapes in `protocol/`: its Rust op and scene types are generated from `protocol/schema`, so T1's `apply` example goes through it. `protocol/` is part of the root npm workspace.
+
+You also record what each harness actually does with a long-held `wait_for_user` call, from one real run in each: the default tool timeout and how to change it, whether progress notifications extend it, what cancelling does, what happens when the pipe closes mid-wait, and which MCP version or binding it speaks. Write that down in docs/harness-notes.md. It decides the timeout policy and which MCP binding ships first.
+
+This is the first time an Agent touches a real Space. Everything after it (the round trip, every scenario, every push adapter) is built on this layer.
+
+## Context
+- Read docs/ARCHITECTURE.md §1, §2, §4 (the Agent contract), §6 (Send delivery), §8.1, §9, §10 and §11 (the MCP row); docs/SPEC.md §7–§9, §11 and §12 (the CLI, following https://vercel.com/design/cli); docs/adr/0002, 0003 and 0007; protocol/ (schemas, examples, tool text, `pnpm check`); and kernel/README.md.
+- What exists on main: `protocol/` (T1: schemas, 31 examples, hand-written tool text and server instructions), `kernel/` (T2: Rust kernel on Automerge, UniFFI and WASM bindings, convergence proven), and `apps/ipad/` (T3).
+- T2's kernel still parses its own stand-in op shapes. T1's `apply` example is rejected because T1 sends `map_put`/`text_insert` as lists with a `field` and adds `behaviors`, `math` and `embed`. Generating the Rust types from `protocol/schema` changes op parsing and scene output, not how Elements map onto Automerge.
+- `protocol/` has its own `package.json` and pnpm lockfile; the root uses npm workspaces.
+- T1's worker measured the bundled `apply` input schema at about 26 KB (roughly 6,500 tokens) sent with every request. See what the harnesses do with it.
+- T5 (the Link) runs at the same time and owns `link/`: durable storage, the Inbox journal, LAN sync and pairing. Until T6 joins the two, run the Agent layer from a small entry point with an in-memory Space and Inbox. Keep storage and transport behind the interfaces in ARCHITECTURE §6 so T6 can plug T5's in.
+- `look` goes through a renderer interface. A basic scene-to-image renderer is enough here; the full headless renderer is T8.
+- Claude Code and Codex are both installed on this machine.
+
+## Constraints
+- The tool list is exactly the eleven tools in SPEC §11, with the text from `protocol/tool-text/`. This ticket implements five of them; the rest can return a clear "not yet available" error.
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
+```md
+# Link: the companion process that keeps Spaces safe and in sync
+
+## Goal
+Build Reflex Link, the process on the user's computer that keeps a copy of every Space, stores it durably, and syncs it with other devices over the local network. When this is done, `npx reflex link` (or the repo's equivalent while unpublished) starts the Link. It:
+- keeps each Space in a durable journal plus a content-addressed asset store, using the Rust kernel through WASM
+- keeps a durable Inbox index, so a Send that arrives is never lost
+- finds peers with Bonjour and syncs Spaces with them over LAN/TCP, through the kernel's `sync_step`
+- pairs a new device by showing a QR code that exchanges keys, and binds a connection to a device only after it proves its key
+- asks the user to approve each new Agent the first time it connects, and remembers the decision in a credential store
+
+Two Links (or a Link and a second peer process) on this machine must pair, sync a Space both ways, keep syncing after edits made on both sides at the same time, and come back intact after one of them is killed and restarted.
+
+The Link is what lets local Agents and the iPad meet. The round trip (T6) joins it with the Agent layer and the iPad app.
+
+## Context
+- Read docs/ARCHITECTURE.md §1, §2 (the `link` unit), §6 (transport, storage, identity), §7 (correctness rules, especially the Send state machine and retention), §8 and §10; docs/SPEC.md §3, §4 and §13; docs/adr/0001, 0004, 0005 and 0008; and kernel/README.md.
+- What exists on main: `protocol/` (T1), `kernel/` (T2: Rust kernel with WASM bindings; convergence and restart were proven across Swift, Node and Workers), and `apps/ipad/` (T3).
+- T2 noted the kernel does not yet check authorization on changes it receives, and the WASM build is 3.0 MB.
+- Every owner is a person or an Agent with a stable ID (ADR-0008). Devices are bound to a person.
+- Fastest-path selection waits until a second real transport exists (T11). Build LAN/Bonjour first, behind the transport interface in ARCHITECTURE §6.
+- T4 (the Agent layer) runs at the same time and owns `agent/`. Don't build MCP or CLI tools here; T6 plugs the Agent layer into the Link. Both of you add workspaces to the root `package.json`; whoever merges second rebases.
+- The iPad's side of pairing and sync is T6.
+
+## Constraints
+- Use the kernel for every Space operation; the Link never edits Space data itself.
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
