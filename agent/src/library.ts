@@ -83,7 +83,7 @@ const by = (e: LibraryEntry, names: (id: string) => string) => (e.by?.agent ? `s
 /** read_me("index"): every Element type, Recipe, Embed Template and Guide, including the Library's. */
 export function index(spaces: SpaceStore, names: (id: string) => string, extra: Extension[] = []): string {
   const lib = entries(spaces);
-  const ext = installed(extra);
+  const ext = installed(extra).filter((x) => !lib.some((e) => e.name === x.name && e.kind === x.kind)); // a Library copy wins
   const line = (name: string, summary: string, where?: string) => `- ${name}${where ? ` (${where})` : ""}: ${summary}`;
   const recipes = [...ext.filter((e) => e.kind === "recipe").map((e) => line(e.name, e.summary)), ...lib.filter((e) => e.kind === "recipe").map((e) => line(e.name, e.summary, `Library, ${by(e, names)}`))];
   const embeds = [...ext.filter((e) => e.kind === "embed").map((e) => line(e.name, e.summary)), ...lib.filter((e) => e.kind === "embed").map((e) => line(e.name, e.summary, `Library, ${by(e, names)}`))];

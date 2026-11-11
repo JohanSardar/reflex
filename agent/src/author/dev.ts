@@ -97,7 +97,9 @@ export async function dev(o: { path?: string; port: number; open: boolean; log: 
   if (o.path) {
     let timer: NodeJS.Timeout | undefined;
     // Watched even when the extension doesn't load yet, so saving the fix reloads it.
-    const dir = box.loaded?.dir ?? (existsSync(o.path) && statSync(o.path).isDirectory() ? resolve(o.path) : dirname(resolve(o.path)));
+    // The nearest folder that exists, so a path whose folder isn't made yet still reloads once it is.
+    let dir = box.loaded?.dir ?? (existsSync(o.path) && statSync(o.path).isDirectory() ? resolve(o.path) : dirname(resolve(o.path)));
+    while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir);
     const w = watch(dir, { recursive: true }, (_e, f) => {
       if (f && box.loaded && join(dir, String(f)).startsWith(box.loaded.examples)) return; // saving an example isn't an edit
       clearTimeout(timer);
