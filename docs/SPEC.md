@@ -283,4 +283,4 @@ Development proceeds in vertical steps, defined in [ARCHITECTURE.md §12](./ARCH
 
 - How to recognize mark gestures (circle, strikethrough, arrow): heuristics, an on-device model, or a mix.
 - The exact behavior of `wait_for_user` keepalives under each harness's tool timeout. Recorded from one real run in each harness while building the Agent layer.
-- Whether the MCP App adapter can render a live Space view inside chat hosts, or only a read-only one.
+- ~~Whether the MCP App adapter can render a live Space view inside chat hosts, or only a read-only one.~~ Answered by T17: the view is live (it refreshes and holds `wait_for_user`) but can't be drawn on; the person draws on the iPad.

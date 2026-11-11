@@ -247,7 +247,7 @@ These exist so the code stays testable and replaceable. They carry no manifest, 
 
   OAuth never approves an Agent by itself.
 - **Presence.** Live cursors, names and selections travel over the same Paths as changes, but as short-lived messages that are never written into the Space or its history.
-- **Send delivery.** The Inbox and `wait_for_user` ship first. The push adapter contract (config, secrets, callback endpoint, durably persisted attempts outside the adapter) is extracted with the first push adapter, the Claude Code channel, and validated against the second, a webhook.
+- **Send delivery.** The Inbox and `wait_for_user` ship first. The push adapter contract (config, secrets, callback endpoint, durably persisted attempts outside the adapter) is extracted with the first push adapter, the Claude Code channel, and validated against the second, a webhook. Push targets live in the Link, except an MCP App view opened by a cloud Agent: that one runs in the Relay session and uses that session's Inbox.
 
 ## 7. Correctness rules (specified before the protocol is called stable)
 

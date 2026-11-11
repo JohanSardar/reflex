@@ -539,6 +539,35 @@ Prove it with a real Claude Code session: the Agent places a chart of real-looki
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
 
+## Step 7 ticket (sharing)
+
+```md
+# Shared Spaces: several people drawing on one Space from their own devices
+
+## Goal
+Let more than one person share a Space, each on their own devices, as ADR-0008 lays out. When this is done:
+- **Invites and roles.** A Space's owner creates an invite with a role (editor or viewer), as a link or QR code. The invited person's device presents it to an existing member's device, directly or through the Relay; that device checks it and records the membership in the signed control catalog. Roles are checked on every received change: a viewer's strokes are refused, an editor can draw and Send, and only the owner can invite or remove.
+- **Keys.** Each Space has one key held by every member's devices. An invite wraps it for the new device through an existing member's device; the Relay only carries the wrapped key. Removing a person records the removal and rotates the key, and later changes use the new key, which the removed person's devices never get.
+- **Presence.** Live cursors, names and selections travel over the same paths as changes, as short-lived messages never written into the Space or its history. The iPad and the web viewer show who else is here.
+- **Sends per person.** Each person's Send carries only their own Marks and Ink, records who sent it (`from`), and their undo stays their own. Agents see each person's name in the Send Bundle.
+- **Speed.** Each person's own strokes commit locally first and never wait on the network; people nearby sync over the LAN, people elsewhere through the Relay at `reflex.eilmer.si`.
+
+Prove it with two people: two iPad Simulators paired to two different Links as two different people, one through the LAN and one only through the deployed Relay. The owner invites the second person as an editor, both draw at once and see each other's cursors, each presses Send and a real Claude Code session answers each one by name. Then the owner downgrades them to viewer (their next stroke is refused) and removes them (the key rotates, and their device stops getting new changes).
+
+## Context
+- Read docs/adr/0008 (the design), 0001 and 0004; docs/SPEC.md §4 (Spaces and Agents) and §13; docs/ARCHITECTURE.md §6 (identity, grants, presence), §7 (authorization at the writer's frontier) and §8.3 (inviting a person).
+- What exists on main: everything through T17. Owners have been people or Agents from T1; person IDs, per-person undo and `from` on every Send exist (T1, T2); received changes are checked (`receive_sync_message_checked`, T6), with roles left for this ticket; pairing and the signed control catalog are in `link/` (T5); the Relay is live (T14).
+- Carried over (docs/TICKETS.md, "Follow-ups"): a pairing code cut short in the middle of the person ID was accepted, so a device joined under a person that doesn't exist (T14).
+- T16 (Chart Embed) and T18 (3D Embed) run at the same time in `apps/ipad/` and Embed code. Keep your iPad changes to presence, invites and membership UI; whoever merges second rebases. If you redeploy the Relay, leave it running.
+- Codex's usage limit is exhausted until 2026-11-12 13:06; after that, also check one Send from a Codex session if it fits.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
@@ -565,3 +594,4 @@ Found while building earlier tickets. Each goes into the named ticket's brief.
 - **T21:** the protocol schemas' `$id`s are `https://reflex.eilmer.si/protocol/v0/…`, and that host now serves the Relay, so they return 404 (T14). Publishing the protocol should serve them or change them.
 - **Declined review nit, open:** lifting the pen after the app goes to the background can report the Space as still on screen until the next update (T12).
 - **Real iPad pass:** the live pen-down signal and recognition of real handwriting (T12).
+- **T17 (done):** the reapprove and terminal-queue tests pass without `REFLEX_REASK_S=0`. **Open nits (T17):** a webhook URL removed and added again doesn't push Sends still pending from before; two narrow cases in passing a held Send's acknowledgement to the Link, if the Link restarts or a deadline lands during that call. Whether claude.ai or ChatGPT let an MCP App view hold a 25 s call isn't measured; the MCP App was proven in the MCP Apps reference host only.
