@@ -223,25 +223,43 @@ export class Coordinator {
     // through the Relay would only cut into its own session.
     if (!known || known.kind === "ipad") return;
     const have = (t: string): boolean => Boolean(this.#peers.get(device)?.paths.on(t));
+    // Where it was last reached goes first: it is the likeliest to work, and every miss costs a timeout.
     const list = [...(this.#candidates.get(device) ?? [])];
-    if (known.last_seen) list.push({ transport: "lan", device, host: known.last_seen.host, port: known.last_seen.port });
+    if (known.last_seen) list.unshift({ transport: "lan", device, host: known.last_seen.host, port: known.last_seen.port });
     // The Relay is the path for when nothing closer reaches the device: it isn't dialed next to a live one.
     const reached = this.#peers.has(device);
-    const todo = list.filter((c) => !have(c.transport) && !(reached && c.transport === "relay"));
+    const todo = list.filter(
+      (c, i) =>
+        !have(c.transport) &&
+        !(reached && c.transport === "relay") &&
+        list.findIndex((x) => x.transport === c.transport && x.host === c.host && x.port === c.port) === i,
+    );
     todo.sort((a, b) => Number(a.transport === "relay") - Number(b.transport === "relay"));
     if (todo.length === 0) return;
     this.#dialing.add(device);
     try {
-      for (const c of todo) {
-        if (have(c.transport) || (c.transport === "relay" && this.#peers.has(device))) continue;
-        let path: Path;
-        try {
-          const t = this.#transports.find((x) => x.name === c.transport);
-          if (!t) continue;
-          path = await t.dial(c);
-        } catch {
-          continue;
-        }
+      for (const name of new Set(todo.map((c) => c.transport))) {
+        if (have(name) || (name === "relay" && this.#peers.has(device))) continue;
+        const t = this.#transports.find((x) => x.name === name);
+        if (!t) continue;
+        // Every address at once: the first to connect is used, so dead addresses cost no time.
+        let won = false;
+        const first = await Promise.any(
+          todo
+            .filter((c) => c.transport === name)
+            .map((c) =>
+              t.dial(c).then((path) => {
+                if (won) {
+                  path.close("another address answered first");
+                  throw new Error("late");
+                }
+                won = true;
+                return { path, c };
+              }),
+            ),
+        ).catch(() => null);
+        if (!first) continue;
+        const { path, c } = first;
         try {
           const r = await handshake(path, this.#me, this.#trust());
           if (r.peer.device !== device) throw new Error(`expected ${device}, reached ${r.peer.device}`);
