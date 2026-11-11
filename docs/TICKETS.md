@@ -509,6 +509,36 @@ Prove the webhook with a real receiver and a real Agent SDK (or `claude -p`) pro
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
 
+## Step 6 ticket (Embeds)
+
+```md
+# Chart Embed: a live chart the person can point at, inside a hardened sandbox
+
+## Goal
+Make HTML Embeds first-class on the iPad and the web viewer, with a chart as the first real Embed Template. When this is done:
+- **Chart Embed Template.** A chart Embed (bar, line, scatter) lives in the Library. An Agent places it with data in one call, and it draws on the iPad and in the web viewer.
+- **Anchor bridge.** The Embed reports named parts (a bar, a point, a series, an axis tick) with their bounds, so a circle or arrow the person draws over the chart becomes a Mark that names the part (for example "bar 2024-Q3"), not just the Element.
+- **Bridge API.** `reflex.element.setState(patch)` saves Embed state; it syncs to every device, survives reloads and shows in the next Send's `changes`. `reflex.element.emit(...)` sends "notify agent" events and events that fire the Element's Behaviors.
+- **Embeds inside Panels.** A Panel can host an Embed, and the values a person enters in a Panel reach the Agent in the Send Bundle.
+- **Sandbox hardening.** HTML Embeds run in a sandboxed WKWebView (and a sandboxed iframe on the web) with no network by default, no access to other Elements or the host, size and CPU limits, and a visible diagnostic when an Embed is blocked. MCP Apps `ui://` resources are accepted as Embed Templates, with upstream tool calls denied unless the person allows that server.
+- **Unknown Element types.** An older app that meets an Element type it doesn't know keeps it intact (round-trips it untouched) and draws a placeholder.
+
+Prove it with a real Claude Code session: the Agent places a chart of real-looking data; on the iPad Simulator you circle one bar and press Send, and the Agent answers about that bar; you move a slider in an Embed inside a Panel, and the new value reaches the Agent on the next Send and shows on a second device.
+
+## Context
+- Read docs/SPEC.md §5 (Embeds, Panels, `setState`, `emit`) and §13; docs/ARCHITECTURE.md §4.3, §5 (the extension ladder and the bridge API) and §7; docs/adr/0006.
+- What exists on main: everything through T12. T10 built the web viewer, `reflex create/test/dev`, `define` and the Library; T7 built Panels and Behavior triggers on the iPad; T8 built Behavior actions; T12 built LaTeX and Regions on the iPad. Read the READMEs in each folder.
+- Carried over (docs/TICKETS.md, "Follow-ups"): Embed state changes don't sync yet (T10); the Link drops a Panel's `values` when it hands a Send to the Agent (T7).
+- T17 (webhook and MCP App adapters) runs at the same time in `agent/` and `link/adapters/`. It serves Reflex's own `ui://` view; you make `ui://` resources from other servers work as Embed Templates. Whoever merges second rebases.
+- Codex's usage limit is exhausted until 2026-11-12 13:06; after that, also check the chart flow from a Codex session if it fits.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
@@ -533,3 +563,5 @@ Found while building earlier tickets. Each goes into the named ticket's brief.
 - **Real iPad pass:** live mic transcription, camera capture, and drag-and-drop from another app (T7).
 - **T22:** a pairing code cut short in the middle of the person ID was accepted; the new device joined under a person ID that doesn't exist (T14).
 - **T21:** the protocol schemas' `$id`s are `https://reflex.eilmer.si/protocol/v0/…`, and that host now serves the Relay, so they return 404 (T14). Publishing the protocol should serve them or change them.
+- **Declined review nit, open:** lifting the pen after the app goes to the background can report the Space as still on screen until the next update (T12).
+- **Real iPad pass:** the live pen-down signal and recognition of real handwriting (T12).
