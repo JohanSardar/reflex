@@ -10,7 +10,9 @@ The sans-IO Rust core that owns every Space (ADR-0005). JSON and bytes go in, an
 | `swift/` | the `ReflexKernel` Swift package: an XCFramework plus the generated Swift |
 | `proof/` | the proof setup: a SwiftUI app for the iPad Simulator, a Node hub and a local-only Worker, each holding a replica of one Space |
 
-The Element types are **stand-ins** until T1's schemas land in `protocol/`. The envelope (ID, owner, layer, the free `data` map), Ink, text, notes, shapes and connectors follow ARCHITECTURE §4.2. Any other type is kept as an extension type with opaque `props`.
+The op and Element types are **generated from `protocol/schema/`** by `protocol/scripts/gen-rust.mjs` into `protocol/generated/rust/protocol.rs`, which `core/src/protocol.rs` includes. `apply_agent_batch` parses each op through them, and `scene` returns protocol Elements (`detail: "full"`), scene items (`"outline"`) or raw strokes (`"strokes"`) through them. After each write the Element is checked against the Element schema, so the kernel never stores one it couldn't return. The generated types check shape (fields, types, required fields, enums, closed objects); patterns, lengths and ranges are checked by the Agent layer with Ajv before the kernel runs. Every typed field is one register under its protocol name; text, note, shape and connector text is collaborative. Any type not in the protocol is an extension type with opaque `props`.
+
+After a schema change: `npm run build -w @reflex/protocol` (rewrites `generated/`, including the Rust), then rebuild the kernel.
 
 ## API
 
@@ -28,7 +30,7 @@ sync_message(peer) -> bytes?   receive_sync_message(peer, bytes)   reset_sync(pe
 ```
 
 - **Owners** are `person:<id>` or `agent:<id>` (ADR-0008). They come from the caller's authenticated context and never from the batch.
-- **Agent IDs are scoped to the Agent.** Claude's `n-auth` is stored as `claude/n-auth`. Claude sees it as `n-auth`; everyone else sees `claude/n-auth`.
+- **Agent IDs are scoped to the Agent.** Claude's `n-auth` is stored as `claude/n-auth`. Claude sees it as `n-auth`; everyone else sees `claude:n-auth` (`/` is not in the protocol's ID alphabet). Both forms resolve.
 - **Agents change only their own Elements** and never a person's Ink. Only the person who drew a stroke can change or erase it.
 - **A batch is one atomic Automerge change.** Rejection is all or nothing and lists every failing op, each with a `fix`. Retrying the same request returns the first result. Reusing a request ID with different ops is rejected. The same request accepted on two replicas merges into one Element.
 - **Undo is per person, across devices.** History is one flat map keyed `<person>|<time>|<entry>`. Undo only reverts a field if it still holds the value that person wrote, so it never overwrites someone else's later change. A new action ends that person's redo chain: their undone entries become `abandoned` and are never redone.

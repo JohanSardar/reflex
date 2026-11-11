@@ -1,11 +1,6 @@
-//! Logical model of a Space.
-//!
-//! STAND-IN TYPES. The protocol schemas (T1, `protocol/`) are being written at
-//! the same time as this crate. Until they land, the Element shapes below are
-//! hand-written stand-ins that follow ARCHITECTURE §4.2 and gpt-sol §1.2. When
-//! `protocol/` lands, the serde types for ops and scene Elements are generated
-//! from it and replace the parsing in `ops.rs` and the projection in `scene.rs`.
-//! The CRDT mapping in `doc.rs` does not change shape when that happens.
+//! Logical model of a Space: principals and the record each Element is stored
+//! as. The wire shapes of ops and Elements are the protocol's, generated from
+//! `protocol/schema/` into `protocol.rs`.
 
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -15,13 +10,6 @@ pub const SAFE_INT: i64 = 9_007_199_254_740_991;
 
 /// Size limit for one Element's free `data` map, in bytes of compact JSON.
 pub const DATA_LIMIT_BYTES: usize = 16 * 1024;
-
-/// Built-in Element types the kernel understands in v0.
-/// Any other type is preserved as an extension type with opaque `props`.
-pub const BUILTIN_TYPES: &[&str] = &["ink", "text", "note", "shape", "connector"];
-
-/// Shapes a `shape` Element can take.
-pub const SHAPES: &[&str] = &["rect", "ellipse", "diamond", "pill"];
 
 /// A principal: a person or an Agent, each with a stable ID (ADR-0008).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]

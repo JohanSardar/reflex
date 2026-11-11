@@ -1,10 +1,16 @@
 //! Parsing `apply` batches and user intents into the kernel's internal ops.
 //!
-//! STAND-IN: the op shapes follow ARCHITECTURE §4.2 until T1's schemas land.
-//! Parsing never stops at the first problem: every failing op is reported, each
-//! with a `fix` (repair first, warn second, reject last).
+//! Agent ops are parsed through the protocol types generated from
+//! `protocol/schema/apply.input.schema.json` (see `protocol.rs`), so the kernel
+//! accepts exactly the shapes in the protocol. Each op is parsed on its own, so
+//! every failing op is reported, each with a `fix`.
+//!
+//! User intents come from devices (the iPad), not from Agents. They are the
+//! kernel's own API: a finished stroke, a move, an erase. Adds and patches from
+//! a device use the protocol's op shapes too.
 
-use crate::model::{BUILTIN_TYPES, SHAPES};
+use crate::model::has_text;
+use crate::protocol::{self as p, Code, UnionError};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -12,19 +18,28 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct OpError {
     pub op: usize,
-    pub code: String,
+    /// A JSON Pointer into the op, such as `/from`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    pub code: Code,
     pub msg: String,
     pub fix: String,
 }
 
 impl OpError {
-    pub fn new(op: usize, code: &str, msg: impl Into<String>, fix: impl Into<String>) -> Self {
+    pub fn new(op: usize, code: Code, msg: impl Into<String>, fix: impl Into<String>) -> Self {
         OpError {
             op,
-            code: code.into(),
+            field: None,
+            code,
             msg: msg.into(),
             fix: fix.into(),
         }
+    }
+
+    pub fn at(mut self, field: &str) -> Self {
+        self.field = Some(field.to_string());
+        self
     }
 }
 
@@ -35,28 +50,35 @@ pub enum Rel {
     Below,
     Above,
     Near,
+    Inside,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum At {
-    Abs { x: i64, y: i64 },
-    Rel { rel: Rel, target: String, gap: i64 },
+    Abs {
+        x: i64,
+        y: i64,
+    },
+    Rel {
+        rel: Rel,
+        target: String,
+        gap: Option<i64>,
+    },
 }
 
+/// A new Element. `fields` holds every typed field other than the envelope,
+/// under its protocol name; each becomes one CRDT register.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AddOp {
     pub id: Option<String>,
     pub typ: String,
-    pub text: Option<String>,
-    pub shape: Option<String>,
-    pub color: Option<String>,
-    pub from: Option<String>,
-    pub to: Option<String>,
     pub at: Option<At>,
     pub size: (Option<i64>, Option<i64>),
+    pub text: Option<String>,
+    pub from: Option<String>,
+    pub to: Option<String>,
     pub data: BTreeMap<String, Value>,
-    pub stroke: Option<Value>,
-    pub props: Option<Value>,
+    pub fields: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -64,16 +86,21 @@ pub struct PatchOp {
     pub target: String,
     pub set: Vec<(String, Value)>,
     pub unset: Vec<String>,
-    pub text_insert: Option<(usize, String)>,
-    pub text_delete: Option<(usize, usize)>,
-    pub map_put: Vec<(String, Value)>,
-    pub map_delete: Vec<String>,
+    pub text_insert: Vec<(String, usize, String)>,
+    pub text_delete: Vec<(String, usize, usize)>,
+    pub list_insert: Vec<(String, usize, Value)>,
+    pub list_move: Vec<(String, usize, usize)>,
+    pub list_remove: Vec<(String, usize)>,
+    pub map_put: Vec<(String, String, Value)>,
+    pub map_delete: Vec<(String, String)>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Layout {
     Row,
     Column,
+    Grid,
+    Tree,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -91,6 +118,9 @@ pub enum Op {
         refs: Vec<String>,
         layout: Layout,
         gap: i64,
+        columns: Option<i64>,
+        align: Option<String>,
+        at: Option<At>,
     },
     Focus {
         value: Value,
@@ -98,8 +128,7 @@ pub enum Op {
     Define {
         kind: String,
         name: String,
-        params: Value,
-        template: Value,
+        entry: Value,
     },
     ErasePrecise {
         target: String,
@@ -107,93 +136,26 @@ pub enum Op {
     },
 }
 
-/// Fields `patch.set` accepts.
-pub const SETTABLE: &[&str] = &[
-    "text", "color", "shape", "from", "to", "x", "y", "w", "h", "props",
-];
-
-struct P<'a> {
-    i: usize,
-    o: &'a Map<String, Value>,
-    errs: &'a mut Vec<OpError>,
+/// Every Element type the protocol defines.
+pub fn builtin_types() -> impl Iterator<Item = &'static str> {
+    p::ELEMENT_FIELDS
+        .iter()
+        .map(|(t, _)| *t)
+        .filter(|t| *t != "extension")
 }
 
-impl P<'_> {
-    fn err(&mut self, code: &str, msg: impl Into<String>, fix: impl Into<String>) {
-        self.errs.push(OpError::new(self.i, code, msg, fix));
-    }
-    fn allow(&mut self, allowed: &[&str]) {
-        for k in self.o.keys() {
-            if !allowed.contains(&k.as_str()) {
-                let list = allowed.join(", ");
-                self.err(
-                    "unknown_field",
-                    format!("ops[{}] has an unknown field '{k}'.", self.i),
-                    format!("Remove '{k}'. Allowed fields: {list}."),
-                );
-            }
-        }
-    }
-    fn str_opt(&mut self, k: &str) -> Option<String> {
-        match self.o.get(k) {
-            None | Some(Value::Null) => None,
-            Some(Value::String(s)) => Some(s.clone()),
-            Some(_) => {
-                self.err(
-                    "bad_value",
-                    format!("ops[{}].{k} must be a string.", self.i),
-                    format!("Pass {k} as a string."),
-                );
-                None
-            }
-        }
-    }
-    fn str_req(&mut self, k: &str, example: &str) -> Option<String> {
-        if !self.o.contains_key(k) {
-            self.err(
-                "missing_field",
-                format!("ops[{}] needs '{k}'.", self.i),
-                format!("Add \"{k}\": {example}."),
-            );
-            return None;
-        }
-        self.str_opt(k)
-    }
-    fn int_opt(&mut self, k: &str) -> Option<i64> {
-        match self.o.get(k) {
-            None | Some(Value::Null) => None,
-            Some(v) => match as_int(v) {
-                Some(i) => Some(i),
-                None => {
-                    self.err(
-                        "bad_value",
-                        format!("ops[{}].{k} must be an integer.", self.i),
-                        format!("Pass {k} as a whole number."),
-                    );
-                    None
-                }
-            },
-        }
-    }
-    fn refs(&mut self, k: &str) -> Vec<String> {
-        match self.o.get(k) {
-            Some(Value::Array(a)) if !a.is_empty() && a.iter().all(|v| v.is_string()) => a
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect(),
-            _ => {
-                self.err(
-                    "missing_field",
-                    format!(
-                        "ops[{}] needs '{k}', a non-empty list of Element IDs.",
-                        self.i
-                    ),
-                    format!("Add \"{k}\": [\"n-1\"]."),
-                );
-                vec![]
-            }
-        }
-    }
+/// The fields an Element of `typ` carries, from the protocol's Element schema.
+pub fn element_fields(typ: &str) -> &'static [&'static str] {
+    let name = if builtin_types().any(|t| t == typ) {
+        typ
+    } else {
+        "extension"
+    };
+    p::ELEMENT_FIELDS
+        .iter()
+        .find(|(t, _)| *t == name)
+        .map(|(_, f)| *f)
+        .unwrap_or(&[])
 }
 
 pub fn as_int(v: &Value) -> Option<i64> {
@@ -206,151 +168,354 @@ pub fn as_int(v: &Value) -> Option<i64> {
         .map(|f| f.round() as i64)
 }
 
-fn parse_at(p: &mut P) -> Option<At> {
-    let v = p.o.get("at")?;
-    let Some(o) = v.as_object() else {
-        p.err(
-            "bad_value",
-            format!("ops[{}].at must be an object.", p.i),
-            "Use at: {\"x\": 100, \"y\": 80} or at: {\"right_of\": \"n-1\"}.",
-        );
-        return None;
+pub fn placement(i: usize, pl: &p::Placement, field: &str) -> Result<At, OpError> {
+    let rels: Vec<(Rel, &String)> = [
+        (Rel::RightOf, &pl.right_of),
+        (Rel::LeftOf, &pl.left_of),
+        (Rel::Above, &pl.above),
+        (Rel::Below, &pl.below),
+        (Rel::Near, &pl.near),
+        (Rel::Inside, &pl.inside),
+    ]
+    .into_iter()
+    .filter_map(|(r, t)| t.as_ref().map(|t| (r, t)))
+    .collect();
+    let bad = |msg: &str| {
+        OpError::new(
+            i,
+            Code::InvalidPlacement,
+            format!("ops[{i}].{field}: {msg}"),
+            "Use one relation, such as {\"right_of\": \"n-1\", \"gap\": 40}, or {\"x\": 100, \"y\": 80}.",
+        )
+        .at(&format!("/{field}"))
     };
-    let gap = o.get("gap").and_then(as_int).unwrap_or(40);
-    for (name, rel) in [
-        ("right_of", Rel::RightOf),
-        ("left_of", Rel::LeftOf),
-        ("below", Rel::Below),
-        ("above", Rel::Above),
-        ("near", Rel::Near),
-    ] {
-        if let Some(t) = o.get(name) {
-            return match t.as_str() {
-                Some(t) => Some(At::Rel {
-                    rel,
-                    target: t.to_string(),
-                    gap,
-                }),
-                None => {
-                    p.err(
-                        "bad_value",
-                        format!("ops[{}].at.{name} must be an Element ID.", p.i),
-                        format!("Use at: {{\"{name}\": \"n-1\"}}."),
-                    );
-                    None
-                }
-            };
-        }
+    match (rels.as_slice(), pl.x, pl.y) {
+        ([(rel, target)], None, None) => Ok(At::Rel {
+            rel: *rel,
+            target: (*target).clone(),
+            gap: pl.gap,
+        }),
+        ([], Some(x), Some(y)) => Ok(At::Abs { x, y }),
+        ([], None, None) => Err(bad("no position.")),
+        ([], _, _) => Err(bad("x and y go together.")),
+        ([_], _, _) => Err(bad("a relation and x/y can't be combined.")),
+        _ => Err(bad("set exactly one relation.")),
     }
-    match (o.get("x").and_then(as_int), o.get("y").and_then(as_int)) {
-        (Some(x), Some(y)) => Some(At::Abs { x, y }),
-        _ => {
-            p.err(
-                "bad_value",
-                format!("ops[{}].at has no position.", p.i),
-                "Use at: {\"x\": 100, \"y\": 80}, or one of right_of, left_of, below, above, near.",
-            );
-            None
+}
+
+/// Turns a serde error message into an error the Agent can act on.
+fn serde_error(i: usize, variant: &str, error: &str) -> OpError {
+    let ticked =
+        |s: &str| -> Vec<String> { s.split('`').skip(1).step_by(2).map(String::from).collect() };
+    let parts = ticked(error);
+    if error.starts_with("unknown field") {
+        let f = parts.first().cloned().unwrap_or_default();
+        let allowed = parts[1..].join(", ");
+        OpError::new(
+            i,
+            Code::InvalidInput,
+            format!("ops[{i}] ({variant}) has no field '{f}'."),
+            format!("Remove '{f}'. Fields for {variant}: {allowed}."),
+        )
+        .at(&format!("/{f}"))
+    } else if error.starts_with("missing field") {
+        let f = parts.first().cloned().unwrap_or_default();
+        OpError::new(
+            i,
+            Code::InvalidInput,
+            format!("ops[{i}] ({variant}) needs '{f}'."),
+            format!("Add '{f}'."),
+        )
+        .at(&format!("/{f}"))
+    } else if error.starts_with("unknown variant") {
+        let v = parts.first().cloned().unwrap_or_default();
+        let allowed = parts[1..].join(", ");
+        OpError::new(
+            i,
+            Code::InvalidInput,
+            format!("ops[{i}] ({variant}): '{v}' is not an allowed value."),
+            format!("Use one of: {allowed}."),
+        )
+    } else {
+        OpError::new(
+            i,
+            Code::InvalidInput,
+            format!("ops[{i}] ({variant}): {error}."),
+            "Fix the value's type. read_me with the type name lists its fields.",
+        )
+    }
+}
+
+fn union_error(i: usize, v: &Value, e: UnionError) -> OpError {
+    let ops = "add, patch, remove, arrange, focus, define";
+    match e {
+        UnionError::NotAnObject => OpError::new(
+            i,
+            Code::InvalidInput,
+            format!("ops[{i}] is not an object."),
+            "Each op is an object with an \"op\" field.",
+        ),
+        UnionError::NoVariant { .. } => match v.get("op").and_then(Value::as_str) {
+            None => OpError::new(
+                i,
+                Code::InvalidInput,
+                format!("ops[{i}] has no op."),
+                format!("Set op to one of: {ops}."),
+            )
+            .at("/op"),
+            Some("add") => OpError::new(
+                i,
+                Code::InvalidInput,
+                format!("ops[{i}] adds an Element without a type."),
+                format!(
+                    "Set type to one of: {}.",
+                    builtin_types()
+                        .filter(|t| !["ink", "file"].contains(t))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+            .at("/type"),
+            Some("define") => OpError::new(
+                i,
+                Code::InvalidInput,
+                format!("ops[{i}] defines something without a known kind."),
+                "Set kind to \"recipe\" or \"embed\".",
+            )
+            .at("/kind"),
+            Some(other) => OpError::new(
+                i,
+                Code::InvalidInput,
+                format!("ops[{i}].op '{other}' is not an op."),
+                format!("Use one of: {ops}."),
+            )
+            .at("/op"),
+        },
+        UnionError::Invalid { variant, error } => {
+            let typ = v.get("type").and_then(Value::as_str).unwrap_or("");
+            if variant == "add extension" && v.get("props").is_none() {
+                return OpError::new(
+                    i,
+                    Code::UnknownType,
+                    format!("ops[{i}]: '{typ}' is not a built-in Element type."),
+                    format!(
+                        "Use one of: {}. Extension types need props; read_me(\"index\") lists them.",
+                        builtin_types()
+                            .filter(|t| !["ink", "file"].contains(t))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )
+                .at("/type");
+            }
+            serde_error(i, variant, &error)
         }
     }
 }
 
-fn parse_data(p: &mut P, k: &str) -> BTreeMap<String, Value> {
-    match p.o.get(k) {
-        None | Some(Value::Null) => BTreeMap::new(),
-        Some(Value::Object(m)) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-        Some(_) => {
-            p.err(
-                "bad_value",
-                format!("ops[{}].{k} must be an object.", p.i),
-                format!("Pass {k} as a JSON object, e.g. {{\"task\": \"T-12\"}}."),
-            );
-            BTreeMap::new()
-        }
+fn obj(v: Value) -> Map<String, Value> {
+    match v {
+        Value::Object(m) => m,
+        _ => Map::new(),
     }
 }
 
-pub fn parse_add(
-    i: usize,
-    o: &Map<String, Value>,
-    errs: &mut Vec<OpError>,
-    extra: &[&str],
-) -> Option<AddOp> {
-    let mut p = P { i, o, errs };
-    let mut allowed = vec![
-        "op", "intent", "id", "type", "text", "shape", "color", "from", "to", "at", "w", "h",
-        "data", "stroke", "props",
-    ];
-    allowed.extend_from_slice(extra);
-    p.allow(&allowed);
-    let typ = p.str_req("type", "\"shape\"")?;
-    let builtin = BUILTIN_TYPES.contains(&typ.as_str());
-    let add = AddOp {
-        id: p.str_opt("id"),
-        text: p.str_opt("text"),
-        shape: p.str_opt("shape"),
-        color: p.str_opt("color"),
-        from: p.str_opt("from"),
-        to: p.str_opt("to"),
-        at: parse_at(&mut p),
-        size: (p.int_opt("w"), p.int_opt("h")),
-        data: parse_data(&mut p, "data"),
-        stroke: p.o.get("stroke").cloned(),
-        props: p.o.get("props").cloned(),
+/// An add op, from its protocol form re-serialized as JSON.
+fn add_from(i: usize, v: Value) -> Result<AddOp, OpError> {
+    let mut m = obj(v);
+    m.remove("op");
+    let typ = m
+        .remove("type")
+        .and_then(|t| t.as_str().map(String::from))
+        .unwrap_or_default();
+    let at = match m.remove("at") {
+        Some(a) => {
+            let pl: p::Placement = serde_json::from_value(a).map_err(|e| {
+                OpError::new(i, Code::InvalidPlacement, e.to_string(), "Fix at.").at("/at")
+            })?;
+            Some(placement(i, &pl, "at")?)
+        }
+        None => None,
+    };
+    let int = |m: &mut Map<String, Value>, k: &str| m.remove(k).as_ref().and_then(as_int);
+    let size = (int(&mut m, "w"), int(&mut m, "h"));
+    let id = m.remove("id").and_then(|v| v.as_str().map(String::from));
+    let text = if has_text(&typ) {
+        m.remove("text").and_then(|v| v.as_str().map(String::from))
+    } else {
+        None
+    };
+    let from = m.remove("from").and_then(|v| v.as_str().map(String::from));
+    let to = m.remove("to").and_then(|v| v.as_str().map(String::from));
+    let data = obj(m.remove("data").unwrap_or(Value::Null))
+        .into_iter()
+        .collect();
+    Ok(AddOp {
+        id,
         typ,
-    };
-    if builtin && add.props.is_some() {
-        p.err(
-            "bad_field",
-            format!(
-                "ops[{i}]: built-in type '{}' has typed fields, not props.",
-                add.typ
-            ),
-            "Move the values out of props to top-level fields.",
-        );
+        at,
+        size,
+        text,
+        from,
+        to,
+        data,
+        fields: m.into_iter().collect(),
+    })
+}
+
+fn patch_from(op: &p::OpPatch) -> PatchOp {
+    PatchOp {
+        target: op.id.clone(),
+        set: op
+            .set
+            .as_ref()
+            .map(|s| obj(serde_json::to_value(s).unwrap_or(Value::Null)))
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+        unset: op
+            .unset
+            .iter()
+            .flatten()
+            .map(|u| u.as_str().to_string())
+            .collect(),
+        text_insert: op
+            .text_insert
+            .iter()
+            .flatten()
+            .map(|t| {
+                (
+                    t.field.as_str().into(),
+                    t.at.max(0) as usize,
+                    t.text.clone(),
+                )
+            })
+            .collect(),
+        text_delete: op
+            .text_delete
+            .iter()
+            .flatten()
+            .map(|t| {
+                (
+                    t.field.as_str().into(),
+                    t.at.max(0) as usize,
+                    t.len.max(0) as usize,
+                )
+            })
+            .collect(),
+        list_insert: op
+            .list_insert
+            .iter()
+            .flatten()
+            .map(|l| {
+                (
+                    l.field.as_str().into(),
+                    l.index.max(0) as usize,
+                    l.value.clone(),
+                )
+            })
+            .collect(),
+        list_move: op
+            .list_move
+            .iter()
+            .flatten()
+            .map(|l| {
+                (
+                    l.field.as_str().into(),
+                    l.from.max(0) as usize,
+                    l.to.max(0) as usize,
+                )
+            })
+            .collect(),
+        list_remove: op
+            .list_remove
+            .iter()
+            .flatten()
+            .map(|l| (l.field.as_str().into(), l.index.max(0) as usize))
+            .collect(),
+        map_put: op
+            .map_put
+            .iter()
+            .flatten()
+            .map(|m| (m.field.as_str().into(), m.key.clone(), m.value.clone()))
+            .collect(),
+        map_delete: op
+            .map_delete
+            .iter()
+            .flatten()
+            .map(|m| (m.field.as_str().into(), m.key.clone()))
+            .collect(),
     }
-    if let Some(s) = &add.shape {
-        if !SHAPES.contains(&s.as_str()) {
-            p.err(
-                "bad_value",
-                format!("ops[{i}]: unknown shape '{s}'."),
-                format!("Use one of: {}.", SHAPES.join(", ")),
-            );
-        }
-    }
-    match add.typ.as_str() {
-        "connector" => {
-            if add.from.is_none() || add.to.is_none() {
-                p.err(
-                    "missing_field",
-                    format!("ops[{i}]: a connector needs 'from' and 'to'."),
-                    "Add \"from\": \"n-a\", \"to\": \"n-b\".",
-                );
+}
+
+/// One protocol op into the kernel's internal op.
+fn convert(i: usize, op: &p::Op) -> Result<Op, OpError> {
+    let value = || serde_json::to_value(op).unwrap_or(Value::Null);
+    Ok(match op {
+        p::Op::AddText(_)
+        | p::Op::AddNote(_)
+        | p::Op::AddMath(_)
+        | p::Op::AddShape(_)
+        | p::Op::AddConnector(_)
+        | p::Op::AddImage(_)
+        | p::Op::AddFrame(_)
+        | p::Op::AddRegion(_)
+        | p::Op::AddEmbed(_)
+        | p::Op::AddExtension(_) => Op::Add(add_from(i, value())?),
+        p::Op::Patch(pt) => Op::Patch(patch_from(pt)),
+        p::Op::Remove(r) => Op::Remove {
+            refs: r.ids.clone(),
+        },
+        p::Op::Arrange(a) => Op::Arrange {
+            refs: a.ids.clone(),
+            layout: match a.layout {
+                p::OpArrangeLayout::Row => Layout::Row,
+                p::OpArrangeLayout::Column => Layout::Column,
+                p::OpArrangeLayout::Grid => Layout::Grid,
+                p::OpArrangeLayout::Tree => Layout::Tree,
+            },
+            gap: a.gap.unwrap_or(40),
+            columns: a.columns,
+            align: a.align.map(|al| al.as_str().to_string()),
+            at: a.at.as_ref().map(|pl| placement(i, pl, "at")).transpose()?,
+        },
+        p::Op::Focus(_) => {
+            let mut m = obj(value());
+            m.remove("op");
+            Op::Focus {
+                value: Value::Object(m),
             }
         }
-        "ink" => match add
-            .stroke
-            .as_ref()
-            .and_then(|s| s.get("points"))
-            .and_then(|v| v.as_array())
-        {
-            Some(pts) if !pts.is_empty() && pts.iter().all(point_ok) => {}
-            _ => p.err(
-                "missing_field",
-                format!("ops[{i}]: Ink needs stroke.points, a list of [x, y] or [x, y, pressure]."),
-                "Add \"stroke\": {\"points\": [[0,0],[10,12]], \"width\": 3}.",
-            ),
-        },
-        _ => {}
+        p::Op::DefineRecipe(_) | p::Op::DefineEmbed(_) => {
+            let mut m = obj(value());
+            m.remove("op");
+            Op::Define {
+                kind: m["kind"].as_str().unwrap_or("").to_string(),
+                name: m["name"].as_str().unwrap_or("").to_string(),
+                entry: Value::Object(m),
+            }
+        }
+    })
+}
+
+/// Parses an Agent's `apply` ops. Returns one slot per op (None where the op
+/// failed to parse) and every parse error.
+pub fn parse_agent_ops(ops: &[Value]) -> (Vec<Option<Op>>, Vec<OpError>) {
+    let mut errs = vec![];
+    let mut out = vec![];
+    for (i, v) in ops.iter().enumerate() {
+        let parsed = p::Op::parse(v)
+            .map_err(|e| union_error(i, v, e))
+            .and_then(|op| convert(i, &op));
+        match parsed {
+            Ok(op) => out.push(Some(op)),
+            Err(e) => {
+                errs.push(e);
+                out.push(None);
+            }
+        }
     }
-    if !builtin && add.props.as_ref().is_some_and(|v| !v.is_object()) {
-        p.err(
-            "bad_value",
-            format!("ops[{i}]: props must be an object."),
-            "Pass props as a JSON object.",
-        );
-    }
-    Some(add)
+    (out, errs)
 }
 
 fn point_ok(v: &Value) -> bool {
@@ -359,260 +524,90 @@ fn point_ok(v: &Value) -> bool {
     })
 }
 
-fn parse_patch(i: usize, o: &Map<String, Value>, errs: &mut Vec<OpError>) -> Option<PatchOp> {
-    let mut p = P { i, o, errs };
-    p.allow(&[
-        "op",
-        "intent",
-        "id",
-        "set",
-        "unset",
-        "text_insert",
-        "text_delete",
-        "map_put",
-        "map_delete",
-        "list_insert",
-        "list_move",
-        "list_remove",
-    ]);
-    for k in ["list_insert", "list_move", "list_remove"] {
-        if p.o.contains_key(k) {
-            p.err(
-                "no_list_field",
-                format!("ops[{i}].{k}: no v0 Element type has a list field."),
-                "Use set for scalar fields or map_put for data.",
-            );
-        }
-    }
-    let target = p.str_req("id", "\"n-1\"")?;
-    let mut patch = PatchOp {
-        target,
-        ..Default::default()
-    };
-    if let Some(v) = p.o.get("set") {
-        match v.as_object() {
-            Some(m) => {
-                for (k, v) in m {
-                    if SETTABLE.contains(&k.as_str()) {
-                        patch.set.push((k.clone(), v.clone()));
-                    } else {
-                        p.err(
-                            "bad_field",
-                            format!("ops[{i}].set.{k} is not a field that set can change."),
-                            format!(
-                                "Settable fields: {}. Use map_put for your own data.",
-                                SETTABLE.join(", ")
-                            ),
-                        );
-                    }
-                }
-            }
-            None => p.err(
-                "bad_value",
-                format!("ops[{i}].set must be an object."),
-                "Use set: {\"text\": \"Postgres\"}.",
-            ),
-        }
-    }
-    if let Some(v) = p.o.get("unset") {
-        match v.as_array() {
-            Some(a) => {
-                for k in a.iter().filter_map(|v| v.as_str()) {
-                    if ["color", "props"].contains(&k) {
-                        patch.unset.push(k.to_string());
-                    } else {
-                        p.err(
-                            "bad_field",
-                            format!("ops[{i}].unset: '{k}' cannot be unset."),
-                            "Only color and props can be unset.",
-                        );
-                    }
-                }
-            }
-            None => p.err(
-                "bad_value",
-                format!("ops[{i}].unset must be a list of field names."),
-                "Use unset: [\"color\"].",
-            ),
-        }
-    }
-    if let Some(v) = p.o.get("text_insert") {
-        match (
-            v.get("at").and_then(as_int),
-            v.get("text").and_then(|t| t.as_str()),
-        ) {
-            (Some(at), Some(t)) if at >= 0 => {
-                patch.text_insert = Some((at as usize, t.to_string()))
-            }
-            _ => p.err(
-                "bad_value",
-                format!("ops[{i}].text_insert needs at (a UTF-16 index) and text."),
-                "Use text_insert: {\"at\": 0, \"text\": \"Hello \"}.",
-            ),
-        }
-    }
-    if let Some(v) = p.o.get("text_delete") {
-        match (v.get("at").and_then(as_int), v.get("len").and_then(as_int)) {
-            (Some(at), Some(len)) if at >= 0 && len >= 0 => {
-                patch.text_delete = Some((at as usize, len as usize))
-            }
-            _ => p.err(
-                "bad_value",
-                format!("ops[{i}].text_delete needs at and len (UTF-16 units)."),
-                "Use text_delete: {\"at\": 0, \"len\": 5}.",
-            ),
-        }
-    }
-    patch.map_put = parse_data(&mut p, "map_put").into_iter().collect();
-    if let Some(v) = p.o.get("map_delete") {
-        match v.as_array() {
-            Some(a) => {
-                patch.map_delete = a
-                    .iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            }
-            None => p.err(
-                "bad_value",
-                format!("ops[{i}].map_delete must be a list of keys."),
-                "Use map_delete: [\"score\"].",
-            ),
-        }
-    }
-    Some(patch)
-}
-
-fn parse_by(p: &mut P) -> Option<[i64; 2]> {
-    match p.o.get("by").and_then(|v| v.as_array()) {
-        Some(a) if a.len() == 2 => Some([as_int(&a[0])?, as_int(&a[1])?]),
-        _ => {
-            p.err(
-                "missing_field",
-                format!("ops[{}] needs 'by': [dx, dy].", p.i),
-                "Add \"by\": [120, 0].",
-            );
-            None
-        }
-    }
-}
-
-/// Parses an Agent's `apply` ops.
-pub fn parse_agent_ops(ops: &[Value]) -> (Vec<Option<Op>>, Vec<OpError>) {
-    let mut errs = vec![];
-    let mut out = vec![];
-    for (i, v) in ops.iter().enumerate() {
-        let Some(o) = v.as_object() else {
+/// A finished stroke from a device: `{id, stroke: {points, width?}, tool?, color?, width?}`.
+/// Points are `[x, y]`, `[x, y, pressure]` or `[x, y, t, pressure]`.
+fn parse_ink(o: &Map<String, Value>, errs: &mut Vec<OpError>) -> Option<AddOp> {
+    for k in o.keys() {
+        if !["intent", "id", "stroke", "tool", "color", "width"].contains(&k.as_str()) {
             errs.push(OpError::new(
-                i,
-                "bad_op",
-                format!("ops[{i}] is not an object."),
-                "Each op is an object with an \"op\" field.",
+                0,
+                Code::InvalidInput,
+                format!("A stroke has no field '{k}'."),
+                "Pass id, stroke, tool, color and width.",
             ));
-            out.push(None);
-            continue;
-        };
-        let kind = o.get("op").and_then(|v| v.as_str()).unwrap_or("");
-        let op = match kind {
-            "add" => parse_add(i, o, &mut errs, &[]).map(Op::Add),
-            "patch" => parse_patch(i, o, &mut errs).map(Op::Patch),
-            "remove" => {
-                let mut p = P {
-                    i,
-                    o,
-                    errs: &mut errs,
-                };
-                p.allow(&["op", "ids"]);
-                Some(Op::Remove {
-                    refs: p.refs("ids"),
-                })
-            }
-            "arrange" => {
-                let mut p = P {
-                    i,
-                    o,
-                    errs: &mut errs,
-                };
-                p.allow(&["op", "ids", "layout", "gap"]);
-                let refs = p.refs("ids");
-                let layout = match p.str_opt("layout").as_deref() {
-                    None | Some("row") => Some(Layout::Row),
-                    Some("column") => Some(Layout::Column),
-                    Some(other) => {
-                        p.err(
-                            "bad_value",
-                            format!("ops[{i}]: unknown layout '{other}'."),
-                            "Use layout \"row\" or \"column\".",
-                        );
-                        None
-                    }
-                };
-                let gap = p.int_opt("gap").unwrap_or(40);
-                layout.map(|layout| Op::Arrange { refs, layout, gap })
-            }
-            "focus" => {
-                let mut p = P {
-                    i,
-                    o,
-                    errs: &mut errs,
-                };
-                p.allow(&["op", "ids", "bounds"]);
-                let mut m = o.clone();
-                m.remove("op");
-                Some(Op::Focus {
-                    value: Value::Object(m),
-                })
-            }
-            "define" => {
-                let mut p = P {
-                    i,
-                    o,
-                    errs: &mut errs,
-                };
-                p.allow(&["op", "kind", "name", "params", "template"]);
-                let kind = p.str_req("kind", "\"recipe\"");
-                let name = p.str_req("name", "\"check-my-work\"");
-                if let Some(k) = &kind {
-                    if k != "recipe" && k != "embed" {
-                        p.err(
-                            "bad_value",
-                            format!("ops[{i}]: define kind '{k}' is unknown."),
-                            "Use kind \"recipe\" or \"embed\".",
-                        );
-                    }
-                }
-                if !o.contains_key("template") {
-                    p.err(
-                        "missing_field",
-                        format!("ops[{i}]: define needs a template."),
-                        "Add \"template\": the ops or HTML to save.",
-                    );
-                }
-                match (kind, name) {
-                    (Some(kind), Some(name)) => Some(Op::Define {
-                        kind,
-                        name,
-                        params: o
-                            .get("params")
-                            .cloned()
-                            .unwrap_or(Value::Object(Map::new())),
-                        template: o.get("template").cloned().unwrap_or(Value::Null),
-                    }),
-                    _ => None,
-                }
-            }
-            other => {
-                errs.push(OpError::new(
-                    i,
-                    "unknown_op",
-                    format!("ops[{i}].op '{other}' is not an op."),
-                    "Use one of: add, patch, remove, arrange, focus, define.",
-                ));
-                None
-            }
-        };
-        out.push(op);
+        }
     }
-    (out, errs)
+    let id = o.get("id").and_then(Value::as_str).map(String::from);
+    if id.is_none() {
+        errs.push(OpError::new(
+            0,
+            Code::InvalidInput,
+            "A finished stroke needs its stable stroke ID.",
+            "Pass the PencilKit stroke ID as \"id\".",
+        ));
+    }
+    let stroke = o.get("stroke").cloned().unwrap_or(Value::Null);
+    match stroke.get("points").and_then(Value::as_array) {
+        Some(pts) if !pts.is_empty() && pts.iter().all(point_ok) => {}
+        _ => errs.push(OpError::new(
+            0,
+            Code::InvalidInput,
+            "Ink needs stroke.points, a list of [x, y], [x, y, pressure] or [x, y, t, pressure].",
+            "Add \"stroke\": {\"points\": [[0,0],[10,12]], \"width\": 3}.",
+        )),
+    }
+    let mut fields = BTreeMap::new();
+    fields.insert("stroke".to_string(), stroke.clone());
+    fields.insert(
+        "tool".to_string(),
+        o.get("tool")
+            .cloned()
+            .unwrap_or(Value::String("pen".into())),
+    );
+    for k in ["color", "width"] {
+        if let Some(v) = o.get(k) {
+            fields.insert(k.to_string(), v.clone());
+        }
+    }
+    if !fields.contains_key("width") {
+        if let Some(w) = stroke.get("width") {
+            fields.insert("width".to_string(), w.clone());
+        }
+    }
+    Some(AddOp {
+        id,
+        typ: "ink".into(),
+        fields,
+        ..Default::default()
+    })
+}
+
+fn refs(o: &Map<String, Value>, k: &str, errs: &mut Vec<OpError>) -> Vec<String> {
+    match o.get(k) {
+        Some(Value::Array(a)) if !a.is_empty() && a.iter().all(|v| v.is_string()) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        _ => {
+            errs.push(OpError::new(
+                0,
+                Code::InvalidInput,
+                format!("The intent needs '{k}', a non-empty list of Element IDs."),
+                format!("Add \"{k}\": [\"n-1\"]."),
+            ));
+            vec![]
+        }
+    }
+}
+
+/// A device's add or patch, in the protocol's op shape (with `intent` in place of `op`).
+fn protocol_op(o: &Map<String, Value>, op: &str) -> Result<Op, OpError> {
+    let mut m = o.clone();
+    m.remove("intent");
+    m.insert("op".into(), Value::String(op.into()));
+    let v = Value::Object(m);
+    let parsed = p::Op::parse(&v).map_err(|e| union_error(0, &v, e))?;
+    convert(0, &parsed)
 }
 
 /// Parses one user intent from a device. Undo and redo are handled by the caller.
@@ -621,91 +616,84 @@ pub fn parse_intent(v: &Value) -> Result<Op, Vec<OpError>> {
     let Some(o) = v.as_object() else {
         return Err(vec![OpError::new(
             0,
-            "bad_intent",
+            Code::InvalidInput,
             "The intent is not an object.",
             "Pass {\"intent\": \"add_stroke\", ...}.",
         )]);
     };
-    let kind = o.get("intent").and_then(|v| v.as_str()).unwrap_or("");
+    let kind = o.get("intent").and_then(Value::as_str).unwrap_or("");
     let op = match kind {
-        "add_stroke" => {
-            let mut m = o.clone();
-            m.insert("type".into(), Value::String("ink".into()));
-            let add = parse_add(0, &m, &mut errs, &[]);
-            if add.as_ref().is_some_and(|a| a.id.is_none()) {
+        "add_stroke" => parse_ink(o, &mut errs).map(Op::Add),
+        "add" => match protocol_op(o, "add") {
+            Ok(Op::Add(a)) if a.id.is_some() => Some(Op::Add(a)),
+            Ok(_) => {
                 errs.push(OpError::new(
                     0,
-                    "missing_field",
-                    "A finished stroke needs its stable stroke ID.",
-                    "Pass the PencilKit stroke ID as \"id\".",
-                ));
-            }
-            add.map(Op::Add)
-        }
-        "add" => {
-            let add = parse_add(0, o, &mut errs, &[]);
-            if add.as_ref().is_some_and(|a| a.id.is_none()) {
-                errs.push(OpError::new(
-                    0,
-                    "missing_field",
+                    Code::InvalidInput,
                     "A device-added Element needs an ID.",
                     "Generate a UUID on the device and pass it as \"id\".",
                 ));
+                None
             }
-            add.map(Op::Add)
-        }
-        "patch" => parse_patch(0, o, &mut errs).map(Op::Patch),
+            Err(e) => {
+                errs.push(e);
+                None
+            }
+        },
+        "patch" => match protocol_op(o, "patch") {
+            Ok(op) => Some(op),
+            Err(e) => {
+                errs.push(e);
+                None
+            }
+        },
         "move" => {
-            let mut p = P {
-                i: 0,
-                o,
-                errs: &mut errs,
-            };
-            p.allow(&["intent", "ids", "by"]);
-            let refs = p.refs("ids");
-            parse_by(&mut p).map(|by| Op::Move { refs, by })
+            let r = refs(o, "ids", &mut errs);
+            match o.get("by").and_then(Value::as_array) {
+                Some(a) if a.len() == 2 => match (as_int(&a[0]), as_int(&a[1])) {
+                    (Some(dx), Some(dy)) => Some(Op::Move {
+                        refs: r,
+                        by: [dx, dy],
+                    }),
+                    _ => None,
+                },
+                _ => {
+                    errs.push(OpError::new(
+                        0,
+                        Code::InvalidInput,
+                        "move needs 'by': [dx, dy].",
+                        "Add \"by\": [120, 0].",
+                    ));
+                    None
+                }
+            }
         }
-        "erase" | "remove" => {
-            let mut p = P {
-                i: 0,
-                o,
-                errs: &mut errs,
-            };
-            p.allow(&["intent", "ids"]);
-            Some(Op::Remove {
-                refs: p.refs("ids"),
-            })
-        }
+        "erase" | "remove" => Some(Op::Remove {
+            refs: refs(o, "ids", &mut errs),
+        }),
         "erase_precise" => {
-            let mut p = P {
-                i: 0,
-                o,
-                errs: &mut errs,
-            };
-            p.allow(&["intent", "id", "fragments"]);
-            let target = p.str_req("id", "\"stroke-id\"");
+            let target = o.get("id").and_then(Value::as_str).map(String::from);
+            if target.is_none() {
+                errs.push(OpError::new(
+                    0,
+                    Code::InvalidInput,
+                    "erase_precise needs the erased stroke's id.",
+                    "Pass \"id\": \"<stroke id>\".",
+                ));
+            }
             let mut fragments = vec![];
-            match o.get("fragments").and_then(|v| v.as_array()) {
+            match o.get("fragments").and_then(Value::as_array) {
                 Some(a) => {
                     for f in a {
-                        let mut m = f.as_object().cloned().unwrap_or_default();
-                        m.insert("type".into(), Value::String("ink".into()));
-                        if let Some(add) = parse_add(0, &m, &mut errs, &[]) {
-                            if add.id.is_none() {
-                                errs.push(OpError::new(
-                                    0,
-                                    "missing_field",
-                                    "Each fragment needs its stable stroke ID.",
-                                    "Pass the fragment's PencilKit stroke ID as \"id\".",
-                                ));
-                            }
+                        let m = f.as_object().cloned().unwrap_or_default();
+                        if let Some(add) = parse_ink(&m, &mut errs) {
                             fragments.push(add);
                         }
                     }
                 }
                 None => errs.push(OpError::new(
                     0,
-                    "missing_field",
+                    Code::InvalidInput,
                     "erase_precise needs fragments (possibly empty).",
                     "Pass \"fragments\": [] when nothing is left.",
                 )),
@@ -715,7 +703,7 @@ pub fn parse_intent(v: &Value) -> Result<Op, Vec<OpError>> {
         other => {
             errs.push(OpError::new(
                 0,
-                "unknown_intent",
+                Code::InvalidInput,
                 format!("'{other}' is not a user intent."),
                 "Use add_stroke, add, patch, move, erase, erase_precise, undo or redo.",
             ));

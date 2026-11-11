@@ -10,6 +10,7 @@ use crate::apply::Edit;
 use crate::doc;
 use crate::model::{Principal, Record};
 use crate::ops::OpError;
+use crate::protocol::Code;
 use automerge::transaction::{Transactable, Transaction};
 use serde_json::{json, Value};
 
@@ -79,7 +80,7 @@ pub fn freeze(
     let Some(send_id) = raw.get("send").and_then(|v| v.as_str()) else {
         return Err(FreezeError::Rejected(vec![OpError::new(
             0,
-            "missing_field",
+            Code::InvalidInput,
             "A raw Send needs its ID.",
             "Generate a Send ID on the device and pass it as \"send\".",
         )]));
@@ -110,7 +111,7 @@ pub fn freeze(
                 }
                 _ => errs.push(OpError::new(
                     0,
-                    "unknown_id",
+                    Code::UnknownId,
                     format!("'{s}' is not one of your strokes."),
                     "Pass the IDs of strokes you drew.",
                 )),
