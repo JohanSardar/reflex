@@ -38,6 +38,9 @@ import { startWebViewer } from "./web.ts";
 import { RelayTransport, roomFor } from "./transports/relay.ts";
 import type { Transport } from "./transports/transport.ts";
 import { RelaySync } from "./relay/sync.ts";
+import { Shares } from "./sharing.ts";
+import { SharedSpaces } from "./shared.ts";
+import { Here, type HereMessage } from "./here.ts";
 
 export class LinkError extends Error {
   reason: string;
@@ -101,6 +104,9 @@ export class Link {
   #relayT: RelayTransport | null = null;
   /** A sign-in the person is approving in this terminal, step by step. */
   #signIn: ((line: string) => Promise<void>) | null = null;
+  #shares!: Shares;
+  #shared!: SharedSpaces;
+  #here!: Here;
 
   constructor(opts: LinkOptions) {
     this.#opts = opts;
@@ -121,6 +127,7 @@ export class Link {
     this.#store = new SpaceStore(db, this.#id.actor, this.#inbox);
     this.#assets = new AssetStore(this.home.assets);
     this.#catalog = new Catalog(db, this.#id.key);
+    this.#shares = new Shares(this.#catalog, () => ({ person: this.#id.person, key: this.#id.key }));
     // Who each recovered Send goes to (link/routing.ts).
     this.#inbox.recipientsFor = (space, send) => route(db, this.#store, space, send);
     const rec = this.#store.recover();
@@ -147,6 +154,11 @@ export class Link {
         key: this.#id.key,
         person: () => this.#id.person,
         connected: (device) => this.#coord.peers().some((p) => p.device === device),
+        // A Space this person was removed from no longer goes to its log.
+        syncs: (space) => this.#shares.myRole(space) !== null,
+        role: (space) => this.#shares.myRole(space),
+        writers: (d, space) => this.#shares.writers(d, space),
+        device: (id, space) => this.#shared.device(id, space),
         log: this.#log,
       });
     }
@@ -156,12 +168,44 @@ export class Link {
       assets: this.#assets,
       catalog: this.#catalog,
       offers: this.#offers,
+      shares: this.#shares,
       transports,
       log: this.#log,
     });
+    this.#shared = new SharedSpaces({
+      shares: this.#shares,
+      store: this.#store,
+      catalog: this.#catalog,
+      coord: this.#coord,
+      relay: this.#relay,
+      relayUrl: this.#relayT?.url ?? null,
+      me: () => ({ person: this.#id.person, key: this.#id.key, name: this.#id.name }),
+      lanPort: () => this.#ports.lan,
+      log: this.#log,
+    });
+    this.#shared.onChanged = () => this.#sharesChanged();
+    // Who is here, in each Space (here.ts): routed on the same sessions as changes.
+    this.#here = new Here({
+      send: (to, m) => void this.#coord.peers().find((p) => p.device === to)?.session.send({ t: "here", ...m }, undefined, "control").catch(() => {}),
+      peers: (space) =>
+        this.#coord.peers().flatMap((p) => {
+          const d = this.#catalog.device(p.device);
+          if (!d || (space && !this.#shares.allowed(d, space))) return [];
+          return [{ device: p.device, own: d.person.id === this.#id.person.id, link: d.kind !== "ipad" }];
+        }),
+      owns: (space) => this.#shares.owns(space),
+      web: (m) => this.#web?.here(m),
+    });
+    this.#coord.onUnbound = (p) => this.#here.dropped(p.device);
+    if (this.#relay) this.#coord.receiving = (space, apply) => this.#relay!.aside(space, apply);
     // Tell each device where this person's devices meet when the LAN can't reach them.
     this.#coord.onBound = (p) => {
-      if (!this.#relayT) return;
+      const own = this.#catalog.device(p.device)?.person.id === this.#id.person.id;
+      // Membership records first, so a member's Link holds the Space before the coordinator announces it.
+      this.#shared.bound(p);
+      if (own && this.#catalog.device(p.device)?.kind === "ipad") this.#sendShares(p);
+      this.#here.replay(p.device);
+      if (!this.#relayT || !own) return;
       void p.session.send({ t: "relay", url: this.#relayT.url, room: roomFor(this.#id.person.id) }, undefined, "control").catch(() => {});
       // Another Link of this person keeps the same log: it gets the Space keys, end to end.
       const d = this.#catalog.device(p.device);
@@ -172,8 +216,18 @@ export class Link {
     const presence = new Presence(() => new Set(this.#coord.peers().map((p) => p.device)));
     this.#coord.onMessage = (p, h) => {
       const d = this.#catalog.device(p.device);
-      if (d?.kind === "ipad" && d.person.id === this.#id.person.id && presence.receive(p.device, h)) return;
-      if (h.t === "relay_keys" && this.#relay && d?.kind === "link" && d.person.id === this.#id.person.id) this.#relay.importKeys(h.keys as { space: string; key: string }[], p.name);
+      const ownIpad = d?.kind === "ipad" && d.person.id === this.#id.person.id;
+      if (ownIpad && h.t === "presence") this.#here.local(p.device, this.#id.person, d.name, h);
+      if (ownIpad && presence.receive(p.device, h)) return;
+      if (ownIpad) return void this.#ipadMessage(p, d, h);
+      if (d?.kind !== "link") return;
+      if (this.#shared.message(p, h)) return;
+      if (h.t === "here")
+        // Another person's Link speaks only for its person, unless it is the owner's Link passing on the others'.
+        return this.#here.remote(p.device, h, (space, person) => this.#shares.allowed(d, space) && (d.person.id === this.#id.person.id || person === d.person.id || this.#shares.get(space)?.device === d.device));
+      // Keys of shared Spaces come with their share records, from the owner.
+      if (h.t === "relay_keys" && this.#relay && d.person.id === this.#id.person.id)
+        this.#relay.importKeys(h.keys as { space: string; key: string }[], p.name, (space) => this.#shares.get(space) !== undefined);
     };
     this.#coord.onPaired((d) => process.stdout.write(`\nPaired with ${d.name} (${d.device}).\n`));
     this.#coord.pendingAgents = () => this.#catalog.agents().filter((a) => a.status === "pending").map(({ id, name, color }) => ({ id, name, color }));
@@ -193,6 +247,8 @@ export class Link {
       socket: agentSocketPath(this.dir),
       token: this.#keys.rpc,
       devPerson: Boolean(this.#opts.dev),
+      // Someone else's Space shared with this person: this person's own Agents don't see it.
+      hidden: (space) => !this.#shares.owns(space),
       presence: () => ({
         devices: this.#coord.peers().filter((p) => this.#catalog.devices().find((d) => d.device === p.device)?.kind !== "link").length,
         viewing: presence.viewing(),
@@ -205,10 +261,21 @@ export class Link {
     });
     this.#agentServer = host.server;
     this.#push = host;
+    this.#nameMembers();
     this.#ports = (await this.#coord.start()).ports;
+    this.#shared.start();
     await this.#listen();
     if (this.#opts.webPort !== null)
-      this.#web = await startWebViewer({ store: this.#store, assets: this.#assets, catalog: this.#catalog, person: () => this.#id.person, port: this.#opts.webPort ?? 7421, log: this.#log });
+      this.#web = await startWebViewer({
+        store: this.#store,
+        assets: this.#assets,
+        catalog: this.#catalog,
+        person: () => this.#id.person,
+        people: () => this.#shared.people(),
+        here: () => this.#here.all(),
+        port: this.#opts.webPort ?? 7421,
+        log: this.#log,
+      });
     writeFileSync(
       this.home.runtime,
       JSON.stringify({ pid: process.pid, socket: this.home.socket, lan: this.#ports.lan, device: this.#id.key.device }, null, 2),
@@ -230,6 +297,7 @@ export class Link {
     this.#rl.on("line", (line) => {
       if (this.#signIn) return void this.#signIn(line);
       if (this.#relay && /^\s*[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}\s*$/.test(line)) return void this.#approveSignIn(line.trim().toUpperCase());
+      if (/^\s*(invite|role|remove|shares)\b/i.test(line)) return void this.#shareCommand(line.trim());
       const a = this.#questions[0];
       if (a && this.#catalog.agent(a.id)?.status === "pending" && /^(y(es)?|n(o)?)$/i.test(line.trim())) {
         this.#questions.shift();
@@ -241,6 +309,99 @@ export class Link {
     });
     if (this.#ports.lan !== undefined) void this.showPairingCode();
     if (this.#relay) process.stdout.write("\nTo let a cloud Agent in through the Relay, type the code its sign-in page shows.\n");
+    process.stdout.write("To share a Space with someone: invite <space> [editor|viewer]. Then role <space> <person> <editor|viewer>, remove <space> <person>, shares.\n");
+  }
+
+  /** The person shares a Space from this terminal: invite, role, remove, shares. */
+  #shareCommand(line: string): void {
+    const [cmd, space = "", a = "", b = ""] = line.split(/\s+/);
+    const say = (m: string): void => void process.stdout.write(m);
+    try {
+      switch (cmd.toLowerCase()) {
+        case "invite": {
+          const role = a === "viewer" ? "viewer" : "editor";
+          const inv = this.#shared.invite(space, role);
+          void qrText(inv.uri).then((qr) =>
+            say(`\nInvite to '${space}' as ${role === "editor" ? "an editor" : "a viewer"} (single use, 24 hours). Send it to them; they open it on their iPad or run \`reflex link join '<invite>'\`.\n\n${qr}\n${inv.uri}\n`),
+          );
+          return;
+        }
+        case "role":
+          if (b !== "editor" && b !== "viewer") return say("Usage: role <space> <person> <editor|viewer>\n");
+          this.#shared.setRole(space, this.#personId(space, a), b);
+          return say(`Done.\n`);
+        case "remove":
+          this.#shared.remove(space, this.#personId(space, a));
+          return say(`Removed. '${space}' has a new key; their devices get nothing new from now on.\n`);
+        default:
+          return say(`${JSON.stringify(this.#shared.summary(), null, 2)}\n`);
+      }
+    } catch (e) {
+      say(`${(e as Error).message}\n`);
+    }
+  }
+
+  #owner<T>(fn: () => T): T {
+    try {
+      return fn();
+    } catch (e) {
+      throw e instanceof LinkError ? e : new LinkError("not_owner", (e as Error).message);
+    }
+  }
+
+  /** A person in a shared Space, by ID or by name. */
+  #personId(space: string, who: string): string {
+    const m = this.#shares.get(space)?.members.find((x) => x.person.id === who || x.person.name.toLowerCase() === who.toLowerCase());
+    if (!m) throw new LinkError("unknown_person", `Nobody called '${who}' is in '${space}'.`, "Run `reflex link shares` to see who is.");
+    return m.person.id;
+  }
+
+  /** What an iPad of this person's asks about sharing. Inviting and changing roles need an iPad that paired by scanning this Link's code. */
+  #ipadMessage(p: { device: string; name: string; session: { send: (h: { t: string; [k: string]: unknown }) => Promise<void> } }, d: { via?: string }, h: Record<string, unknown>): void {
+    const reply = (m: { t: string; [k: string]: unknown }): void => void p.session.send(m).catch(() => {});
+    const fail = (e: unknown): void => reply({ t: "share_error", message: (e as Error).message });
+    const space = String(h.space ?? "");
+    const person = d.via === "offer";
+    try {
+      switch (h.t) {
+        case "invite_create": {
+          if (!person) throw new Error("Only an iPad that paired by scanning this Link's code can invite people.");
+          const inv = this.#shared.invite(space, h.role === "viewer" ? "viewer" : "editor");
+          process.stdout.write(`\n${p.name} made an invite to '${space}' as ${inv.role}:\n${inv.uri}\n`);
+          return reply({ t: "invite", space, role: inv.role, uri: inv.uri, expires: inv.expires });
+        }
+        case "member_set": {
+          if (!person) throw new Error("Only an iPad that paired by scanning this Link's code can change who is in a Space.");
+          const who = String(h.person ?? "");
+          if (h.role === "remove") this.#shared.remove(space, who);
+          else this.#shared.setRole(space, who, h.role === "viewer" ? "viewer" : "editor");
+          return;
+        }
+        case "join_invite":
+          this.#shared.join(String(h.uri ?? "")).then((r) => reply({ t: "joined", ...r }), fail);
+          return;
+      }
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** Tells an iPad of this person's which shared Spaces there are, who is in each, and its person's role. */
+  #sendShares(p: { session: { send: (h: { t: string; [k: string]: unknown }) => Promise<void> } }): void {
+    void p.session.send({ t: "shares", shares: this.#shared.summary(), invites: this.#shared.invites.live().map((i) => i.invite) }).catch(() => {});
+  }
+
+  #sharesChanged(): void {
+    this.#nameMembers();
+    for (const p of this.#coord.peers()) {
+      const d = this.#catalog.device(p.device);
+      if (d?.kind === "ipad" && d.person.id === this.#id.person.id) this.#sendShares(p);
+    }
+  }
+
+  /** People in shared Spaces, named in Send Bundles and scenes. */
+  #nameMembers(): void {
+    for (const pe of this.#shared.people()) this.#push?.core.name(pe.id, pe.name);
   }
 
   /**
@@ -319,6 +480,7 @@ export class Link {
     this.#push?.dispatcher.stop();
     await this.#web?.close();
     this.#signIn = null;
+    await this.#shared?.stop();
     await new Promise<void>((r) => (this.#agentServer ? this.#agentServer.close(() => r()) : r()));
     await this.#coord.stop();
     await new Promise<void>((r) => (this.#server ? this.#server.close(() => r()) : r()));
@@ -556,6 +718,25 @@ export class Link {
       case "relay.revoke":
         // Taking access away is always allowed; giving it needs the person at the terminal.
         return this.#needRelay().revoke(String(p.grant ?? ""));
+      case "share.list":
+        return { shares: this.#shared.summary(), invites: this.#shared.invites.live().map(({ invite, space, role, expires }) => ({ invite, space, role, expires })) };
+      case "share.join":
+        return this.#shared.join(String(p.uri ?? "")).catch((e: Error) => {
+          throw new LinkError("join_failed", e.message, "Check the invite is whole and fresh, and that its Link is running.");
+        });
+      case "share.invite":
+        throw new LinkError("needs_person", "Inviting someone gives them a Space, so it needs you, not a command.", "Type `invite <space> [editor|viewer]` in the terminal running `reflex link`, or tap Share on your iPad.");
+      case "share.role": {
+        // Taking access away is always allowed; giving more needs the person.
+        if (p.role !== "viewer")
+          throw new LinkError("needs_person", "Making someone an editor gives them more, so it needs you, not a command.", "Type `role <space> <person> editor` in the Link's terminal, or use your iPad.");
+        const space = String(p.space ?? "");
+        return this.#owner(() => this.#shared.setRole(space, this.#personId(space, String(p.person ?? "")), "viewer"));
+      }
+      case "share.remove": {
+        const space = String(p.space ?? "");
+        return this.#owner(() => this.#shared.remove(space, this.#personId(space, String(p.person ?? ""))));
+      }
       case "relay.issue":
         throw new LinkError("needs_person", "A cloud Agent gets a Space only when you type its sign-in code into the Link's terminal.", "Type the code its sign-in page shows into the terminal running `reflex link`.");
       default:
@@ -605,6 +786,8 @@ export class Link {
       peers: this.#coord.peers().map((p) => ({ device: p.device, name: p.name, since: p.since, transport: p.session.path.transport, remote: p.session.path.remote, ...p.session.measurements() })),
       agents: this.#catalog.agents().map((a) => ({ id: a.id, name: a.name, status: a.status, color: a.color })),
       relay: this.#relay ? { ...this.#relay.status(), grants: this.#relay.grants() } : null,
+      shares: this.#shared.summary(),
+      here: this.#here.all(),
       push: {
         targets: (this.#push?.pushes.all() ?? []).map((t) => ({ ...t, live: this.#push?.live(t) ?? false })),
         attempts: this.#push?.pushes.attempts({ limit: 20 }) ?? [],

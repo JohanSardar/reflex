@@ -26,8 +26,11 @@ export interface PairedDevice {
   person: Person;
   /** What it said it is when it paired: an iPad, or another Link (which hosts Agents). */
   kind?: "ipad" | "link";
-  /** "offer": it scanned a code this Link showed, so the person was at both. "join": this Link scanned its code. */
-  via?: "offer" | "join";
+  /**
+   * "offer": it scanned a code this Link showed, so the person was at both. "join": this Link scanned its code.
+   * "invite": another person's Link, met through an invite to a shared Space (link/sharing.ts); it syncs only those Spaces.
+   */
+  via?: "offer" | "join" | "invite";
   paired_at: number;
   last_seen?: { host: string; port: number; at: number };
 }
@@ -84,6 +87,20 @@ export class Catalog {
   /** Records whose signature did not verify since start. */
   get rejected(): number {
     return this.#rejected;
+  }
+
+  // Other signed records (shared Spaces, link/sharing.ts)
+
+  records<T>(kind: string): T[] {
+    return this.#all<T>(kind);
+  }
+
+  putRecord(kind: string, id: string, body: unknown): void {
+    this.#put(kind, id, body);
+  }
+
+  forget(kind: string, id: string): void {
+    this.#db.prepare("DELETE FROM catalog WHERE kind = ? AND id = ?").run(kind, id);
   }
 
   // Devices
