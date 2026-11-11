@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #fffdf7; overflow: hidden; }
+  svg { display: block; width: 100%; height: 100%; }
+  .glyph { font-family: "Hiragino Mincho ProN", "Hiragino Mincho Pro", "Songti SC", "Noto Serif CJK JP", "Noto Serif CJK SC", "Yu Mincho", serif; }
+  .lbl { font: 11px -apple-system, system-ui, sans-serif; fill: #8e8e93; }
+</style>
+</head>
+<body>
+<svg id="box"></svg>
+<script>
+(() => {
+  const SVG = "http://www.w3.org/2000/svg";
+  const p = reflex.element.props();
+  const show = ["model", "trace", "empty"].includes(p.show) ? p.show : p.character ? "model" : "empty";
+  const svg = document.getElementById("box");
+  let geo = null;
+  const el = (tag, attrs, text) => {
+    const n = document.createElementNS(SVG, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+    if (text !== undefined) n.textContent = text;
+    svg.append(n);
+    return n;
+  };
+  function draw() {
+    svg.replaceChildren();
+    const W = innerWidth, H = innerHeight;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    const s = Math.min(W, H) - 12, x = (W - s) / 2, y = (H - s) / 2;
+    geo = { x, y, s };
+    el("rect", { x, y, width: s, height: s, fill: "none", stroke: "#c4262e", "stroke-width": 2 });
+    if (p.guides !== false) {
+      const g = { stroke: "#e5a0a3", "stroke-width": 1, "stroke-dasharray": "6 5" };
+      el("line", { x1: x + s / 2, y1: y, x2: x + s / 2, y2: y + s, ...g });
+      el("line", { x1: x, y1: y + s / 2, x2: x + s, y2: y + s / 2, ...g });
+      if (p.guides === "diagonal") {
+        el("line", { x1: x, y1: y, x2: x + s, y2: y + s, ...g });
+        el("line", { x1: x + s, y1: y, x2: x, y2: y + s, ...g });
+      }
+    }
+    if (p.character && show !== "empty") {
+      el("text", { x: x + s / 2, y: y + s * 0.84, "font-size": s * 0.82, "text-anchor": "middle", class: "glyph", fill: show === "trace" ? "#1d1d1f18" : "#1d1d1f" }, String(p.character).slice(0, 2));
+    }
+    if (p.label) el("text", { x: x + 6, y: y + 14, class: "lbl" }, String(p.label).slice(0, 30));
+  }
+
+  // Anchors: where a Mark sits in the box, as fractions of its side (0, 0 top left; 0.5 the center lines).
+  reflex.anchors.register({
+    resolve(region) {
+      if (!geo) return null;
+      const { x, y, s } = geo;
+      const [bx, by, bw, bh] = region.bounds;
+      const f = (v) => Math.round(v * 1000) / 1000;
+      const pts = (region.points ?? []).map((q) => [f((q[0] - x) / s), f((q[1] - y) / s)]);
+      const box = [f((bx - x) / s), f((by - y) / s), f(bw / s), f(bh / s)];
+      const out = { kind: "box", box, start: pts[0], end: pts[pts.length - 1], label: `${p.label ?? "box"}: x ${box[0]}–${f(box[0] + box[2])}, y ${box[1]}–${f(box[1] + box[3])}` };
+      if (p.label) out.name = String(p.label);
+      return out;
+    },
+  });
+
+  draw();
+  addEventListener("resize", draw);
+})();
+</script>
+</body>
+</html>

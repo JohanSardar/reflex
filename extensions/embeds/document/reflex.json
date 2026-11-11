@@ -1,0 +1,16 @@
+{
+  "kind": "embed",
+  "name": "document",
+  "summary": "A passage of prose with a margin for notes. A bracket, circle, underline or margin note on it names the paragraph, sentences and words it marks.",
+  "entry": "index.html",
+  "params": "params.schema.json",
+  "guide": "guide.md",
+  "allow": [],
+  "example": {
+    "title": "Methods",
+    "paragraphs": [
+      { "id": "p1", "text": "We trained every model for 40 epochs. Learning rates were tuned on the validation split. Results are averaged over three seeds." },
+      { "id": "p2", "text": "The baseline uses the same data. It differs only in its attention layer, which we replace with a convolution." }
+    ]
+  }
+}

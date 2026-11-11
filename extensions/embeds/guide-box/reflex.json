@@ -1,0 +1,10 @@
+{
+  "kind": "embed",
+  "name": "guide-box",
+  "summary": "A square writing box with center guide lines, for kanji, hanzi or letter practice: empty, with a faint character to trace, or with a model character.",
+  "entry": "index.html",
+  "params": "params.schema.json",
+  "guide": "guide.md",
+  "allow": [],
+  "example": { "character": "永", "show": "model", "label": "Model" }
+}

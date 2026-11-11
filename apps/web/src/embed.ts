@@ -30,6 +30,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #fff; font: 
 <script type="importmap">{"imports":{"three":"${THREE}/build/three.module.js","three/addons/":"${THREE}/examples/jsm/"}}</script>
 <script type="module">${MODEL_VIEW.replace(/<\/script/gi, "<\\/script")}</script></body></html>`;
 
+/** An Embed that asks to be drawn without a background or border, such as a layer of corrections over a sketch. */
+export const TRANSPARENT = /<meta\s+name=["']reflex-background["']\s+content=["']transparent["']/i;
+
 const safeJson = (v: unknown) => JSON.stringify(v ?? {}).replace(/[<\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 const hostOk = (h: string) => /^[a-z0-9.-]{1,253}$/.test(h);
 
@@ -226,7 +229,7 @@ export class Embeds {
     }
     if (html === undefined && !(typeof e.url === "string" && e.url.startsWith("https://"))) return undefined;
     const box = document.createElement("div");
-    box.className = "embed-box";
+    box.className = html !== undefined && TRANSPARENT.test(html) ? "embed-box transparent" : "embed-box";
     const server = serverOf(source);
     const doc = html === undefined ? undefined : embedDocument(html, { props: { ...(e.params ?? {}), ...(e.data ? { data: e.data } : {}) }, state: e.state ?? {}, allow, ...(server ? { mcp: { server } } : {}), ...(model ? { blobs: true } : {}) });
     const make = () => {

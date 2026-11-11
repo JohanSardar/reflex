@@ -1,0 +1,143 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #fff; overflow: hidden; }
+  body { font: 12px -apple-system, system-ui, "Segoe UI", sans-serif; color: #1d1d1f; }
+  svg { display: block; width: 100%; height: 100%; }
+  .title { font-size: 15px; font-weight: 600; }
+  .hdr { fill: #6e6e73; font-size: 12px; font-weight: 600; }
+  .lbl { fill: #1d1d1f; font-size: 9px; pointer-events: none; }
+  .legend { fill: #3a3a3c; font-size: 11px; }
+</style>
+</head>
+<body>
+<svg id="plate" role="img"></svg>
+<script>
+(() => {
+  const SVG = "http://www.w3.org/2000/svg";
+  const COLORS = { red: "#e5484d", orange: "#f76b15", yellow: "#f5c400", green: "#30a46c", teal: "#12a594", blue: "#0090ff", violet: "#6e56cf", pink: "#d6409f", grey: "#8e8e93", gray: "#8e8e93" };
+  const p = reflex.element.props();
+  const R = Math.max(1, Math.min(32, Math.round(p.rows ?? 8)));
+  const C = Math.max(1, Math.min(48, Math.round(p.columns ?? 12)));
+  const rowName = (i) => (i < 26 ? String.fromCharCode(65 + i) : `A${String.fromCharCode(65 + i - 26)}`);
+  const wells = p.wells && typeof p.wells === "object" ? p.wells : {};
+  const groups = Array.isArray(p.groups) ? p.groups : [];
+  const svg = document.getElementById("plate");
+  let geo = null;
+
+  const el = (tag, attrs, text) => {
+    const n = document.createElementNS(SVG, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+    if (text !== undefined) n.textContent = text;
+    svg.append(n);
+    return n;
+  };
+  const colorOf = (w) => {
+    const c = w?.color ?? groups.find((g) => g.name === w?.group)?.color;
+    return COLORS[c] ?? (typeof c === "string" && /^#[0-9a-f]{6}$/i.test(c) ? c : null);
+  };
+
+  function draw() {
+    svg.replaceChildren();
+    const W = innerWidth, H = innerHeight;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    const top = (p.title ? 36 : 10) + 22, left = 30, legendH = groups.length ? 26 : 6;
+    const cell = Math.max(6, Math.min((W - left - 12) / C, (H - top - legendH - 8) / R));
+    const x0 = left, y0 = top;
+    geo = { x0, y0, cell };
+    if (p.title) el("text", { x: 12, y: 24, class: "title" }, p.title);
+    el("rect", { x: x0 - 6, y: y0 - 6, width: cell * C + 12, height: cell * R + 12, rx: 10, fill: "#f5f5f7", stroke: "#d2d2d7" });
+    for (let c = 0; c < C; c++) el("text", { x: x0 + c * cell + cell / 2, y: y0 - 10, class: "hdr", "text-anchor": "middle" }, String(c + 1));
+    for (let r = 0; r < R; r++) {
+      el("text", { x: x0 - 14, y: y0 + r * cell + cell / 2 + 4, class: "hdr", "text-anchor": "middle" }, rowName(r));
+      for (let c = 0; c < C; c++) {
+        const id = `${rowName(r)}${c + 1}`;
+        const w = wells[id];
+        const fill = colorOf(w);
+        el("circle", { cx: x0 + c * cell + cell / 2, cy: y0 + r * cell + cell / 2, r: cell * 0.4, fill: fill ? `${fill}55` : "#fff", stroke: fill ?? "#aeaeb2", "stroke-width": w?.flag ? 3 : 1.2 });
+        if (w?.flag) el("line", { x1: x0 + c * cell + cell * 0.22, y1: y0 + r * cell + cell * 0.22, x2: x0 + c * cell + cell * 0.78, y2: y0 + r * cell + cell * 0.78, stroke: "#c4262e", "stroke-width": 2 });
+        if (w?.label && cell >= 28) el("text", { x: x0 + c * cell + cell / 2, y: y0 + r * cell + cell / 2 + 3, class: "lbl", "text-anchor": "middle" }, String(w.label).slice(0, 5));
+      }
+    }
+    let lx = 12;
+    const ly = y0 + R * cell + 22;
+    for (const g of groups) {
+      const col = COLORS[g.color] ?? g.color ?? "#8e8e93";
+      el("circle", { cx: lx + 6, cy: ly - 4, r: 6, fill: `${col}55`, stroke: col });
+      const t = el("text", { x: lx + 16, y: ly, class: "legend" }, String(g.name));
+      lx += 28 + (t.getComputedTextLength?.() || String(g.name).length * 6);
+    }
+  }
+
+  // ---------- Anchors: wells, whole rows and whole columns ----------
+  const inside = (pt, poly) => {
+    let c = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < ((xj - xi) * (pt[1] - yi)) / (yj - yi) + xi) c = !c;
+    }
+    return c;
+  };
+  const wellAt = ([x, y]) => {
+    const c = Math.floor((x - geo.x0) / geo.cell), r = Math.floor((y - geo.y0) / geo.cell);
+    return r >= 0 && r < R && c >= 0 && c < C ? { r, c } : null;
+  };
+  const info = (id) => {
+    const w = wells[id];
+    if (!w) return undefined;
+    const o = {};
+    for (const k of ["label", "sample", "group", "flag"]) if (w[k] !== undefined) o[k] = w[k];
+    return Object.keys(o).length ? o : undefined;
+  };
+
+  reflex.anchors.register({
+    resolve(region) {
+      if (!geo) return null;
+      const pts = (region.points ?? []).map((q) => [q[0], q[1]]);
+      if (!pts.length) return null;
+      const [bx, by, bw, bh] = region.bounds;
+      const { x0, y0, cell } = geo;
+      const first = pts[0], last = pts[pts.length - 1];
+      const closed = pts.length > 8 && bw > cell * 0.6 && Math.hypot(first[0] - last[0], first[1] - last[1]) < 0.35 * Math.hypot(bw, bh);
+      const cx = bx + bw / 2, cy = by + bh / 2;
+      // A Mark on a row letter or column number: that whole row or column.
+      if (cx < x0 - 2 && cy >= y0 && cy <= y0 + R * cell) {
+        const r = Math.floor((cy - y0) / cell);
+        const ids = Array.from({ length: C }, (_, c) => `${rowName(r)}${c + 1}`);
+        return { kind: "wells", wells: ids, rows: [rowName(r)], label: `row ${rowName(r)} (${C} wells)` };
+      }
+      if (cy < y0 - 2 && cx >= x0 && cx <= x0 + C * cell) {
+        const c = Math.floor((cx - x0) / cell);
+        const ids = Array.from({ length: R }, (_, r) => `${rowName(r)}${c + 1}`);
+        return { kind: "wells", wells: ids, columns: [c + 1], label: `column ${c + 1} (${R} wells)` };
+      }
+      const set = new Map();
+      const addWell = (r, c) => set.set(`${rowName(r)}${c + 1}`, { r, c });
+      if (closed) {
+        for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) if (inside([x0 + c * cell + cell / 2, y0 + r * cell + cell / 2], pts)) addWell(r, c);
+      }
+      if (!set.size) {
+        // A tap (a dot), a strike along a row, or a line: the wells under it.
+        for (const q of pts) { const w = wellAt(q); if (w) addWell(w.r, w.c); }
+      }
+      if (!set.size) return { kind: "local", bounds: region.bounds.map(Math.round), label: "the plate, away from its wells" };
+      const ids = [...set.keys()];
+      const out = { kind: "wells", wells: ids };
+      const rowsAll = [...new Set([...set.values()].map((w) => w.r))].filter((r) => [...set.values()].filter((w) => w.r === r).length === C);
+      if (rowsAll.length) out.rows = rowsAll.map(rowName);
+      const contents = Object.fromEntries(ids.map((id) => [id, info(id)]).filter(([, v]) => v));
+      if (Object.keys(contents).length) out.contents = contents;
+      out.label = (ids.length <= 4 ? `well${ids.length > 1 ? "s" : ""} ${ids.join(", ")}` : out.rows ? `row${out.rows.length > 1 ? "s" : ""} ${out.rows.join(", ")}` : `${ids.length} wells: ${ids.slice(0, 4).join(", ")}…`).slice(0, 200);
+      return out;
+    },
+  });
+
+  draw();
+  addEventListener("resize", draw);
+})();
+</script>
+</body>
+</html>

@@ -44,8 +44,8 @@ function open(id: string) {
 }
 
 conn.onStatus((s) => {
-  status.textContent = s === "live" ? "Live" : s === "connecting" ? "Connecting…" : key ? "Offline, retrying" : "No key";
-  status.className = `status ${s}`;
+  status.textContent = s === "live" ? "Live" : s === "connecting" ? "Connecting…" : s === "bad_key" ? "Key not accepted: open the web viewer address your Link printed" : key ? "Offline, retrying" : "No key";
+  status.className = `status ${s === "bad_key" ? "offline" : s}`;
 });
 conn.on(({ event }) => {
   if (event.t !== "hello") return;

@@ -1,0 +1,17 @@
+{
+  "kind": "embed",
+  "name": "overlay",
+  "summary": "A transparent layer of corrections (lines, arrows, circles, numbered notes) laid over the person's sketch, which stays untouched. Toggle it with its visible param.",
+  "entry": "index.html",
+  "params": "params.schema.json",
+  "guide": "guide.md",
+  "allow": [],
+  "example": {
+    "visible": true,
+    "items": [
+      { "id": "horizon", "kind": "line", "points": [[20, 140], [600, 140]], "color": "blue", "style": "dashed", "text": "Eye level: both sides meet here" },
+      { "id": "door", "kind": "circle", "box": [300, 180, 80, 120], "text": "Door is too tall for the wall" },
+      { "id": "roof", "kind": "arrow", "points": [[420, 60], [470, 100]], "color": "orange", "text": "Converge to the vanishing point" }
+    ]
+  }
+}

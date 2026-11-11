@@ -1,0 +1,18 @@
+{
+  "kind": "embed",
+  "name": "table",
+  "summary": "A table of rows and columns, such as an ablation or a queue of runs with a status. A circle, tick or strike on it names the rows, columns and cells it covers.",
+  "entry": "index.html",
+  "params": "params.schema.json",
+  "guide": "guide.md",
+  "allow": [],
+  "example": {
+    "title": "Ablation",
+    "columns": [ { "key": "variant", "label": "Variant" }, { "key": "val_loss", "label": "Val loss" }, { "key": "acc", "label": "Accuracy", "unit": "%" } ],
+    "rows": [
+      { "id": "full", "cells": { "variant": "Full model", "val_loss": 1.92, "acc": 71.4 }, "best": true },
+      { "id": "no-rope", "cells": { "variant": "− RoPE", "val_loss": 2.05, "acc": 69.8 } },
+      { "id": "no-warmup", "cells": { "variant": "− warmup", "val_loss": 2.31, "acc": 66.2 } }
+    ]
+  }
+}

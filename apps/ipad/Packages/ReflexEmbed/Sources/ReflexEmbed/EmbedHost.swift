@@ -32,6 +32,10 @@ public final class EmbedHost {
         public var allow: [String]
         /// For an MCP App view: the server its `ui://` resource came from.
         public var server: String?
+        /// The template asks to be drawn without a background or border (`<meta name="reflex-background" content="transparent">`).
+        public var transparent: Bool {
+            html.range(of: #"<meta\s+name=["']reflex-background["']\s+content=["']transparent["']"#, options: [.regularExpression, .caseInsensitive]) != nil
+        }
 
         public init(html: String, props: String, state: String, allow: [String], server: String?) {
             self.html = html
@@ -151,7 +155,8 @@ public final class EmbedHost {
         config.userContentController.add(delegate, name: "reflex")
         let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 240), configuration: config)
         web.isOpaque = false
-        web.backgroundColor = .white
+        web.backgroundColor = spec.transparent ? .clear : .white
+        web.scrollView.backgroundColor = spec.transparent ? .clear : .white
         web.scrollView.isScrollEnabled = false
         web.scrollView.bounces = false
         web.allowsLinkPreview = false

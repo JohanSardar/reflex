@@ -52,6 +52,7 @@ main.canvas.pen { cursor: crosshair; }
 .placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; background: #f4f4f6; border: 1px dashed #8e8e93; color: #8e8e93; font-size: 14px; padding: 8px; }
 .embed-box { position: relative; width: 100%; height: 100%; }
 .embed-frame { width: 100%; height: 100%; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.embed-box.transparent .embed-frame { border: 0; background: transparent; }
 .embed-note { position: absolute; left: 8px; right: 8px; bottom: 8px; padding: 6px 10px; border-radius: 8px; background: #fff4e5; border: 1px solid #f76b15; color: #8a3a00; font-size: 12px; overflow-wrap: anywhere; }
 .el-embed:has(.embed-note):not(:has(.embed-frame)) .embed-box { background: #f4f4f6; border: 1px dashed #8e8e93; border-radius: 6px; }
 main.canvas.pen .embed-frame { pointer-events: none; }

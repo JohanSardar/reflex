@@ -11,6 +11,7 @@
 //   `base` is the Agent's position for that part when the person moved it; if the
 //   Agent sets another one later, the Agent's wins.
 import { readFile } from "node:fs/promises";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -20,6 +21,15 @@ export type Camera = { yaw: number; pitch: number; zoom: number };
 export type PartSetting = { position?: number[]; rotation?: number[]; scale?: number | number[]; highlight?: string | boolean; hidden?: boolean };
 
 /** The largest model Reflex imports. */
+/** Models that ship with Reflex, named as `builtin:<name>`. */
+export const BUILTIN_MODELS: string[] = (() => {
+  try {
+    return readdirSync(new URL("../../extensions/models/", import.meta.url)).filter((f) => f.endsWith(".glb")).map((f) => f.slice(0, -4));
+  } catch {
+    return [];
+  }
+})();
+
 export const MAX_MODEL_BYTES = 64 * 1024 * 1024;
 export const DEFAULT_CAMERA: Camera = { yaw: 35, pitch: 25, zoom: 1 };
 /** Vertical field of view, in degrees, on every device. */
@@ -74,6 +84,13 @@ export async function importModel(ref: string, o: { fetch?: typeof fetch; files?
   if (ref.startsWith("https://")) {
     load = (r) => fetchCapped(r, fetchImpl);
     base = ref;
+  } else if (ref.startsWith("builtin:")) {
+    // A model that ships with Reflex (extensions/models), such as builtin:heart for the anatomy Recipe.
+    const name = ref.slice(8);
+    const file = new URL(`../../extensions/models/${name}.glb`, import.meta.url);
+    if (!/^[a-z0-9-]{1,40}$/.test(name) || !existsSync(file)) throw new ModelError(`There is no built-in model '${name}'.`, `Built-in models: ${BUILTIN_MODELS.join(", ") || "none"}. Or give an https URL or a file path.`);
+    load = (r) => readFile(r);
+    base = file.href;
   } else {
     if (!o.files) throw new ModelError(`'${ref}' isn't a model Reflex can open here.`, "Give an https URL; file paths work only with a Link on this computer.");
     const file = ref.startsWith("file://") ? fileURLToPath(ref) : ref.replace(/^~(?=\/)/, process.env.HOME ?? "~");

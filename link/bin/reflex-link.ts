@@ -27,6 +27,9 @@ Usage
   reflex link remove <space> <person>         Remove someone from your Space (its key changes)
   reflex link fault <spec>            Change fault injection on a Link started with --fault
                                       (e.g. "lan:drop=1" takes LAN down, "" clears it)
+  reflex link library                 The Recipes and Embed Templates Agents saved to your Library
+  reflex link library rename <name> <new-name>   Rename one (recipe:<name> or embed:<name> if both exist)
+  reflex link library delete <name>              Delete one
 
 Sharing a Space: type \`invite <space> [editor|viewer]\` in the Link's terminal, or tap Share on your
 iPad. Making someone an editor needs you too: \`role <space> <person> editor\` there, or the iPad.
@@ -317,6 +320,36 @@ async function main(): Promise<void> {
       if (args[1] === undefined) throw new LinkError("usage", 'Which faults? reflex link fault "lan:drop=1" (or "" to clear)');
       const f = await admin<Record<string, unknown>>("fault", { spec: args[1] });
       return out(Object.entries(f).map(([t, v]) => `${t}: ${JSON.stringify(v)}`).join("\n"), f);
+    }
+    case "library": {
+      type E = { kind: string; name: string; summary?: string };
+      const [, sub, a, b] = args;
+      const find = async (name: string): Promise<E> => {
+        const list = await admin<E[]>("library.list");
+        const hits = list.filter((e) => e.name === name);
+        if (!hits.length) throw new LinkError("unknown_id", `The Library has no '${name}'.`, "Run reflex link library to list it.");
+        if (hits.length > 1) throw new LinkError("ambiguous", `The Library has a recipe and an embed named '${name}'.`, `Name it as recipe:${name} or embed:${name}.`);
+        return hits[0];
+      };
+      const pick = async (ref: string): Promise<E> => {
+        const m = /^(recipe|embed):(.+)$/.exec(ref);
+        return m ? { kind: m[1], name: m[2] } : find(ref);
+      };
+      if (sub === "rename") {
+        if (!a || !b) throw new LinkError("usage", "reflex link library rename <name> <new-name>", "Run reflex link library to list it.");
+        const e = await pick(a);
+        const r = await admin("library.edit", { kind: e.kind, name: e.name, to: b });
+        return out(`Renamed ${e.kind} '${e.name}' to '${b}'.`, r);
+      }
+      if (sub === "delete") {
+        if (!a) throw new LinkError("usage", "reflex link library delete <name>", "Run reflex link library to list it.");
+        const e = await pick(a);
+        const r = await admin("library.edit", { kind: e.kind, name: e.name });
+        return out(`Deleted ${e.kind} '${e.name}' from the Library. Undo on your iPad brings it back.`, r);
+      }
+      if (sub) throw new LinkError("usage", `Unknown library command '${sub}'.`, "reflex link library [rename <name> <new-name> | delete <name>]");
+      const list = await admin<(E & { by?: Record<string, string> })[]>("library.list");
+      return out(list.map((e) => `${e.kind.padEnd(7)} ${e.name.padEnd(28)} ${e.summary ?? ""}`).join("\n") || "The Library is empty.", list);
     }
     case "dev":
       return dev();

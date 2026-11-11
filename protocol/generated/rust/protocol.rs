@@ -841,7 +841,7 @@ pub struct OpAddEmbed {
     pub html: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// A 3D model, USDZ or glTF (.glb, or .gltf with its files). Give an https URL or a file path on the Link's computer: Reflex reads it once, packs a glTF into one .glb, and stores it as 'asset:<sha256>', which is what you read back. In params, camera ({yaw, pitch, zoom}) sets the first view and parts ({<part>: {position, rotation, scale, highlight, hidden}}) moves, colors or hides parts. read_me('3d') explains it.
+    /// A 3D model, USDZ or glTF (.glb, or .gltf with its files). Give an https URL, a file path on the Link's computer, or a model that ships with Reflex as 'builtin:<name>' (builtin:heart): Reflex reads it once, packs a glTF into one .glb, and stores it as 'asset:<sha256>', which is what you read back. In params, camera ({yaw, pitch, zoom}) sets the first view and parts ({<part>: {position, rotation, scale, highlight, hidden}}) moves, colors or hides parts. read_me('3d') explains it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Extra network hosts this Embed may reach, on top of the person's allowlist.
@@ -967,7 +967,7 @@ pub struct OpPatchSet {
     pub html: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// A 3D model, USDZ or glTF (.glb, or .gltf with its files). Give an https URL or a file path on the Link's computer: Reflex reads it once, packs a glTF into one .glb, and stores it as 'asset:<sha256>', which is what you read back. In params, camera ({yaw, pitch, zoom}) sets the first view and parts ({<part>: {position, rotation, scale, highlight, hidden}}) moves, colors or hides parts. read_me('3d') explains it.
+    /// A 3D model, USDZ or glTF (.glb, or .gltf with its files). Give an https URL, a file path on the Link's computer, or a model that ships with Reflex as 'builtin:<name>' (builtin:heart): Reflex reads it once, packs a glTF into one .glb, and stores it as 'asset:<sha256>', which is what you read back. In params, camera ({yaw, pitch, zoom}) sets the first view and parts ({<part>: {position, rotation, scale, highlight, hidden}}) moves, colors or hides parts. read_me('3d') explains it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Extra network hosts this Embed may reach, on top of the person's allowlist.
@@ -2178,7 +2178,7 @@ pub struct ElementEmbed {
     pub html: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// A 3D model, USDZ or glTF (.glb, or .gltf with its files). Give an https URL or a file path on the Link's computer: Reflex reads it once, packs a glTF into one .glb, and stores it as 'asset:<sha256>', which is what you read back. In params, camera ({yaw, pitch, zoom}) sets the first view and parts ({<part>: {position, rotation, scale, highlight, hidden}}) moves, colors or hides parts. read_me('3d') explains it.
+    /// A 3D model, USDZ or glTF (.glb, or .gltf with its files). Give an https URL, a file path on the Link's computer, or a model that ships with Reflex as 'builtin:<name>' (builtin:heart): Reflex reads it once, packs a glTF into one .glb, and stores it as 'asset:<sha256>', which is what you read back. In params, camera ({yaw, pitch, zoom}) sets the first view and parts ({<part>: {position, rotation, scale, highlight, hidden}}) moves, colors or hides parts. read_me('3d') explains it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// A 3D Embed's parts, from its model's named nodes: each part's name, its position (in its parent's space, what params.parts.<name>.position sets), and the center and size of its box in model units. Read only; Reflex fills it in when you read the Element.

@@ -279,10 +279,32 @@ final class SpaceSession {
             return
         }
         dragging = nil
-        let dx = Int(by.width.rounded()), dy = Int(by.height.rounded())
+        let landed = snapped(e, by: by)
+        let dx = Int(landed.width.rounded()), dy = Int(landed.height.rounded())
         guard dx != 0 || dy != 0 else { return }
         act(["intent": "move", "ids": [e.id], "by": [dx, dy]])
         fire(e, on: "drag_end")
+    }
+
+    /// Where a drag of `e` by `by` lands under its snap rules. With `to`, it drops into the
+    /// nearest of those Elements (the one under its center, else the closest), centered
+    /// across it and kept inside it; `grid` then rounds its top to steps measured from that
+    /// Element's top. With only `grid`, its corner rounds to multiples of the step.
+    func snapped(_ e: SceneElement, by: CGSize) -> CGSize {
+        guard let f = e.frame, case .object(let rule)? = e.snap else { return by }
+        let grid: Double? = { if case .number(let g)? = rule["grid"], g >= 1 { return g }; return nil }()
+        let ids: [String] = { if case .array(let a)? = rule["to"] { return a.compactMap { if case .string(let s) = $0 { s } else { nil } } }; return [] }()
+        var o = CGPoint(x: f.minX + by.width, y: f.minY + by.height)
+        let center = CGPoint(x: o.x + f.width / 2, y: o.y + f.height / 2)
+        let targets = scene.elements.filter { ids.contains($0.id) }.compactMap(\.frame)
+        if let t = targets.first(where: { $0.contains(center) }) ?? targets.min(by: { hypot($0.midX - center.x, $0.midY - center.y) < hypot($1.midX - center.x, $1.midY - center.y) }) {
+            o.x = t.minX + max(0, (t.width - f.width) / 2)
+            if let g = grid { o.y = t.minY + ((o.y - t.minY) / g).rounded() * g }
+            o.y = min(max(o.y, t.minY), max(t.minY, t.maxY - f.height))
+        } else if let g = grid {
+            o = CGPoint(x: (o.x / g).rounded() * g, y: (o.y / g).rounded() * g)
+        }
+        return CGSize(width: o.x - f.minX, height: o.y - f.minY)
     }
 
     /// A finished stroke inside an Element with an `ink_inside` Behavior fires it
