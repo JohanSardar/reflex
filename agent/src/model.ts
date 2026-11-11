@@ -12,6 +12,7 @@
 //   Agent sets another one later, the Agent's wins.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export type Vec3 = [number, number, number];
 export type Part = { name: string; position: Vec3; center: Vec3; size: Vec3 };
@@ -75,19 +76,19 @@ export async function importModel(ref: string, o: { fetch?: typeof fetch; files?
     base = ref;
   } else {
     if (!o.files) throw new ModelError(`'${ref}' isn't a model Reflex can open here.`, "Give an https URL; file paths work only with a Link on this computer.");
-    const file = ref.startsWith("file://") ? new URL(ref).pathname : ref.replace(/^~(?=\/)/, process.env.HOME ?? "~");
+    const file = ref.startsWith("file://") ? fileURLToPath(ref) : ref.replace(/^~(?=\/)/, process.env.HOME ?? "~");
     if (!path.isAbsolute(file)) throw new ModelError(`'${ref}' is not an absolute path.`, "Pass the model's full path, such as /Users/me/models/gearbox.glb.");
     load = async (r) => {
-      const p = r.startsWith("file://") ? new URL(r).pathname : r;
+      const p = r.startsWith("file://") ? fileURLToPath(r) : r;
       const b = await readFile(p).catch((e: Error) => {
         throw new ModelError(`Couldn't read ${p}: ${e.message}.`, "Check the path.");
       });
       if (b.length > MAX_MODEL_BYTES) throw new ModelError(`${p} is over ${MAX_MODEL_BYTES / 1e6} MB.`, "Use a smaller or compressed model.");
       return b;
     };
-    base = `file://${file}`;
+    base = pathToFileURL(file).href;
   }
-  const bytes = await load(base.startsWith("file://") ? new URL(base).pathname : base);
+  const bytes = await load(base.startsWith("file://") ? fileURLToPath(base) : base);
   const name = decodeURIComponent(new URL(base).pathname.split("/").pop() || "model");
   if (isGlb(bytes)) {
     parseGlb(bytes); // throws on a broken file
@@ -114,7 +115,7 @@ export async function packGltf(jsonBytes: Buffer, base: string, load: Loader): P
     if (m) return m[1] ? Buffer.from(m[2], "base64") : Buffer.from(decodeURIComponent(m[2]));
     const abs = new URL(uri, base).toString();
     if (base.startsWith("file://") !== abs.startsWith("file://")) throw new ModelError(`The glTF refers to ${uri}, which is somewhere else.`, "Keep its buffers and images next to it.");
-    return load(abs.startsWith("file://") ? decodeURIComponent(new URL(abs).pathname) : abs);
+    return load(abs.startsWith("file://") ? fileURLToPath(abs) : abs);
   };
   const buffers: Buffer[] = await Promise.all((gltf.buffers ?? []).map((b: any) => (b.uri ? resolve(b.uri) : Promise.reject(new ModelError("A glTF buffer has no uri.", "Export it as .glb.")))));
   // One BIN chunk: every buffer back to back, each 4-byte aligned.
