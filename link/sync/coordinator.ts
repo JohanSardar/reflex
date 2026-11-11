@@ -26,6 +26,8 @@ const ASSET_PART = 1024 * 1024;
 export interface Peer {
   /** Assets arriving from this peer, part by part. */
   incoming: Map<string, { size: number; parts: Buffer[]; got: number }>;
+  /** Asset parts go out one at a time, each after the Path drains; control and sync frames don't wait behind them. */
+  assetOut: Promise<void>;
   device: string;
   name: string;
   session: Session;
@@ -216,7 +218,7 @@ export class Coordinator {
       }
       old.session.close("replaced by a preferred path");
     }
-    const peer: Peer = { incoming: new Map(), device, name, session, initiator, since: Date.now() };
+    const peer: Peer = { incoming: new Map(), assetOut: Promise.resolve(), device, name, session, initiator, since: Date.now() };
     this.#peers.set(device, peer);
     this.#log(`connected to ${name} (${device}) over ${session.path.transport} ${session.path.remote}`);
     for (const id of this.#store.ids()) this.#store.read(id, (s) => s.resetSync(device));
@@ -243,7 +245,7 @@ export class Coordinator {
   #pump(space: string, p: Peer): void {
     if (this.#peers.get(p.device) !== p) return;
     const msg = this.#store.read(space, (s) => s.syncMessage(p.device));
-    if (msg) void p.session.send({ t: "sync", space }, msg, "change").catch(() => {});
+    if (msg) void p.session.send({ t: "sync", space }, msg, "change").catch((e: Error) => this.#log(`could not send ${space} to ${p.name}: ${e.message}`));
   }
 
   async #loop(p: Peer): Promise<void> {
@@ -293,8 +295,11 @@ export class Coordinator {
           if (!this.#assets.has(x)) continue;
           const bytes = this.#assets.get(x);
           for (let off = 0; off === 0 || off < bytes.length; off += ASSET_PART)
-            void p.session
-              .send({ t: "asset", hash: x, off, size: bytes.length }, bytes.subarray(off, off + ASSET_PART), "asset")
+            p.assetOut = p.assetOut
+              .then(() => {
+                if (this.#peers.get(p.device) !== p) return;
+                return p.session.send({ t: "asset", hash: x, off, size: bytes.length }, bytes.subarray(off, off + ASSET_PART), "asset");
+              })
               .catch((e: Error) => this.#log(`could not send asset ${x} to ${p.name}: ${e.message}`));
         }
         return;
