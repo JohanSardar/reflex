@@ -43,11 +43,40 @@ public struct InkStrokeInfo: Identifiable, Sendable {
     public var bounds: CGRect
 }
 
+/// The PencilKit canvas, which hands a finger on an Element that takes touch
+/// (a tap or long-press Behavior, or a draggable Element) to that Element
+/// instead of drawing or scrolling with it.
+final class ReflexCanvasView: PKCanvasView {
+    /// Whether the touch at this screen point is the Element's, not the canvas's.
+    var claims: ((CGPoint) -> Bool)?
+    /// The last touch's type, from `TouchWatcher`.
+    var lastTouch: UITouch.TouchType = .direct
+
+    override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        if g === drawingGestureRecognizer || g === panGestureRecognizer,
+           lastTouch == .direct, g.numberOfTouches <= 1, claims?(g.location(in: self)) == true {
+            return false
+        }
+        return super.gestureRecognizerShouldBegin(g)
+    }
+}
+
+/// Watches every touch on the canvas without recognizing anything, so the
+/// canvas knows whether a finger or the Pencil is down.
+final class TouchWatcher: UIGestureRecognizer {
+    weak var canvas: ReflexCanvasView?
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let t = touches.first { canvas?.lastTouch = t.type }
+        state = .failed
+    }
+}
+
 /// Owns the PencilKit canvas for one Space: tools, the Goodnotes-style eraser
 /// and undo, stroke identity and saving.
 @MainActor @Observable
 public final class InkCanvasController: NSObject {
-    public let canvasView = PKCanvasView()
+    public let canvasView: PKCanvasView = ReflexCanvasView()
 
     public var tool: InkTool = .pen { didSet { applyTool() } }
     public var penColor: UIColor = .black { didSet { applyTool() } }
@@ -63,6 +92,14 @@ public final class InkCanvasController: NSObject {
 
     /// Called for every finished change to the Ink, so it can be committed to the Space.
     @ObservationIgnored public var onEdit: ((InkEdit) -> Void)?
+    /// Whether a finger at this Space point belongs to an Element (tap, long-press or drag).
+    @ObservationIgnored public var claimsTouch: ((CGPoint) -> Bool)?
+    /// A finger tap or long-press on an Element that claims touch, at a Space point.
+    @ObservationIgnored public var onTap: ((CGPoint) -> Void)?
+    @ObservationIgnored public var onLongPress: ((CGPoint) -> Void)?
+    /// A finger drag that started on an Element that claims touch: where it
+    /// started, how far it went (Space points), and whether it ended.
+    @ObservationIgnored public var onDrag: ((CGPoint, CGSize, Bool) -> Void)?
 
     /// Size of the scrollable Space, in points.
     public static let spaceSize = CGSize(width: 6000, height: 6000)
@@ -105,6 +142,7 @@ public final class InkCanvasController: NSObject {
         canvasView.accessibilityLabel = "Ink canvas"
 
         addUndoGestures()
+        addElementGestures()
         let pencil = UIPencilInteraction(delegate: self)
         canvasView.addInteraction(pencil)
         observeUndo()
@@ -158,6 +196,18 @@ public final class InkCanvasController: NSObject {
         refreshUndo()
     }
 
+    /// Puts an action that isn't Ink (an import, a drag, a revert) on the same
+    /// undo stack as the Ink, so undo and redo go back through them in order.
+    public func recordAction(undo: @escaping @MainActor () -> Void, redo: @escaping @MainActor () -> Void) {
+        undoManager?.registerUndo(withTarget: self) { me in
+            MainActor.assumeIsolated {
+                undo()
+                me.recordAction(undo: redo, redo: undo)
+            }
+        }
+        refreshUndo()
+    }
+
     private func addUndoGestures() {
         let threeFinger = UITapGestureRecognizer(target: self, action: #selector(threeFingerTap))
         threeFinger.numberOfTouchesRequired = 3
@@ -169,6 +219,63 @@ public final class InkCanvasController: NSObject {
             canvasView.addGestureRecognizer(gesture)
         }
         undoGestures = [twoFinger, threeFinger]
+    }
+
+    // MARK: Touching Elements
+
+    private func addElementGestures() {
+        guard let canvas = canvasView as? ReflexCanvasView else { return }
+        canvas.claims = { [weak self] screen in
+            guard let self else { return false }
+            return MainActor.assumeIsolated { self.claimsTouch?(self.spacePoint(screen)) ?? false }
+        }
+        let watcher = TouchWatcher(target: nil, action: nil)
+        watcher.canvas = canvas
+        watcher.cancelsTouchesInView = false
+        watcher.delaysTouchesEnded = false
+        canvas.addGestureRecognizer(watcher)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(elementTap(_:)))
+        let long = UILongPressGestureRecognizer(target: self, action: #selector(elementLongPress(_:)))
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(elementPan(_:)))
+        pan.maximumNumberOfTouches = 1
+        for g in [tap, long, pan] as [UIGestureRecognizer] {
+            g.allowedTouchTypes = [UITouch.TouchType.direct.rawValue as NSNumber]
+            g.delegate = self
+            canvas.addGestureRecognizer(g)
+        }
+    }
+
+    private func spacePoint(_ screen: CGPoint) -> CGPoint {
+        // `location(in: canvasView)` is in content coordinates, which already include the scroll offset.
+        CGPoint(x: screen.x / canvasView.zoomScale, y: screen.y / canvasView.zoomScale)
+    }
+
+    @objc private func elementTap(_ g: UITapGestureRecognizer) {
+        onTap?(spacePoint(g.location(in: canvasView)))
+    }
+
+    @objc private func elementLongPress(_ g: UILongPressGestureRecognizer) {
+        if g.state == .began { onLongPress?(spacePoint(g.location(in: canvasView))) }
+    }
+
+    @ObservationIgnored private var dragStart: CGPoint?
+
+    @objc private func elementPan(_ g: UIPanGestureRecognizer) {
+        let zoom = canvasView.zoomScale
+        let t = g.translation(in: canvasView)
+        let by = CGSize(width: t.x / zoom, height: t.y / zoom)
+        switch g.state {
+        case .began:
+            let p = g.location(in: canvasView)
+            dragStart = spacePoint(CGPoint(x: p.x - t.x, y: p.y - t.y))
+            if let dragStart { onDrag?(dragStart, by, false) }
+        case .changed:
+            if let dragStart { onDrag?(dragStart, by, false) }
+        case .ended, .cancelled, .failed:
+            if let dragStart { onDrag?(dragStart, g.state == .ended ? by : .zero, true) }
+            dragStart = nil
+        default: break
+        }
     }
 
     @objc private func twoFingerTap() { undo() }
@@ -210,6 +317,25 @@ public final class InkCanvasController: NSObject {
         canvasView.drawing = drawing
     }
     #endif
+
+    // MARK: Strokes, for recognition hints
+
+    /// The native strokes with these IDs, in drawing order.
+    public func pkStrokes(_ ids: [String]) -> [(id: String, stroke: PKStroke)] {
+        let want = Set(ids)
+        return zip(ledger.records, canvasView.drawing.strokes).filter { want.contains($0.0.id) }.map { ($0.0.id, $0.1) }
+    }
+
+    /// When each of these strokes was drawn: ID -> [start, end], in milliseconds since 1970.
+    public func strokeTimes(_ ids: [String]) -> [String: [Int]] {
+        var out: [String: [Int]] = [:]
+        for (id, s) in pkStrokes(ids) {
+            let start = s.path.creationDate.timeIntervalSince1970
+            let end = start + (s.path.last?.timeOffset ?? 0)
+            out[id] = [Int((start * 1000).rounded()), Int((end * 1000).rounded())]
+        }
+        return out
+    }
 
     // MARK: Send
 
@@ -319,6 +445,15 @@ extension InkCanvasController: PKCanvasViewDelegate {
     public func scrollViewDidZoom(_ scrollView: UIScrollView) {
         zoomScale = scrollView.zoomScale
         contentOffset = scrollView.contentOffset
+    }
+}
+
+extension InkCanvasController: UIGestureRecognizerDelegate {
+    /// The Element gestures take only a finger that starts on an Element that claims touch.
+    public nonisolated func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        MainActor.assumeIsolated {
+            touch.type == .direct && claimsTouch?(spacePoint(touch.location(in: canvasView))) == true
+        }
     }
 }
 

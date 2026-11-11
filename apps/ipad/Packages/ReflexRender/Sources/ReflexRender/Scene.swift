@@ -58,6 +58,55 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
     public var title: String?
     public var name: String?
     public var template: String?
+    /// A file's media type and size in bytes.
+    public var mime: String?
+    public var fileSize: Int?
+    /// A PDF page's 1-based number.
+    public var page: Int?
+    /// Ink: its pen width.
+    public var width: Double?
+    public var behaviors: [Behavior]?
+    public var draggable: Bool?
+    public var locked: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, owner, bounds, text, markdown, size, color, align, shape, fill, stroke, from, to, arrow, points
+        case src, alt, latex, title, name, template, mime, page, width, behaviors, draggable, locked
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        type = try c.decode(String.self, forKey: .type)
+        owner = try? c.decodeIfPresent(Owner.self, forKey: .owner)
+        bounds = try? c.decodeIfPresent([Double].self, forKey: .bounds)
+        text = try? c.decodeIfPresent(String.self, forKey: .text)
+        markdown = try? c.decodeIfPresent(Bool.self, forKey: .markdown)
+        // `size` is a text size on text and a byte count on files.
+        size = try? c.decodeIfPresent(String.self, forKey: .size)
+        fileSize = try? c.decodeIfPresent(Int.self, forKey: .size)
+        color = try? c.decodeIfPresent(String.self, forKey: .color)
+        align = try? c.decodeIfPresent(String.self, forKey: .align)
+        shape = try? c.decodeIfPresent(String.self, forKey: .shape)
+        fill = try? c.decodeIfPresent(String.self, forKey: .fill)
+        stroke = try? c.decodeIfPresent(String.self, forKey: .stroke)
+        from = try? c.decodeIfPresent(String.self, forKey: .from)
+        to = try? c.decodeIfPresent(String.self, forKey: .to)
+        arrow = try? c.decodeIfPresent(String.self, forKey: .arrow)
+        points = try? c.decodeIfPresent([[Double]].self, forKey: .points)
+        src = try? c.decodeIfPresent(String.self, forKey: .src)
+        alt = try? c.decodeIfPresent(String.self, forKey: .alt)
+        latex = try? c.decodeIfPresent(String.self, forKey: .latex)
+        title = try? c.decodeIfPresent(String.self, forKey: .title)
+        name = try? c.decodeIfPresent(String.self, forKey: .name)
+        template = try? c.decodeIfPresent(String.self, forKey: .template)
+        mime = try? c.decodeIfPresent(String.self, forKey: .mime)
+        page = try? c.decodeIfPresent(Int.self, forKey: .page)
+        width = try? c.decodeIfPresent(Double.self, forKey: .width)
+        behaviors = try? c.decodeIfPresent([Behavior].self, forKey: .behaviors)
+        draggable = try? c.decodeIfPresent(Bool.self, forKey: .draggable)
+        locked = try? c.decodeIfPresent(Bool.self, forKey: .locked)
+    }
 
     public var frame: CGRect? {
         guard let b = bounds, b.count == 4 else { return nil }
@@ -65,11 +114,127 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
     }
 
     public var isAgents: Bool { owner?.agent != nil }
+
+    /// This Element's Behaviors for one trigger, with their index in its list.
+    public func behaviors(on trigger: String) -> [(index: Int, behavior: Behavior)] {
+        (behaviors ?? []).enumerated().filter { $0.element.on == trigger }.map { ($0.offset, $0.element) }
+    }
+
+    /// Whether a finger on it is for it (a tap, a long-press or a drag) rather than for drawing or scrolling.
+    public var takesTouch: Bool {
+        locked != true && (draggable == true || !(behaviors(on: "tap") + behaviors(on: "long_press")).isEmpty)
+    }
+}
+
+/// What happens when the person interacts with an Element: one trigger paired
+/// with one action (`common.schema.json#/$defs/behavior`).
+public struct Behavior: Decodable, Sendable, Equatable {
+    /// `tap`, `long_press`, `drag_end`, `ink_inside`, `panel_change` or `embed_event`.
+    public var on: String
+    /// `open_panel`, `notify`, `send`, `set` or `apply_recipe`.
+    public var action: String
+    public var event: String?
+    public var panel: Panel?
+    public var payload: JSONValue?
+    public var target: String?
+    public var set: JSONValue?
+    public var recipe: String?
+    public var params: JSONValue?
+
+    enum CodingKeys: String, CodingKey {
+        case on, action = "do", event, panel, payload, target, set, recipe, params
+    }
+}
+
+/// Native interface declared as JSON (`common.schema.json#/$defs/panel`).
+public struct Panel: Decodable, Sendable, Equatable {
+    public var id: String?
+    public var title: String?
+    public var components: [Component]
+
+    public struct Component: Decodable, Sendable, Equatable, Identifiable {
+        /// `text`, `markdown`, `button`, `choice`, `text_field`, `number`, `slider`, `toggle` or `embed`.
+        public var kind: String
+        public var key: String?
+        public var label: String?
+        public var text: String?
+        public var options: [String]?
+        public var multiple: Bool?
+        public var value: JSONValue?
+        public var min: Double?
+        public var max: Double?
+        public var step: Double?
+        /// button only: `send` or `notify`.
+        public var action: String?
+
+        public var id: String { key ?? "\(kind):\(label ?? text ?? "")" }
+
+        enum CodingKeys: String, CodingKey {
+            case kind, key = "id", label, text, options, multiple, value, min, max, step, action = "do"
+        }
+    }
+}
+
+/// Any JSON value, for the open maps Reflex carries without interpreting
+/// (`payload`, `set`, `params`, Panel values).
+public enum JSONValue: Codable, Sendable, Equatable {
+    case null
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([JSONValue])
+    case object([String: JSONValue])
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null }
+        else if let b = try? c.decode(Bool.self) { self = .bool(b) }
+        else if let n = try? c.decode(Double.self) { self = .number(n) }
+        else if let s = try? c.decode(String.self) { self = .string(s) }
+        else if let a = try? c.decode([JSONValue].self) { self = .array(a) }
+        else { self = .object(try c.decode([String: JSONValue].self)) }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .null: try c.encodeNil()
+        case .bool(let b): try c.encode(b)
+        case .number(let n): try c.encode(n)
+        case .string(let s): try c.encode(s)
+        case .array(let a): try c.encode(a)
+        case .object(let o): try c.encode(o)
+        }
+    }
+
+    /// As Foundation objects, for JSONSerialization.
+    public var any: Any {
+        switch self {
+        case .null: NSNull()
+        case .bool(let b): b
+        case .number(let n): n == n.rounded() && abs(n) < 9e15 ? Int(n) as Any : n
+        case .string(let s): s
+        case .array(let a): a.map(\.any)
+        case .object(let o): o.mapValues(\.any)
+        }
+    }
+
+    public init(any v: Any) {
+        switch v {
+        case let b as Bool: self = .bool(b)
+        case let n as Int: self = .number(Double(n))
+        case let n as Double: self = .number(n)
+        case let s as String: self = .string(s)
+        case let a as [Any]: self = .array(a.map(JSONValue.init(any:)))
+        case let o as [String: Any]: self = .object(o.mapValues(JSONValue.init(any:)))
+        default: self = .null
+        }
+    }
 }
 
 /// The named colors, matching the Agent layer's renderer (`agent/src/render.ts`),
 /// so a `look` and the iPad agree.
-enum Palette {
+public enum Palette {
     static let strong: [String: UInt32] = [
         "black": 0x1d1d1f, "grey": 0x8e8e93, "white": 0xffffff, "red": 0xe5484d, "orange": 0xf76b15,
         "yellow": 0xf5c400, "green": 0x30a46c, "teal": 0x12a594, "blue": 0x0090ff, "violet": 0x6e56cf, "pink": 0xd6409f,
@@ -80,7 +245,7 @@ enum Palette {
     ]
     static let textSize: [String: CGFloat] = ["s": 14, "m": 18, "l": 24, "xl": 34]
 
-    static func color(_ name: String?, default fallback: String = "black") -> Color {
+    public static func color(_ name: String?, default fallback: String = "black") -> Color {
         rgb(strong[name ?? ""] ?? strong[fallback]!)
     }
 
