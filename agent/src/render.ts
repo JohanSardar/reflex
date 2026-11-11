@@ -1,6 +1,7 @@
-// `look` renders through this interface. The basic renderer here draws scene
-// Elements as SVG and rasterizes them with resvg; the full headless renderer
-// (shared with the native look) is T8.
+// `look` renders through this interface, on the Link with no iPad attached:
+// scene Elements are drawn as SVG and rasterized with resvg. Pictures the
+// person added are drawn from the asset store, Ink follows its pressure, and
+// Markdown keeps its headings and lists.
 import { existsSync } from "node:fs";
 import { Resvg } from "@resvg/resvg-js";
 import type { Bounds } from "./store.ts";
@@ -25,6 +26,8 @@ export type RenderRequest = {
   strokes: Record<string, number[][]>;
   bounds: Bounds;
   width: number;
+  /** The bytes behind an `asset:<hash>` image source, when this Link has them. */
+  asset?: (hash: string) => Buffer | undefined;
 };
 export interface Renderer {
   render(req: RenderRequest): { png: Buffer; px: [number, number] };
@@ -143,7 +146,44 @@ function shapePath(shape: string, b: Bounds, attrs: string): string {
   }
 }
 
-function elementSvg(e: SceneElement, byId: Map<string, SceneElement>, strokes: RenderRequest["strokes"]): string {
+const IMAGE_MIME = (b: Buffer) =>
+  b[0] === 0x89 && b[1] === 0x50 ? "image/png" : b[0] === 0xff && b[1] === 0xd8 ? "image/jpeg" : b.subarray(0, 4).toString() === "GIF8" ? "image/gif" : b.subarray(8, 12).toString() === "WEBP" ? "image/webp" : undefined;
+
+/** Markdown as lines of SVG text: headings larger and bold, list items with bullets, emphasis marks dropped. */
+function markdownBlock(md: string, b: Bounds, size: number, color: string): string {
+  const out: string[] = [];
+  let y = b[1] + 6;
+  for (const raw of md.split("\n")) {
+    const h = /^(#{1,6})\s+(.*)$/.exec(raw);
+    const li = /^\s*(?:[-*+]|\d+\.)\s+(.*)$/.exec(raw);
+    const fs = h ? Math.round(size * (h[1].length === 1 ? 1.6 : h[1].length === 2 ? 1.35 : 1.15)) : size;
+    const text = (h ? h[2] : li ? `• ${li[1]}` : raw).replace(/\*\*|__|`/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+    const x = b[0] + 6 + (li ? 12 : 0);
+    for (const l of wrap(text, b[2] - 12 - (li ? 12 : 0), fs)) {
+      y += fs * 1.25;
+      if (y > b[1] + b[3] + fs) break;
+      out.push(`<text x="${x}" y="${y - fs * 0.3}" font-family="Helvetica, Arial, sans-serif" font-size="${fs}"${h ? ' font-weight="bold"' : ""} fill="${color}">${esc(l)}</text>`);
+    }
+    if (!raw.trim()) y += size * 0.4;
+  }
+  return out.join("");
+}
+
+/** A stroke whose width follows its pressure, as short segments. */
+function inkSvg(pts: number[][], color: string, width: number): string {
+  if (pts.length < 2 || !pts.some((p) => typeof p[3] === "number" && p[3] > 0)) {
+    return `<polyline points="${pts.map((p) => `${p[0]},${p[1]}`).join(" ")}" fill="none" stroke="${color}" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+  const segs: string[] = [];
+  for (let i = 1; i < pts.length; i++) {
+    const p = ((pts[i - 1][3] ?? 0.5) + (pts[i][3] ?? 0.5)) / 2;
+    const w = Math.max(0.6, width * (0.4 + 1.2 * Math.min(1, Math.max(0, p))));
+    segs.push(`<line x1="${pts[i - 1][0]}" y1="${pts[i - 1][1]}" x2="${pts[i][0]}" y2="${pts[i][1]}" stroke-width="${w.toFixed(2)}"/>`);
+  }
+  return `<g stroke="${color}" stroke-linecap="round" fill="none">${segs.join("")}</g>`;
+}
+
+function elementSvg(e: SceneElement, byId: Map<string, SceneElement>, strokes: RenderRequest["strokes"], asset?: RenderRequest["asset"]): string {
   const b = e.bounds;
   const color = COLORS[e.color] ?? COLORS.black;
   switch (e.type) {
@@ -155,8 +195,8 @@ function elementSvg(e: SceneElement, byId: Map<string, SceneElement>, strokes: R
     case "note":
       return `<rect x="${b[0]}" y="${b[1]}" width="${b[2]}" height="${b[3]}" fill="${TINT[e.color] ?? TINT.yellow}" stroke="${COLORS[e.color] ?? COLORS.yellow}" stroke-width="1.5"/>` + textBlock(e.text ?? "", b, 17, COLORS.black, false);
     case "text": {
-      const text = e.markdown ? String(e.text).replace(/^#+\s*/gm, "").replace(/\*\*/g, "") : e.text;
-      return textBlock(text ?? "", b, SIZES[e.size] ?? 18, color, e.align === "middle");
+      if (e.markdown) return markdownBlock(String(e.text ?? ""), b, SIZES[e.size] ?? 18, color);
+      return textBlock(e.text ?? "", b, SIZES[e.size] ?? 18, color, e.align === "middle");
     }
     case "math":
       return `<text x="${b[0] + 4}" y="${b[1] + b[3] / 2 + 7}" font-family="Times New Roman, serif" font-style="italic" font-size="${SIZES[e.size] ?? 22}" fill="${color}">${esc(e.latex ?? "")}</text>`;
@@ -184,7 +224,7 @@ function elementSvg(e: SceneElement, byId: Map<string, SceneElement>, strokes: R
     case "ink": {
       const pts = strokes[e.id];
       if (!pts?.length) return `<rect x="${b[0]}" y="${b[1]}" width="${b[2]}" height="${b[3]}" fill="none" stroke="${COLORS.red}" stroke-dasharray="3 3"/>`;
-      return `<polyline points="${pts.map((p) => `${p[0]},${p[1]}`).join(" ")}" fill="none" stroke="${COLORS[e.color] ?? COLORS.red}" stroke-width="${e.width ?? 3}" stroke-linecap="round" stroke-linejoin="round"/>`;
+      return inkSvg(pts, COLORS[e.color] ?? COLORS.red, e.width ?? 3);
     }
     case "frame":
       return `<rect x="${b[0]}" y="${b[1]}" width="${b[2]}" height="${b[3]}" fill="none" stroke="${COLORS.grey}" stroke-width="1.5" rx="6"/>` + (e.title ? `<text x="${b[0]}" y="${b[1] - 8}" font-family="Helvetica, Arial, sans-serif" font-size="15" fill="${COLORS.grey}">${esc(e.title)}</text>` : "");
@@ -192,11 +232,26 @@ function elementSvg(e: SceneElement, byId: Map<string, SceneElement>, strokes: R
       const btn = e.send_button ? `<rect x="${b[0] + b[2] - 150}" y="${b[1] + b[3] - 44}" width="140" height="34" rx="17" fill="${COLORS.blue}"/><text x="${b[0] + b[2] - 80}" y="${b[1] + b[3] - 22}" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="14" fill="#ffffff">${esc(e.send_button)}</text>` : "";
       return `<rect x="${b[0]}" y="${b[1]}" width="${b[2]}" height="${b[3]}" fill="${TINT.blue}" fill-opacity="0.35" stroke="${COLORS.blue}" stroke-dasharray="8 6" rx="8"/>` + (e.title ? textBlock(e.title, b, 15, COLORS.blue, false) : "") + btn;
     }
-    case "image":
+    case "image": {
+      const hash = typeof e.src === "string" && e.src.startsWith("asset:") ? e.src.slice(6) : undefined;
+      const bytes = hash ? asset?.(hash) : undefined;
+      const mime = bytes && IMAGE_MIME(bytes);
+      if (bytes && mime) return `<image x="${b[0]}" y="${b[1]}" width="${b[2]}" height="${b[3]}" preserveAspectRatio="xMidYMid meet" href="data:${mime};base64,${bytes.toString("base64")}"/>`;
+      return `<rect x="${b[0]}" y="${b[1]}" width="${b[2]}" height="${b[3]}" fill="#f4f4f6" stroke="${COLORS.grey}" stroke-dasharray="6 4"/>` + textBlock(`image${e.alt ? `: ${e.alt}` : ""}`, b, 15, COLORS.grey, true);
+    }
+    case "file": {
+      const kb = typeof e.size === "number" ? (e.size >= 1e6 ? `${(e.size / 1e6).toFixed(1)} MB` : e.size >= 1e3 ? `${Math.round(e.size / 1e3)} KB` : `${e.size} bytes`) : "";
+      const ext = String(e.name ?? "").split(".").pop()?.toUpperCase().slice(0, 4) ?? "";
+      return (
+        `<rect x="${b[0]}" y="${b[1]}" width="${b[2]}" height="${b[3]}" rx="10" fill="#ffffff" stroke="${COLORS.grey}" stroke-width="1.5"/>` +
+        `<rect x="${b[0] + 12}" y="${b[1] + 12}" width="40" height="${Math.max(20, Math.min(52, b[3] - 24))}" rx="4" fill="${TINT.blue}" stroke="${COLORS.blue}"/>` +
+        `<text x="${b[0] + 32}" y="${b[1] + 12 + Math.max(20, Math.min(52, b[3] - 24)) / 2 + 4}" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="${COLORS.blue}">${esc(ext)}</text>` +
+        textBlock([e.name ?? "file", [e.mime, kb].filter(Boolean).join(", ")].filter(Boolean).join("\n"), [b[0] + 56, b[1], b[2] - 60, b[3]], 15, COLORS.black, false)
+      );
+    }
     case "embed":
-    case "file":
     default: {
-      const label = e.type === "image" ? `image${e.alt ? `: ${e.alt}` : ""}` : e.type === "embed" ? `embed: ${e.template ?? e.url ?? "html"}` : e.type === "file" ? `file: ${e.name}` : `${e.type}`;
+      const label = e.type === "embed" ? `embed: ${e.template ?? e.url ?? "html"}` : `${e.type}`;
       return `<rect x="${b[0]}" y="${b[1]}" width="${b[2]}" height="${b[3]}" fill="#f4f4f6" stroke="${COLORS.grey}" stroke-dasharray="6 4"/>` + textBlock(label, b, 15, COLORS.grey, true);
     }
   }
@@ -206,14 +261,14 @@ function elementSvg(e: SceneElement, byId: Map<string, SceneElement>, strokes: R
 const LAYER: Record<string, number> = { region: 0, frame: 1, image: 2, embed: 2, file: 2, connector: 4, ink: 5 };
 
 export class SvgRenderer implements Renderer {
-  render({ elements, strokes, bounds, width }: RenderRequest) {
+  render({ elements, strokes, bounds, width, asset }: RenderRequest) {
     const [x, y, w, h] = bounds;
     const pxW = Math.max(1, Math.min(4096, Math.round(width)));
     const pxH = Math.max(1, Math.min(4096, Math.round((pxW * h) / Math.max(1, w))));
     const byId = new Map(elements.map((e) => [e.id, e]));
     const body = [...elements]
       .sort((a, b) => (LAYER[a.type] ?? 3) - (LAYER[b.type] ?? 3))
-      .map((e) => elementSvg(e, byId, strokes))
+      .map((e) => elementSvg(e, byId, strokes, asset))
       .join("\n");
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x} ${y} ${w} ${h}" width="${pxW}" height="${pxH}">
 <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#fbfbfa"/>

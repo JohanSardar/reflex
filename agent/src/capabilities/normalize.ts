@@ -92,6 +92,19 @@ export function normalizeOps(ops: unknown[]): { ops: Op[]; repaired: string[]; e
       errors.push({ op: i, code: "invalid_input", msg: `ops[${i}] is not an object.`, fix: 'Each op is an object with an "op" field.' });
       return;
     }
+    if (op.op === "add" && (op.type === "ink" || op.type === "file")) {
+      errors.push({
+        op: i,
+        field: "/type",
+        code: "invalid_input",
+        msg: `ops[${i}] adds ${op.type === "ink" ? "Ink" : "a file"}, which only people make.`,
+        fix:
+          op.type === "ink"
+            ? 'Draw with a connector (points: [[x, y], ...]) or a shape on your own layer; the person\'s Ink is theirs.'
+            : 'Show a picture with type "image" (src: an https URL); a file Element is something the person added.',
+      });
+      return;
+    }
     const v = variantOf(op);
     if (!v) {
       if (op.op === "add" && op.type === undefined)

@@ -79,6 +79,13 @@ async function call(tool: string, args: Record<string, unknown>, f: Flags, human
   }
   const files = (o.files?.(r) ?? r.images.map((_, i) => join(imageDir(), `${tool}-${Date.now()}-${i + 1}.png`))).slice(0, r.images.length);
   r.images.forEach((b64, i) => writeFileSync(files[i], Buffer.from(b64, "base64")));
+  // A file Element's bytes (read detail full) go next to the images; the JSON says where.
+  for (const fb of r.files ?? []) {
+    const path = join(imageDir(), `${fb.id.replace(/[^A-Za-z0-9_.-]/g, "_")}-${basename(fb.name).replace(/[^A-Za-z0-9_. -]/g, "_")}`);
+    writeFileSync(path, Buffer.from(fb.data, "base64"));
+    const entry = (r.json.files ?? []).find((x: any) => x.id === fb.id);
+    if (entry) entry.file = path;
+  }
   if (f.json) out(JSON.stringify(r.json));
   else for (const line of human(r, files)) out(line);
   return 0;
@@ -159,6 +166,10 @@ const COMMANDS: Record<string, Cmd> = {
       return call("read", args, f, (r) => [
         ...(r.json.outline ? outlineLines(r.json.outline) : []),
         ...(r.json.elements ?? []).map((e: any) => JSON.stringify(e)),
+        ...(r.json.files ?? []).flatMap((x: any) => [
+          `file ${x.id}: ${x.name} (${x.mime}, ${x.size} bytes)${x.file ? ` → ${x.file}` : ""}${x.missing ? " (not synced to this Link yet)" : ""}`,
+          ...(x.text !== undefined ? [x.text + (x.truncated ? "\n[truncated]" : "")] : []),
+        ]),
         ...(r.json.strokes ?? []).map((s: any) => `${s.id}${s.mark ? ` (${s.mark})` : ""}: ${s.points.length} points`),
         ...(r.json.elsewhere && (r.json.elsewhere.on_screen || r.json.elsewhere.off_screen) ? [`elsewhere: ${r.json.elsewhere.on_screen} on screen, ${r.json.elsewhere.off_screen} off screen`] : []),
         ...tail(r.json),
@@ -202,8 +213,12 @@ const COMMANDS: Record<string, Cmd> = {
           if (j.status === "still_waiting") return ["still_waiting: nothing yet. Run the same command again."];
           return [
             `${j.kind} ${j.send} from ${j.from.name} in ${j.space}${j.redelivered ? " (redelivered)" : ""}${j.said ? `: "${j.said}"` : ""}`,
-            ...j.marks.map((m: any) => `  ${m.id} ${m.kind}${m.on ? ` on ${m.on.join(", ")}` : ""}${m.near ? ` near ${m.near}` : ""}${m.image ? ` (image ${m.image})` : ""}`),
-            ...j.changes.map((c: any) => `  ${c.kind} ${c.id}`),
+            ...j.marks.map(
+              (m: any) =>
+                `  ${m.id} ${m.kind}${m.on ? ` on ${m.on.join(", ")}` : ""}${m.from || m.to ? ` from ${m.from ?? "?"} to ${m.to ?? "?"}` : ""}${m.text_guess ? ` "${m.text_guess}" (${m.confidence})` : ""}${m.near ? ` near ${m.near}` : ""}${m.moved_since_marked ? " (moved since)" : ""}${m.image ? ` (image ${m.image})` : ""}`,
+            ),
+            ...j.changes.map((c: any) => `  ${c.kind} ${c.id}${c.file ? ` ${c.file} (${c.mime})` : ""}${c.values ? ` ${JSON.stringify(c.values)}` : ""}${c.image ? ` (image ${c.image})` : ""}`),
+            ...(j.element ? [`  on ${j.element}${j.payload ? ` ${JSON.stringify(j.payload)}` : ""}`] : []),
             ...files.map((p, i) => `  image ${i + 1}: ${p}`),
             j.next,
           ];
@@ -221,6 +236,112 @@ const COMMANDS: Record<string, Cmd> = {
       return code;
     },
   },
+  "elements exec": {
+    usage: "reflex elements exec <space> (--code '<js>' | --file <path.js> | stdin) [--in-reply-to <send>] [--look] [--request <id>] [--out <file.png>]",
+    summary: "Run JavaScript that writes one batch (exec)",
+    flags: ["code", "file", "in-reply-to", "look", "request", "out"],
+    run: (p, f) => {
+      const space = need(p, 0, "space", "reflex elements exec <space> --code '...'");
+      let code: string | undefined;
+      if (typeof f.code === "string") code = f.code;
+      else if (typeof f.file === "string") code = readFileSync(resolve(f.file), "utf8");
+      else if (!process.stdin.isTTY) code = readFileSync(0, "utf8");
+      if (!code?.trim()) throw new Usage("No code given. Pass --code '<js>', --file <path.js>, or pipe it on stdin.");
+      const args: Record<string, unknown> = { space, code };
+      if (typeof f["in-reply-to"] === "string") args.in_reply_to = f["in-reply-to"];
+      if (f.look) args.look = true;
+      if (typeof f.request === "string") args.request = f.request;
+      return call("exec", args, f, (r, files) => [
+        r.json.batch ? `Applied ${r.json.batch}.` : "Wrote nothing.",
+        ...Object.entries(r.json.ids ?? {}).map(([k, v]) => `  ${k} → ${v}`),
+        ...(r.json.repaired ?? []).map((x: string) => `  repaired: ${x}`),
+        ...(r.json.lints ?? []).map((l: any) => `  lint ${l.code} on ${l.id}: ${l.msg} Fix: ${l.fix}`),
+        ...(r.json.logs ?? []).map((l: string) => `  log: ${l}`),
+        ...(r.json.result !== null && r.json.result !== undefined ? [`result: ${JSON.stringify(r.json.result)}`] : []),
+        ...(files.length ? [`  look: ${files[0]} covers [${r.json.look.bounds.join(", ")}]`] : []),
+        ...tail(r.json),
+      ], { files: typeof f.out === "string" ? () => [resolve(f.out as string)] : undefined });
+    },
+  },
+  "elements revert": {
+    usage: "reflex elements revert <space> [--batch <id> | --last <n>]",
+    summary: "Undo your own batches: one by ID, or your last n (revert)",
+    flags: ["batch", "last"],
+    run: (p, f) => {
+      const space = need(p, 0, "space", "reflex elements revert <space> --last 1");
+      if (f.batch && f.last) throw new Usage("Pass --batch or --last, not both.");
+      const args: Record<string, unknown> = { space };
+      if (typeof f.batch === "string") args.batch = f.batch;
+      else args.last = int(f.last, "last") ?? 1;
+      return call("revert", args, f, (r) => [
+        `Reverted ${r.json.reverted.join(", ")} as ${r.json.batch}.`,
+        ...(r.json.kept ?? []).map((k: any) => `  kept ${k.id}: ${k.why}`),
+        ...tail(r.json),
+      ]);
+    },
+  },
+  "docs read": {
+    usage: "reflex docs read <topic>",
+    summary: "Read a Guide; 'index' lists every type, Recipe and Guide (read_me)",
+    run: (p, f) => call("read_me", { topic: need(p, 0, "topic", "reflex docs read index") }, f, (r) => [r.json.text, ...tail(r.json)]),
+  },
+  "recipes list": {
+    usage: "reflex recipes list",
+    summary: "List the Recipes, built in and in the person's Library (read_me index)",
+    run: (_p, f) =>
+      call("read_me", { topic: "index" }, f, (r) => {
+        const lines = String(r.json.text).split("\n");
+        const from = lines.findIndex((l) => l === "## Recipes");
+        const to = lines.findIndex((l, i) => i > from && l.startsWith("## "));
+        return [...lines.slice(from + 1, to < 0 ? undefined : to).filter((l) => l.trim()), ...tail(r.json)];
+      }),
+  },
+  "recipes apply": {
+    usage: "reflex recipes apply <space> <name> [--params '<JSON>'] [--at '<JSON placement>'] [--in-reply-to <send>] [--look] [--request <id>] [--out <file.png>]",
+    summary: "Apply a ready-made pattern as one batch (recipe)",
+    flags: ["params", "at", "in-reply-to", "look", "request", "out"],
+    run: (p, f) => {
+      const space = need(p, 0, "space", "reflex recipes apply <space> <name>");
+      const name = need(p, 1, "name", "reflex recipes apply <space> <name>");
+      const json = (k: string) => {
+        if (typeof f[k] !== "string") return undefined;
+        try {
+          return JSON.parse(f[k] as string);
+        } catch (e) {
+          throw new Usage(`--${k} is not valid JSON: ${(e as Error).message}`);
+        }
+      };
+      const args: Record<string, unknown> = { space, name };
+      if (f.params) args.params = json("params");
+      if (f.at) args.at = json("at");
+      if (typeof f["in-reply-to"] === "string") args.in_reply_to = f["in-reply-to"];
+      if (f.look) args.look = true;
+      if (typeof f.request === "string") args.request = f.request;
+      return call("recipe", args, f, (r, files) => [
+        `Applied ${name} as ${r.json.batch}:`,
+        ...r.json.ops.map((o: any) => `  ${o.op} ${o.type ?? ""} ${o.id ?? (o.ids ?? []).join(",")}`.trimEnd()),
+        ...(r.json.repaired ?? []).map((x: string) => `  repaired: ${x}`),
+        ...(r.json.lints ?? []).map((l: any) => `  lint ${l.code} on ${l.id}: ${l.msg} Fix: ${l.fix}`),
+        ...(files.length ? [`  look: ${files[0]} covers [${r.json.look.bounds.join(", ")}]`] : []),
+        ...tail(r.json),
+      ], { files: typeof f.out === "string" ? () => [resolve(f.out as string)] : undefined });
+    },
+  },
+  "spaces attention": {
+    usage: "reflex spaces attention <space> --message <text> [--ids <a,b>]",
+    summary: "Ask the person to come to a Space, with a banner they can tap (request_attention)",
+    flags: ["message", "ids"],
+    run: (p, f) => {
+      const space = need(p, 0, "space", "reflex spaces attention <space> --message '...'");
+      if (typeof f.message !== "string") throw new Usage("Missing --message <text>.");
+      const args: Record<string, unknown> = { space, message: f.message };
+      if (f.ids) args.ids = list(f.ids);
+      return call("request_attention", args, f, (r) => [
+        r.json.status === "shown" ? "Shown on the person's device." : r.json.status === "queued" ? "Queued: it shows when one of their devices connects." : "They are already looking at it.",
+        ...tail(r.json),
+      ]);
+    },
+  },
   mcp: {
     usage: "reflex mcp",
     summary: "Run the MCP server on stdio, for a harness's MCP config",
@@ -231,20 +352,59 @@ const COMMANDS: Record<string, Cmd> = {
     },
   },
   "dev person": {
-    usage: "reflex dev person circle|underline <space> <element> | reflex dev person send <space> [--said <text>]",
-    summary: "Act as the person without an iPad (a Link started with --dev): mark an Element, press Send",
-    flags: ["said", "trigger"],
+    usage:
+      "reflex dev person circle|underline|strike <space> <element> | arrow <space> <from> <to> | write <space> <near> <text> [--confidence <0-1>] | say <space> <words> | move <space> <element> --by dx,dy | add-file <space> <path> [--near <element>] | tap <space> <element> [--on tap|long_press|…] [--values '<JSON>'] | revert <space> <agent> | history <space> | send <space> [--said <text>]",
+    summary: "Act as the person without an iPad (a Link started with --dev): mark, write, speak, add files, tap, revert, press Send",
+    flags: ["said", "trigger", "confidence", "by", "near", "on", "values"],
     run: async (p, f) => {
-      const [action, space, target] = p;
-      if (!["circle", "underline", "send"].includes(action ?? "")) throw new Usage("Usage: reflex dev person circle|underline <space> <element> | send <space> [--said <text>]");
+      const [action, space, target, extra] = p;
+      const actions = ["circle", "underline", "strike", "arrow", "write", "say", "move", "add-file", "tap", "revert", "history", "send"];
+      const usage = COMMANDS["dev person"].usage;
+      if (!actions.includes(action ?? "")) throw new Usage(`Usage: ${usage}`);
       if (!space) throw new Usage("Missing <space>.");
-      if (action !== "send" && !target) throw new Usage("Missing <element>.");
-      const r = await (await host()).person(action, { space, target, said: f.said, trigger: f.trigger });
+      if (!["send", "history"].includes(action) && !target) throw new Usage(`Missing <${action === "say" ? "words" : action === "add-file" ? "path" : action === "revert" ? "agent" : "element"}>.`);
+      const args: Record<string, unknown> = { space, target, said: f.said, trigger: f.trigger };
+      if (action === "arrow") {
+        if (!extra) throw new Usage("Missing <to>.");
+        args.to = extra;
+      }
+      if (action === "write") {
+        if (!extra) throw new Usage("Missing <text>.");
+        args.text = p.slice(3).join(" ");
+        if (f.confidence !== undefined) args.confidence = Number(f.confidence);
+      }
+      if (action === "say") args.text = p.slice(2).join(" ");
+      if (action === "move") {
+        const by = typeof f.by === "string" ? f.by.split(",").map(Number) : [];
+        if (by.length !== 2 || by.some((n) => !Number.isFinite(n))) throw new Usage("--by takes dx,dy.");
+        args.by = by;
+      }
+      if (action === "add-file") {
+        const path = resolve(target);
+        args.name = basename(path);
+        args.data = readFileSync(path).toString("base64");
+        if (typeof f.near === "string") args.near = f.near;
+      }
+      if (action === "tap") {
+        if (typeof f.on === "string") args.on = f.on;
+        if (typeof f.values === "string") args.values = JSON.parse(f.values);
+      }
+      if (action === "revert") args.agent = p.slice(2).join(" ");
+      const r = await (await host()).person(action, args);
       if (r.isError) {
         process.stderr.write(JSON.stringify(r.json) + "\n");
         return 1;
       }
-      out(f.json ? JSON.stringify(r.json) : action === "send" ? `Sent ${r.json.send} to ${r.json.recipients.join(", ") || "nobody (no Agent has opened this Space)"}` : `Drew ${r.json.id}`);
+      const j = r.json;
+      if (f.json) out(JSON.stringify(j));
+      else if (action === "send") out(`Sent ${j.send} to ${j.recipients.join(", ") || "nobody (no Agent has opened this Space)"}`);
+      else if (action === "tap") out(`Fired ${j.send} (${j.kind}: ${j.actions.join(", ")})${j.recipients.length ? ` to ${j.recipients.join(", ")}` : ""}`);
+      else if (action === "say") out(`Said it (${j.words} words so far)`);
+      else if (action === "revert") out(`Reverted ${j.agent}'s ${j.reverted.join(", ")}${j.kept.length ? `; kept ${j.kept.map((k: any) => k.id).join(", ")}` : ""}`);
+      else if (action === "history")
+        for (const e of j.entries)
+          out(`${new Date(e.at).toISOString().slice(11, 19)}  ${e.by.name.padEnd(24)} ${(e.kind === "action" ? e.action : e.kind).padEnd(12)} ${e.state.padEnd(9)} ${e.counts ? `+${e.counts.added} ~${e.counts.changed} -${e.counts.removed}` : `${e.strokes} strokes`}  ${(e.ids ?? []).slice(0, 5).join(", ")}`);
+      else out(`Drew ${(j.ids ?? [j.id]).join(", ")}`);
       return 0;
     },
   },

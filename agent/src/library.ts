@@ -92,7 +92,7 @@ export function index(spaces: SpaceStore, names: (id: string) => string, extra: 
     "# Reflex index",
     "",
     "## Element types",
-    `- ${ADD_TYPES.filter((t) => t !== "extension").join(", ")}: built in. Their fields are in apply's input schema.`,
+    `- ${ADD_TYPES.filter((t) => t !== "extension").join(", ")}: built in. read_me("<type>") lists its fields with an example.`,
     "- ink, file: made by people only.",
     "",
     "## Recipes",

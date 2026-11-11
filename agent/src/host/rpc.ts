@@ -47,9 +47,12 @@ export type ClientFrame =
   | { t: "person"; id: number; action: string; args: Record<string, any> }
   | { t: "cancel"; id: number };
 
+/** A file's bytes in a result, base64. */
+export type WireFile = { id: string; name: string; mime: string; data: string };
+
 export type HostFrame =
   | { t: "ready" }
-  | { t: "result"; id: number; json: Record<string, any>; images: string[]; isError: boolean }
+  | { t: "result"; id: number; json: Record<string, any>; images: string[]; files?: WireFile[]; isError: boolean }
   | { t: "progress"; id: number; elapsed_s: number; timeout_s: number }
   | { t: "failed"; id: number; message: string };
 
