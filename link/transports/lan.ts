@@ -2,102 +2,44 @@
 // Frames are length-prefixed (u32, big-endian). Bonjour only says where a
 // device might be; the coordinator authenticates every Path itself.
 import { Bonjour, type Service } from "bonjour-service";
-import { randomBytes } from "node:crypto";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
-import type { Candidate, Path, PathMeasurements, Priority, Transport } from "./transport.ts";
+import { FramedPath } from "./framed.ts";
+import type { Candidate, Path, Transport } from "./transport.ts";
 
-const MAX_FRAME = 16 * 1024 * 1024;
 export const SERVICE_TYPE = "reflex-link";
 
-class TcpPath implements Path {
-  readonly id = "lan-" + randomBytes(4).toString("hex");
-  readonly transport = "lan";
-  readonly limits = { maxFrameBytes: MAX_FRAME, reliable: true, ordered: true } as const;
-  readonly initiator: boolean;
-  readonly remote: string;
-  readonly closed: Promise<string>;
+class TcpPath extends FramedPath {
   #socket: Socket;
-  #buf = Buffer.alloc(0);
-  #frames: Uint8Array[] = [];
-  #waiters: ((f: Uint8Array | null) => void)[] = [];
-  #done = false;
-  #m: PathMeasurements = { rttMs: null, queuedBytes: 0, sentBytes: 0, receivedBytes: 0 };
-  #resolveClosed!: (r: string) => void;
 
   constructor(socket: Socket, initiator: boolean) {
+    super("lan", `${socket.remoteAddress}:${socket.remotePort}`, initiator);
     this.#socket = socket;
-    this.initiator = initiator;
-    this.remote = `${socket.remoteAddress}:${socket.remotePort}`;
-    this.closed = new Promise((r) => (this.#resolveClosed = r));
     socket.setNoDelay(true);
     socket.setKeepAlive(true, 10_000);
-    socket.on("data", (d: Buffer) => this.#onData(d));
-    socket.on("close", () => this.#finish("socket closed"));
-    socket.on("error", (e) => this.#finish(`socket error: ${e.message}`));
+    socket.on("data", (d: Buffer) => this.onData(d));
+    socket.on("close", () => this.finish("socket closed"));
+    socket.on("error", (e) => this.finish(`socket error: ${e.message}`));
   }
 
-  #onData(d: Buffer): void {
-    this.#m.receivedBytes += d.length;
-    this.#buf = this.#buf.length ? Buffer.concat([this.#buf, d]) : d;
-    while (this.#buf.length >= 4) {
-      const n = this.#buf.readUInt32BE(0);
-      if (n > MAX_FRAME) return this.close(`frame of ${n} bytes is over the limit`);
-      if (this.#buf.length < 4 + n) break;
-      const f = this.#buf.subarray(4, 4 + n);
-      this.#buf = this.#buf.subarray(4 + n);
-      const w = this.#waiters.shift();
-      if (w) w(f);
-      else this.#frames.push(f);
-    }
+  protected async write(bytes: Buffer): Promise<void> {
+    if (this.#socket.write(bytes)) return;
+    await new Promise<void>((r) => {
+      const done = (): void => {
+        this.#socket.off("drain", done);
+        this.#socket.off("close", done);
+        r();
+      };
+      this.#socket.once("drain", done);
+      this.#socket.once("close", done);
+    });
   }
 
-  #finish(reason: string): void {
-    if (this.#done) return;
-    this.#done = true;
-    for (const w of this.#waiters.splice(0)) w(null);
-    this.#resolveClosed(reason);
+  protected queued(): number {
+    return this.#socket.writableLength;
   }
 
-  async send(frame: Uint8Array, _priority: Priority): Promise<void> {
-    if (this.#done) throw new Error("path closed");
-    if (frame.length > MAX_FRAME) throw new Error(`frame of ${frame.length} bytes is over the limit`);
-    const head = Buffer.alloc(4);
-    head.writeUInt32BE(frame.length);
-    this.#m.sentBytes += frame.length + 4;
-    const ok = this.#socket.write(Buffer.concat([head, frame]));
-    this.#m.queuedBytes = this.#socket.writableLength;
-    if (!ok) {
-      await new Promise<void>((r) => {
-        const done = (): void => {
-          this.#socket.off("drain", done);
-          this.#socket.off("close", done);
-          r();
-        };
-        this.#socket.once("drain", done);
-        this.#socket.once("close", done);
-      });
-      this.#m.queuedBytes = this.#socket.writableLength;
-    }
-  }
-
-  next(): Promise<Uint8Array | null> {
-    const f = this.#frames.shift();
-    if (f) return Promise.resolve(f);
-    if (this.#done) return Promise.resolve(null);
-    return new Promise((r) => this.#waiters.push(r));
-  }
-
-  measurements(): PathMeasurements {
-    return { ...this.#m, queuedBytes: this.#socket.writableLength };
-  }
-
-  recordRtt(ms: number): void {
-    this.#m.rttMs = this.#m.rttMs === null ? ms : Math.round(this.#m.rttMs * 0.7 + ms * 0.3);
-  }
-
-  close(reason: string): void {
+  protected destroy(): void {
     this.#socket.destroy();
-    this.#finish(reason);
   }
 }
 
