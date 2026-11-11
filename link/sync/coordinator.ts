@@ -195,8 +195,16 @@ export class Coordinator {
   #candidate(c: Candidate): void {
     if (!c.device || c.device === this.#me.key.device) return;
     const list = this.#candidates.get(c.device) ?? [];
-    if (!list.some((x) => x.host === c.host && x.port === c.port)) list.unshift(c);
-    this.#candidates.set(c.device, list.slice(0, 6));
+    if (!list.some((x) => x.transport === c.transport && x.host === c.host && x.port === c.port)) list.unshift(c);
+    // The latest few per transport: a device with many LAN addresses must not push its Relay or
+    // peer-to-peer candidate out.
+    const per = new Map<string, number>();
+    const kept = list.filter((x) => {
+      const n = (per.get(x.transport) ?? 0) + 1;
+      per.set(x.transport, n);
+      return n <= 6;
+    });
+    this.#candidates.set(c.device, kept);
     if (this.#catalog.device(c.device) && !this.#peers.get(c.device)?.paths.on(c.transport)) void this.#dial(c.device);
   }
 
