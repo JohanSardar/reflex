@@ -12,6 +12,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { TOOLS, description, inputSchema, instructions } from "../protocol.ts";
 import { Client } from "../host/client.ts";
 import { credential, logPath, NoLink } from "../host/rpc.ts";
+import { hostShowsApps, serveApp, toolMeta } from "./app.ts";
 
 const KNOWN: Record<string, string> = { "claude-code": "Claude Code", "codex-mcp-client": "Codex", codex: "Codex" };
 // Longest wait_for_user the surface holds, a little under the harness's default hard tool timeout, so a long
@@ -78,7 +79,7 @@ export async function runMcp(o: { channel?: boolean } = {}) {
   const session = o.channel ? sessionHasChannels() : { on: false, why: "" };
   const server = new Server(
     { name: "reflex", version: "0.1.0" },
-    { capabilities: { tools: {}, ...(o.channel ? { experimental: { [CHANNEL]: {} } } : {}) }, instructions: instructions + (session.on ? CHANNEL_INSTRUCTIONS : "") },
+    { capabilities: { tools: {}, resources: {}, ...(o.channel ? { experimental: { [CHANNEL]: {} } } : {}) }, instructions: instructions + (session.on ? CHANNEL_INSTRUCTIONS : "") },
   );
   const who = () => {
     const c = server.getClientVersion();
@@ -87,8 +88,14 @@ export async function runMcp(o: { channel?: boolean } = {}) {
   };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOLS.map((t) => ({ name: t, description: description(t), inputSchema: inputSchema(t) })),
+    tools: TOOLS.map((t) => ({ name: t, description: description(t), inputSchema: inputSchema(t), ...(toolMeta(t) ? { _meta: toolMeta(t) } : {}) })),
   }));
+  // The MCP App view (app.ts), for hosts that render MCP Apps.
+  serveApp(server);
+
+  // Sends the Link pushed to this session's MCP App target while no wait_for_user was held, kept for the
+  // view's next wait_for_user until their deadline (link/adapters/mcp-app.ts).
+  const held: { json: Record<string, any>; images: string[]; taken: (ok: boolean) => void }[] = [];
 
   server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
     const tool = req.params.name;
@@ -102,6 +109,16 @@ export async function runMcp(o: { channel?: boolean } = {}) {
     if (tool === "wait_for_user" && cap && typeof args.timeout_s === "number" && args.timeout_s > cap) {
       log("wait_capped", { asked: args.timeout_s, cap });
       args = { ...args, timeout_s: cap };
+    }
+    // A plain wait (no filter, nothing to acknowledge) takes a Send the Link pushed for the view first.
+    if (tool === "wait_for_user" && held.length && !args.after && !args.region && !args.element) {
+      const i = held.findIndex((h) => !args.space || h.json.space === args.space);
+      if (i >= 0) {
+        const [h] = held.splice(i, 1);
+        h.taken(true);
+        log("app_push_taken", { send: h.json.send, request: extra.requestId });
+        return { content: [{ type: "text", text: JSON.stringify(h.json) }, ...h.images.map((data) => ({ type: "image", data, mimeType: "image/png" }))] };
+      }
     }
     try {
       let client: Client;
@@ -160,38 +177,63 @@ export async function runMcp(o: { channel?: boolean } = {}) {
   };
   server.oninitialized = () => {
     log("initialized", { negotiated: (transport as any)._protocolVersion ?? null, client: server.getClientVersion(), capabilities: server.getClientCapabilities() });
-    if (!o.channel) return;
     const harness = KNOWN[server.getClientVersion()?.name ?? ""] ?? server.getClientVersion()?.name ?? "MCP client";
+    // A host that renders MCP Apps gets an mcp-app push target, which feeds the view between its waits.
+    if (hostShowsApps(server.getClientCapabilities()))
+      void openTarget("app", "mcp-app", () => ({ host: harness, version: server.getClientVersion()?.version ?? "", protocol: asked, pid: process.pid }), appPush);
+    if (!o.channel) return;
     // Only Claude Code has channels. Elsewhere Sends reach the Agent the guaranteed way, through wait_for_user.
     if (!CHANNEL_HARNESSES.has(harness)) return log("channel_unsupported", { harness });
     if (!session.on) return log("channel_off", { harness, why: session.why });
-    void openChannel(harness);
+    void openTarget("channel", "claude-channel", () => ({ harness, version: server.getClientVersion()?.version ?? "", protocol: asked, pid: process.pid }), push);
   };
 
-  // The channel: a second connection to the Link that holds a push target for this Agent. The Link pushes
-  // each new Send that no wait_for_user took; it becomes a channel notification, which Claude Code turns into
-  // a new turn. If the Link isn't running or restarts, it reconnects.
-  async function openChannel(harness: string) {
+  // A push target: a second connection to the Link that holds one for this Agent (the channel, or the MCP App
+  // view's). The Link pushes each new Send that no wait_for_user took. If the Link isn't running or restarts,
+  // it reconnects.
+  async function openTarget(event: string, adapter: string, config: () => Record<string, unknown>, onPush: typeof push) {
     for (;;) {
       let c: Client | undefined;
       try {
-        c = await Client.open(`mcp-channel:${process.pid}`);
+        c = await Client.open(`mcp-${event}:${process.pid}`);
         const closed = new Promise<void>((r) => (c!.onClose = r));
-        const config = { harness, version: server.getClientVersion()?.version ?? "", protocol: asked, pid: process.pid };
-        const { target, agent } = await c.listen(who(), "claude-channel", config, push);
-        log("channel_open", { target, agent });
+        const { target, agent } = await c.listen(who(), adapter, config(), onPush);
+        log(`${event}_open`, { target, agent });
         await closed;
-        log("channel_closed");
+        log(`${event}_closed`);
       } catch (e) {
         const error = String((e as Error).message);
-        log("channel_failed", { error });
+        log(`${event}_failed`, { error });
         c?.close();
-        // The person turned this Agent away or didn't answer: stop, so the channel never asks them again on its
-        // own. Tool calls still work; restarting the session opens the channel once they approve.
-        if (/^(rate_limited|not_approved)/.test(error)) return log("channel_stopped", { error });
+        // The person turned this Agent away or didn't answer: stop, so the target never asks them again on its
+        // own. Tool calls still work; restarting the session opens the target once they approve.
+        if (/^(rate_limited|not_approved)/.test(error)) return log(`${event}_stopped`, { error });
       }
       await new Promise((r) => setTimeout(r, 3000));
     }
+  }
+
+  // A Send for the view: kept until its next wait_for_user takes it, or the deadline passes and it stays in
+  // the Inbox.
+  function appPush(p: { json: Record<string, any>; images: string[]; deadline: number }): Promise<{ ok: boolean; reason?: string }> {
+    return new Promise((resolve) => {
+      const h = {
+        json: p.json,
+        images: p.images,
+        taken: (ok: boolean) => {
+          clearTimeout(timer);
+          resolve(ok ? { ok } : { ok, reason: "no view asked for it in time" });
+        },
+      };
+      const timer = setTimeout(() => {
+        const i = held.indexOf(h);
+        if (i >= 0) held.splice(i, 1);
+        log("app_push_expired", { send: p.json.send });
+        h.taken(false);
+      }, Math.max(0, p.deadline - Date.now()));
+      held.push(h);
+      log("app_push_held", { send: p.json.send });
+    });
   }
 
   async function push(p: { json: Record<string, any>; images: string[]; deadline: number }) {

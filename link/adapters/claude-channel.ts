@@ -8,10 +8,9 @@
 // connection; the surface turns it into the notification (agent/src/surfaces/mcp.ts)
 // and answers once it is written to Claude Code's pipe. The session replies with
 // Reflex tools, so the callback is `mcp`.
-import type { Listener } from "../../agent/src/host/server.ts";
-import type { Push, PushAdapter, PushOutcome, PushTarget } from "./contract.ts";
+import { SurfaceAdapter } from "./surface.ts";
 
-export class ClaudeChannel implements PushAdapter {
+export class ClaudeChannel extends SurfaceAdapter {
   readonly name = "claude-channel";
   readonly config = {
     type: "object",
@@ -24,26 +23,4 @@ export class ClaudeChannel implements PushAdapter {
     },
     additionalProperties: false,
   };
-  #live = new Map<string, { listener: Listener; since: number }>();
-
-  /** A surface's channel connection is live for `target` until it closes. */
-  attach(target: PushTarget, listener: Listener, onClose: () => void) {
-    const entry = { listener, since: Date.now() };
-    this.#live.set(target.id, entry);
-    void listener.closed.then(() => {
-      if (this.#live.get(target.id) === entry) this.#live.delete(target.id);
-      onClose();
-    });
-  }
-
-  liveSince(target: PushTarget) {
-    return this.#live.get(target.id)?.since;
-  }
-
-  async deliver(target: PushTarget, push: Push): Promise<PushOutcome> {
-    const live = this.#live.get(target.id);
-    if (!live) return { ok: false, reason: "the session's channel is closed" };
-    const r = await live.listener.push(push.bundle, push.images);
-    return r.ok ? { ok: true } : { ok: false, reason: r.reason ?? "the session did not take it" };
-  }
 }

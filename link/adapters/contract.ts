@@ -25,7 +25,11 @@ export interface PushTarget {
   adapter: string;
   /** The adapter's settings, checked against its `config` schema. No secrets. */
   config: Record<string, unknown>;
-  /** Where the receiving side answers: `mcp` for a session that replies with Reflex tools, a URL for a webhook. */
+  /**
+   * How the receiving side answers. Every adapter's receiver replies with Reflex tools (`apply(in_reply_to)`,
+   * `wait_for_user(after)`), over MCP or the CLI: `mcp` for a session or view on an MCP connection, `tools`
+   * for a webhook receiver that calls them itself.
+   */
   callback: string;
   /** Whether the Link holds a secret for this target. */
   has_secret: boolean;
@@ -42,7 +46,8 @@ export interface Push {
   images: Buffer[];
 }
 
-export type PushOutcome = { ok: true } | { ok: false; reason: string };
+/** `retry`: the failure may pass (a network error, a timeout, a 5xx), so the dispatcher may try again. */
+export type PushOutcome = { ok: true } | { ok: false; reason: string; retry?: boolean };
 
 export interface PushAdapter {
   /** The adapter's name, stored on each target. */
@@ -50,10 +55,15 @@ export interface PushAdapter {
   /** A JSON Schema for a target's config. */
   readonly config: Record<string, unknown>;
   /**
+   * Waits (ms) before each retry of a push that failed with `retry`; none when absent. Between tries the Send
+   * stays `ready`, so a wait_for_user can still take it, and then no retry runs.
+   */
+  readonly retries?: number[];
+  /**
    * Whether this target can take a push right now (a live session, a reachable URL): the time it became
    * live, or undefined. Only Sends that arrive after that are pushed; older ones wait in the Inbox.
    */
   liveSince(target: PushTarget): number | undefined;
   /** Delivers one Send. Never throws: a failure is an outcome, and the Send stays in the Inbox. */
-  deliver(target: PushTarget, push: Push, ctx: { secret?: string; log: (m: string) => void }): Promise<PushOutcome>;
+  deliver(target: PushTarget, push: Push, ctx: { secret?: string; attempt: number; log: (m: string) => void }): Promise<PushOutcome>;
 }

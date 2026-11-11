@@ -7,10 +7,12 @@
 // the target went live, and only while nothing else delivered it. While a push
 // is in flight, wait_for_user skips that Send (`inFlight`), so it is never
 // delivered twice. A push that fails leaves its receipt `failed` (recoverable):
-// the next wait_for_user returns it.
+// the next wait_for_user returns it. An adapter with `retries` (the webhook)
+// tries again after each wait while the Send is still `ready`, and marks it
+// `failed` only after the last try.
 import type { Inbox } from "../storage/inbox.ts";
 import { recipient } from "../routing.ts";
-import type { Push, PushAdapter, PushTarget } from "./contract.ts";
+import type { Push, PushAdapter, PushOutcome, PushTarget } from "./contract.ts";
 import type { PushStore } from "./store.ts";
 
 export interface DispatcherOptions {
@@ -27,6 +29,8 @@ export interface DispatcherOptions {
 export class Dispatcher {
   #o: DispatcherOptions;
   #inFlight = new Set<string>();
+  /** Sends whose push failed and will be tried again: by Send and recipient, which target, how many tries, when. */
+  #retries = new Map<string, { target: string; tries: number; due: number }>();
   #scheduled = false;
   #running: Promise<void> = Promise.resolve();
   #stop = new AbortController();
@@ -77,41 +81,59 @@ export class Dispatcher {
   }
 
   async #pass() {
+    // Targets are pushed to side by side, so a slow webhook doesn't hold up another Agent's channel.
+    await Promise.all(this.#targets().map((t) => this.#pushTo(t.target, t.adapter, t.since)));
+  }
+
+  async #pushTo(target: PushTarget, adapter: PushAdapter, since: number) {
     const { inbox, store, log } = this.#o;
-    for (const { target, adapter, since } of this.#targets()) {
-      if (!this.#o.approved(target.agent)) continue;
-      const to = recipient(target.agent);
-      for (const e of inbox.pending(to)) {
-        // Only Sends nobody delivered yet, that arrived while this target was live, and were never pushed.
-        if (e.state !== "ready" || e.arrived_at < since || store.tried(e.space, e.send, to)) continue;
-        if (adapter.liveSince(target) === undefined) break;
-        const key = `${e.space}|${e.send}|${to}`;
-        this.#inFlight.add(key);
-        const seq = store.begin(target, e.space, e.send, to);
-        const started = Date.now();
-        try {
-          const built = await this.#o.bundle(target.agent, e.space, e.send);
-          const outcome = built
-            ? await adapter.deliver(target, { space: e.space, send: e.send, ...built }, { secret: target.has_secret ? store.secret(target.id) : undefined, log: (m) => log("push_log", { target: target.id, m }) })
-            : { ok: false as const, reason: "the Send could not be read" };
-          if (outcome.ok) {
-            inbox.mark(e.space, e.send, to, "delivered");
-            store.end(seq, "pushed");
-            store.touch(target.id);
-          } else {
-            inbox.mark(e.space, e.send, to, "failed", `push: ${outcome.reason}`);
-            store.end(seq, "failed", outcome.reason);
-          }
-          log("push", { target: target.id, adapter: adapter.name, agent: target.agent, space: e.space, send: e.send, ok: outcome.ok, ...(outcome.ok ? {} : { reason: outcome.reason }), ms: Date.now() - started });
-        } catch (err) {
-          const reason = String((err as Error).message ?? err).slice(0, 300);
-          inbox.mark(e.space, e.send, to, "failed", `push: ${reason}`);
-          store.end(seq, "failed", reason);
-          log("push", { target: target.id, adapter: adapter.name, agent: target.agent, space: e.space, send: e.send, ok: false, reason });
-        } finally {
-          this.#inFlight.delete(key);
-        }
+    if (!this.#o.approved(target.agent)) return;
+    const to = recipient(target.agent);
+    for (const e of inbox.pending(to)) {
+      const key = `${e.space}|${e.send}|${to}`;
+      const retry = this.#retries.get(key);
+      // Something else delivered it (a wait_for_user, between tries): no more tries.
+      if (e.state !== "ready") {
+        this.#retries.delete(key);
+        continue;
       }
+      if (e.arrived_at < since || this.#inFlight.has(key)) continue;
+      if (retry) {
+        if (retry.target !== target.id || Date.now() < retry.due) continue;
+      } else if (store.tried(e.space, e.send, to)) continue; // only Sends never pushed
+      if (adapter.liveSince(target) === undefined) break;
+      const attempt = (retry?.tries ?? 0) + 1;
+      this.#inFlight.add(key);
+      const seq = store.begin(target, e.space, e.send, to);
+      const started = Date.now();
+      let outcome: PushOutcome;
+      try {
+        const built = await this.#o.bundle(target.agent, e.space, e.send);
+        outcome = built
+          ? await adapter.deliver(target, { space: e.space, send: e.send, ...built }, { secret: target.has_secret ? store.secret(target.id) : undefined, attempt, log: (m) => log("push_log", { target: target.id, m }) })
+          : { ok: false, reason: "the Send could not be read" };
+      } catch (err) {
+        outcome = { ok: false, reason: String((err as Error).message ?? err).slice(0, 300) };
+      } finally {
+        this.#inFlight.delete(key);
+      }
+      const wait = !outcome.ok && outcome.retry ? adapter.retries?.[attempt - 1] : undefined;
+      if (outcome.ok) {
+        this.#retries.delete(key);
+        inbox.mark(e.space, e.send, to, "delivered");
+        store.end(seq, "pushed");
+        store.touch(target.id);
+      } else if (wait !== undefined) {
+        // Left `ready` between tries, so wait_for_user can still take it; the next pass after `wait` tries again.
+        this.#retries.set(key, { target: target.id, tries: attempt, due: Date.now() + wait });
+        setTimeout(() => this.kick(), wait).unref?.();
+        store.end(seq, "failed", `${outcome.reason}; try ${attempt}, again in ${Math.round(wait / 1000)} s`);
+      } else {
+        this.#retries.delete(key);
+        inbox.mark(e.space, e.send, to, "failed", `push: ${outcome.reason}`);
+        store.end(seq, "failed", outcome.reason);
+      }
+      log("push", { target: target.id, adapter: adapter.name, agent: target.agent, space: e.space, send: e.send, attempt, ok: outcome.ok, ...(outcome.ok ? {} : { reason: outcome.reason, ...(wait !== undefined ? { retry_in_ms: wait } : {}) }), ms: Date.now() - started });
     }
   }
 }
