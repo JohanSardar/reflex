@@ -2,7 +2,7 @@
 // MCP server and the CLI are thin surfaces over `Core.call`, so the two can't
 // drift apart.
 import { createHash, randomBytes } from "node:crypto";
-import { IMPLEMENTED, TOOLS, explain, validateError, validateInput, validateOutput, type ProtocolError, type Tool } from "../protocol.ts";
+import { IMPLEMENTED, TOOLS, explain, inputSchema, validateError, validateInput, validateOutput, type ProtocolError, type Tool } from "../protocol.ts";
 import type { Renderer, SceneElement } from "../render.ts";
 import type { Bounds, FrozenSend, Inbox, SpaceEntry, SpaceStore } from "../store.ts";
 import { project, type MarkRef } from "./bundle.ts";
@@ -78,7 +78,6 @@ export class Core {
         throw fail("invalid_input", `There is no tool '${tool}'.`, `Use one of: ${TOOLS.join(", ")}.`);
       const t = tool as Tool;
       const input = (args ?? {}) as Record<string, any>;
-      this.#check(t, input);
       if (!IMPLEMENTED.has(t))
         throw fail(
           "unavailable",
@@ -87,6 +86,7 @@ export class Core {
             ? "Go ahead without it: the apply tool's description and its input schema list every built-in type and its fields."
             : "Use open_space, read, look, apply and wait_for_user.",
         );
+      this.#check(t, input);
       const out = await this.#run(t, input, ctx);
       const v = validateOutput(t);
       if (!v(out.json)) this.log("output_invalid", { tool: t, errors: v.errors });
@@ -107,7 +107,7 @@ export class Core {
     const v = validateInput(tool);
     // apply's ops are checked one by one in normalizeOps, against the variant each one means.
     const probe = tool === "apply" && Array.isArray(input.ops) ? { ...input, ops: input.ops.length ? [{ op: "remove", ids: ["x"] }] : [] } : input;
-    if (!v(probe)) throw new ReflexError("invalid_input", explain(v.errors ?? [], tool, Object.keys(input)));
+    if (!v(probe)) throw new ReflexError("invalid_input", explain(v.errors ?? [], tool, Object.keys(inputSchema(tool).properties ?? {})));
   }
 
   #run(tool: Tool, a: Record<string, any>, ctx: Ctx): Promise<Omit<Result, "isError">> | Omit<Result, "isError"> {
@@ -334,19 +334,20 @@ export class Core {
         if (!m) errors.push({ op: i, field, code: "unknown_id", msg: `No Mark '${id}'${a.in_reply_to ? ` in Send ${a.in_reply_to}` : ""}.`, fix: "Use a Mark ID from the Send you are answering, with in_reply_to." });
         return m;
       };
-      const at = op.op === "add" ? op.at : op.op === "patch" ? op.set?.at : undefined;
+      const at = op.op === "add" || op.op === "arrange" ? op.at : op.op === "patch" ? op.set?.at : undefined;
       if (at) {
         for (const rel of ["right_of", "left_of", "above", "below", "near", "inside"]) {
           const m = markOf(at[rel], `/at/${rel}`);
           if (!m) continue;
           const [x, y, w, h] = m.bounds;
           const gap = at.gap ?? (rel === "inside" ? 24 : 40);
-          const sw = op.w ?? 200;
-          const sh = op.h ?? 120;
+          const own = op.op === "patch" ? outline.find((e) => e.id === op.id)?.bounds : undefined;
+          const sw = op.w ?? op.set?.w ?? own?.[2] ?? 200;
+          const sh = op.h ?? op.set?.h ?? own?.[3] ?? 120;
           const pos = { right_of: [x + w + gap, y], near: [x + w + gap, y], left_of: [x - gap - sw, y], below: [x, y + h + gap], above: [x, y - gap - sh], inside: [x + gap, y + gap] }[rel]!;
           const placed = { x: Math.round(pos[0]), y: Math.round(pos[1]) };
-          if (op.op === "add") op.at = placed;
-          else op.set = { ...op.set, at: placed };
+          if (op.op === "patch") op.set = { ...op.set, at: placed };
+          else op.at = placed;
         }
       }
       if (op.op === "add" && op.type === "connector") {
