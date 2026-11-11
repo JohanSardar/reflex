@@ -1,7 +1,12 @@
 // Send Bundle projection (ARCHITECTURE §4.3): what one frozen Send reads like
 // to one Agent. Mark grouping here is a basic stand-in (strokes that touch are
-// one Mark; circles, underlines and strikes are told apart by shape). The real
-// Mark grouping and Anchor resolution are T8 (H18).
+// one Mark; circles, underlines and strikes are told apart by shape, and a
+// circle is on what its path encloses). The real Mark grouping and Anchor
+// resolution are T8 (H18).
+//
+// Images are what the device rendered when the person pressed Send (the
+// Send's `crops`), so the Agent sees what the person saw. Where no crop covers
+// a Mark, Reflex renders one.
 import { readFileSync } from "node:fs";
 import type { Renderer, SceneElement } from "../render.ts";
 import type { Bounds, FrozenSend, SpaceEntry } from "../store.ts";
@@ -10,7 +15,7 @@ const sendSchema = JSON.parse(readFileSync(new URL("../../../protocol/schema/sen
 const CHANGE_FIELDS = new Set(Object.keys(sendSchema.$defs.change.properties));
 
 export type MarkRef = { id: string; strokes: string[]; bounds: Bounds };
-export type Image = { n: number; shows: string; bounds: Bounds; png: Buffer };
+export type Image = { n: number; shows: string; bounds: Bounds; png: Buffer; asset?: string };
 
 const union = (bs: Bounds[]): Bounds => {
   const x0 = Math.min(...bs.map((b) => b[0]));
@@ -26,6 +31,24 @@ const centerIn = (outer: Bounds, b: Bounds) => {
   const cy = b[1] + b[3] / 2;
   return cx >= outer[0] && cx <= outer[0] + outer[2] && cy >= outer[1] && cy <= outer[1] + outer[3];
 };
+/** Whether a point is inside the polygon a stroke's points trace (even-odd rule). */
+const inside = (pts: number[][], x: number, y: number) => {
+  let hit = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i];
+    const [xj, yj] = pts[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+  }
+  return hit;
+};
+/** A path that comes back near where it started, or crosses close to its start later on. */
+const closes = (pts: number[][], size: number) => {
+  if (pts.length < 8) return false;
+  const [x0, y0] = pts[0];
+  const near = 0.3 * size;
+  return pts.slice(Math.floor(pts.length / 2)).some(([x, y]) => Math.hypot(x - x0, y - y0) < near);
+};
+const contains = (outer: Bounds, b: Bounds) => b[0] >= outer[0] && b[1] >= outer[1] && b[0] + b[2] <= outer[0] + outer[2] && b[1] + b[3] <= outer[1] + outer[3];
 const dist2 = (a: Bounds, b: Bounds) => (a[0] + a[2] / 2 - b[0] - b[2] / 2) ** 2 + (a[1] + a[3] / 2 - b[1] - b[3] / 2) ** 2;
 
 export type Projection = {
@@ -47,6 +70,8 @@ export function project(opts: {
   redelivered: boolean;
   pendingAfter: number;
   renderer: Renderer;
+  /** The bytes of an asset the device stored, if this Link has it. */
+  asset: (hash: string) => Buffer | undefined;
   displayId: (key: string) => string;
 }): Projection {
   const { frozen, elements, outline, strokes } = opts;
@@ -72,10 +97,10 @@ export function project(opts: {
     const id = `m${i + 1}`;
     const [, , w, h] = g.bounds;
     const pts = g.ids.flatMap((s) => strokes[s] ?? []);
-    const first = pts[0];
-    const last = pts[pts.length - 1];
-    const closed = g.ids.length === 1 && first && last && Math.hypot(first[0] - last[0], first[1] - last[1]) < 0.3 * Math.max(w, h);
-    const enclosed = targets.filter((t) => centerIn(g.bounds, t.bounds) && t.bounds[2] <= w * 1.2 && t.bounds[3] <= h * 1.2);
+    const closed = g.ids.length === 1 && closes(pts, Math.max(w, h));
+    const enclosed = targets.filter(
+      (t) => t.type !== "connector" && inside(pts, t.bounds[0] + t.bounds[2] / 2, t.bounds[1] + t.bounds[3] / 2) && t.bounds[2] <= w * 1.2 && t.bounds[3] <= h * 1.2,
+    );
     const flat = h < Math.max(30, 0.25 * w);
     const above = targets.find((t) => flat && overlaps([g.bounds[0], g.bounds[1] - 40, w, 40], t.bounds) && g.bounds[1] >= t.bounds[1] + t.bounds[3] * 0.75);
     const through = targets.find((t) => flat && overlaps(g.bounds, t.bounds) && centerIn(t.bounds, g.bounds));
@@ -97,11 +122,24 @@ export function project(opts: {
     }
     mark.bounds = g.bounds;
     if (images.length < 4) {
-      const n = images.length + 1;
-      const crop = pad(union([g.bounds, ...shown.map((s) => s.bounds)]), 40);
-      const { png } = opts.renderer.render({ elements, strokes, bounds: crop, width: 768 });
-      images.push({ n, shows: `${id}${shown.length ? ` and ${shown.map((s) => s.id).join(", ")}` : ""}`, bounds: crop, png });
-      mark.image = n;
+      const want = union([g.bounds, ...shown.map((s) => s.bounds)]);
+      const shows = `${id}${shown.length ? ` and ${shown.map((s) => s.id).join(", ")}` : ""}`;
+      // The device's own crop when one covers this Mark and its target; one image can show several Marks.
+      const device = (frozen.crops ?? []).find((c) => contains(c.bounds, want));
+      const same = device && images.find((i) => i.asset === device.asset);
+      const png = device && !same ? opts.asset(device.asset) : undefined;
+      if (same) {
+        same.shows = `${same.shows}; ${shows}`;
+        mark.image = same.n;
+      } else {
+        const n = images.length + 1;
+        if (device && png) images.push({ n, shows, bounds: device.bounds, png, asset: device.asset });
+        else {
+          const crop = pad(want, 40);
+          images.push({ n, shows, bounds: crop, png: opts.renderer.render({ elements, strokes, bounds: crop, width: 768 }).png });
+        }
+        mark.image = n;
+      }
     }
     if (mark.kind === "ink") mark.note = `Not recognized.${mark.image ? ` See image ${mark.image}.` : ""}`;
     marks.push(mark);

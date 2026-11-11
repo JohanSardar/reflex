@@ -1,13 +1,9 @@
-// The surfaces' side of the local RPC. Starts the host when none is running.
+// The surfaces' side of the local RPC to the Link.
 import { connect, type Socket } from "node:net";
-import { spawn } from "node:child_process";
-import { openSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { frames, logPath, socketPath, token, type ClientFrame, type HostFrame } from "./rpc.ts";
+import { frames, home, NoLink, socketPath, token, type ClientFrame, type HostFrame, type Who } from "./rpc.ts";
 
 export type CallResult = { json: Record<string, any>; images: string[]; isError: boolean };
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+type Progress = (f: { elapsed_s: number; timeout_s: number }) => void;
 
 function dial(path: string): Promise<Socket> {
   return new Promise((resolve, reject) => {
@@ -17,23 +13,20 @@ function dial(path: string): Promise<Socket> {
   });
 }
 
-function startHost() {
-  const main = fileURLToPath(new URL("./main.ts", import.meta.url));
-  const out = openSync(logPath("host-stdio"), "a");
-  spawn(process.execPath, [main], { detached: true, stdio: ["ignore", out, out], env: process.env }).unref();
-}
-
 export class Client {
   #sock: Socket;
   #next = 1;
-  #waiting = new Map<number, { resolve: (r: CallResult) => void; reject: (e: Error) => void; progress?: (f: { elapsed_s: number; timeout_s: number }) => void }>();
+  #waiting = new Map<number, { resolve: (r: CallResult) => void; reject: (e: Error) => void; progress?: Progress }>();
   #ready: Promise<void>;
   onClose?: () => void;
 
-  private constructor(sock: Socket, client: string) {
+  private constructor(sock: Socket, client: string, key: string) {
     this.#sock = sock;
     let ready!: () => void;
-    this.#ready = new Promise((r) => (ready = r));
+    this.#ready = new Promise((r, reject) => {
+      ready = r;
+      sock.once("close", () => reject(new NoLink("The Link refused this connection: its credential did not match.")));
+    });
     sock.on("data", frames((f: HostFrame) => {
       if (f.t === "ready") return ready();
       const w = this.#waiting.get(f.id);
@@ -44,35 +37,33 @@ export class Client {
       else w.resolve(f);
     }));
     sock.on("close", () => {
-      for (const w of this.#waiting.values()) w.reject(new Error("The Reflex host closed the connection."));
+      for (const w of this.#waiting.values()) w.reject(new Error("The Reflex Link closed the connection."));
       this.#waiting.clear();
       this.onClose?.();
     });
-    this.#send({ t: "hello", token: token(), client });
+    sock.on("error", () => {});
+    this.#send({ t: "hello", token: key, client });
   }
 
-  /** Connects to the host, starting it first if needed. */
+  /** Connects to the running Link. */
   static async open(client: string): Promise<Client> {
-    token(); // creates the private profile directory
-    const path = socketPath();
-    for (let i = 0; i < 50; i++) {
-      try {
-        const c = new Client(await dial(path), client);
-        await c.#ready;
-        return c;
-      } catch {
-        if (i === 0) startHost(); // none running, or a stale socket file from one that died
-        await sleep(100);
-      }
+    const key = token();
+    let sock: Socket;
+    try {
+      sock = await dial(socketPath());
+    } catch {
+      throw new NoLink(`The Reflex Link is not running (profile ${home()}). Start it with \`reflex link\`.`);
     }
-    throw new Error(`Could not reach or start the Reflex host at ${path}. See ${logPath("host-stdio")}.`);
+    const c = new Client(sock, client, key);
+    await c.#ready;
+    return c;
   }
 
   #send(f: ClientFrame) {
     this.#sock.write(JSON.stringify(f) + "\n");
   }
 
-  #request(frame: (id: number) => ClientFrame, o: { signal?: AbortSignal; progress?: (f: { elapsed_s: number; timeout_s: number }) => void } = {}) {
+  #request(frame: (id: number) => ClientFrame, o: { signal?: AbortSignal; progress?: Progress } = {}) {
     const id = this.#next++;
     return new Promise<CallResult>((resolve, reject) => {
       this.#waiting.set(id, { resolve, reject, progress: o.progress });
@@ -81,7 +72,7 @@ export class Client {
     });
   }
 
-  call(tool: string, args: unknown, who: { name: string }, o: { signal?: AbortSignal; progress?: (f: { elapsed_s: number; timeout_s: number }) => void } = {}) {
+  call(tool: string, args: unknown, who: Who, o: { signal?: AbortSignal; progress?: Progress } = {}) {
     return this.#request((id) => ({ t: "call", id, tool, args, who }), o);
   }
 

@@ -149,6 +149,21 @@ impl Space {
         Ok(self.lock().receive_sync_message(&peer, &msg)?)
     }
 
+    pub fn receive_sync_message_checked(
+        &self,
+        peer: String,
+        msg: Vec<u8>,
+        writers_json: String,
+    ) -> R<String> {
+        Ok(self
+            .lock()
+            .receive_sync_message_checked(&peer, &msg, &writers_json)?)
+    }
+
+    pub fn send(&self, send_id: String) -> String {
+        self.lock().send(&send_id)
+    }
+
     pub fn reset_sync(&self, peer: String) {
         self.lock().reset_sync(&peer)
     }

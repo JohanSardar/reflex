@@ -24,6 +24,16 @@ CREATE TABLE IF NOT EXISTS receipts (
   state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, reason TEXT, updated_at INTEGER NOT NULL,
   PRIMARY KEY (space, send, recipient)
 );
+CREATE TABLE IF NOT EXISTS inbox_to (
+  space TEXT NOT NULL, send TEXT NOT NULL, recipient TEXT NOT NULL, PRIMARY KEY (space, send, recipient)
+);
+CREATE TABLE IF NOT EXISTS space_meta (
+  space TEXT PRIMARY KEY REFERENCES spaces(id), title TEXT, size TEXT NOT NULL DEFAULT 'infinite', width INTEGER,
+  viewport TEXT NOT NULL DEFAULT '[0,0,1366,1024]'
+);
+CREATE TABLE IF NOT EXISTS space_agents (
+  space TEXT NOT NULL REFERENCES spaces(id), agent TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (space, agent)
+);
 CREATE TABLE IF NOT EXISTS catalog (
   kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, sig TEXT NOT NULL, PRIMARY KEY (kind, id)
 );

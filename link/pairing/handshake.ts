@@ -38,6 +38,8 @@ export interface Hello {
   eph: string;
   person: Person;
   name: string;
+  /** What this device is: an iPad, or a Link (which hosts Agents). */
+  kind?: "ipad" | "link";
   pair?: string; // offer ID, when pairing
 }
 
@@ -46,6 +48,7 @@ export interface PeerInfo {
   key: string;
   person: Person;
   name: string;
+  kind: "ipad" | "link";
 }
 
 /** What the coordinator tells the handshake about trust. */
@@ -68,6 +71,7 @@ export interface Me {
   key: DeviceKey;
   person: Person;
   name: string;
+  kind: "ipad" | "link";
 }
 
 const enc = (v: unknown): Buffer => Buffer.from(JSON.stringify(v));
@@ -116,6 +120,7 @@ export async function handshake(path: Path, me: Me, trust: Trust, scanned?: Scan
     eph: b64(eph.publicRaw),
     person: me.person,
     name: me.name,
+    kind: me.kind,
     ...(scanned && role === "i" ? { pair: scanned.offer } : {}),
   };
   const mine = enc(hello);
@@ -177,7 +182,8 @@ export async function handshake(path: Path, me: Me, trust: Trust, scanned?: Scan
     new FrameCipher(role === "i" ? keys.i2r : keys.r2i, transcript),
     new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript),
   );
-  return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name }, paired, offer };
+  const kind = theirs.kind === "ipad" ? "ipad" : "link";
+  return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind }, paired, offer };
 }
 
 export interface Message {

@@ -24,6 +24,10 @@ export interface PairedDevice {
   key: string; // Ed25519 public key, base64url
   name: string;
   person: Person;
+  /** What it said it is when it paired: an iPad, or another Link (which hosts Agents). */
+  kind?: "ipad" | "link";
+  /** "offer": it scanned a code this Link showed, so the person was at both. "join": this Link scanned its code. */
+  via?: "offer" | "join";
   paired_at: number;
   last_seen?: { host: string; port: number; at: number };
 }
@@ -31,16 +35,19 @@ export interface PairedDevice {
 export type AgentStatus = "pending" | "approved" | "denied" | "revoked";
 
 export interface AgentRecord {
-  id: string; // stable Agent ID, e.g. "claude-code-reflex-1a2b"
+  id: string; // stable Agent ID, e.g. "a_1a2b3c4d5e" (the protocol's agent_id)
   name: string; // what the harness declared
   color: string;
   status: AgentStatus;
   credential_hash: string;
   requested_at: number;
   decided_at: number | null;
+  /** Where the person decided: "terminal", or the paired device's ID. */
+  decided_by?: string;
 }
 
-const COLORS = ["#d9480f", "#1971c2", "#2f9e44", "#9c36b5", "#e8590c", "#0c8599", "#c2255c", "#5f3dc4"];
+// The protocol's named colors (common.schema.json#/$defs/color); each renderer picks the shade.
+const COLORS = ["violet", "teal", "blue", "orange", "pink", "green"];
 
 export class Catalog {
   #db: DatabaseSync;
@@ -116,18 +123,17 @@ export class Catalog {
 
   /** A first connection: a pending approval record, with a fresh stable ID. */
   request(name: string, credential: string, now = Date.now()): AgentRecord {
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "agent";
-    const id = `${slug}-${randomBytes(2).toString("hex")}`;
+    const id = `a_${randomBytes(5).toString("hex")}`;
     const color = COLORS[this.agents().length % COLORS.length];
     const rec: AgentRecord = { id, name, color, status: "pending", credential_hash: sha256(credential).toString("hex"), requested_at: now, decided_at: null };
     this.#put("agent", id, rec);
     return rec;
   }
 
-  decide(id: string, status: "approved" | "denied" | "revoked", now = Date.now()): AgentRecord {
+  decide(id: string, status: "approved" | "denied" | "revoked", by: string, now = Date.now()): AgentRecord {
     const a = this.agent(id);
-    if (!a) throw new Error(`No Agent '${id}'. Run \`reflex-link agents\` to see them.`);
-    const rec = { ...a, status, decided_at: now };
+    if (!a) throw new Error(`No Agent '${id}'. Run \`reflex link agents\` to see them.`);
+    const rec = { ...a, status, decided_at: now, decided_by: by };
     this.#put("agent", id, rec);
     return rec;
   }

@@ -1,12 +1,21 @@
-// Reflex Link: composition of storage, Inbox, sync, transports, pairing and
-// Agent approval, behind a local RPC on a Unix socket.
+// Reflex Link: composition of storage, Inbox, sync, transports, pairing,
+// Agent approval and the Agent layer, behind two local sockets.
 //
-// One Link per user profile. Local clients connect to the socket (in a 0700
-// folder) and present a per-profile credential: `admin.key` for the user's own
-// `reflex-link` commands, `rpc.key` for Agent connections. An Agent then says
-// who it is with a credential it made itself; the first time, the user is
-// asked to approve it, and until they do it sees no Space content.
+// One Link per user profile. Local clients connect to a socket (in a 0700
+// folder) and present a per-profile credential:
+//   link.sock   `admin.key`, for the person's own `reflex link` commands, and
+//               `rpc.key` for the T5 low-level Agent calls
+//   agent.sock  `rpc.key`, for the MCP and CLI surfaces (link/agent-host.ts)
+// An Agent then says who it is with a credential it made itself; the first
+// time, the person is asked to approve it, and until they do it sees nothing.
+//
+// Anything that grants access needs the person, not a credential file: new
+// pairing codes are shown only on the Link's own terminal, and an Agent is
+// approved only there or on an iPad that paired by scanning such a code.
+// `admin.key` can still deny and revoke, and read status. Acting as the
+// person (`dev` commands) needs a Link started with --dev.
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { createServer, type Server, type Socket } from "node:net";
 import { createInterface } from "node:readline";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -14,12 +23,14 @@ import { adoptPerson, home, identity, localKey, type Home, type Identity } from 
 import { Catalog, type AgentRecord } from "./pairing/catalog.ts";
 import { b64 } from "./pairing/crypto.ts";
 import type { Me } from "./pairing/handshake.ts";
-import { Offers, parseOffer } from "./pairing/offer.ts";
+import { Offers, parseOffer, qrText } from "./pairing/offer.ts";
 import { AssetStore } from "./storage/assets.ts";
 import { openDb } from "./storage/db.ts";
 import { Inbox } from "./storage/inbox.ts";
 import { SpaceStore } from "./storage/journal.ts";
 import { Coordinator } from "./sync/coordinator.ts";
+import { startAgentHost } from "./agent-host.ts";
+import { socketPath as agentSocketPath } from "../agent/src/host/rpc.ts";
 import { LanTransport } from "./transports/lan.ts";
 
 export class LinkError extends Error {
@@ -41,12 +52,15 @@ export interface LinkOptions {
   dir: string;
   name?: string;
   port?: number;
-  /** Ask about new Agents on this terminal, as well as through `reflex-link approve`. */
+  /** Use this terminal: show a pairing code on start and on Enter, and ask about new Agents. */
   prompt?: boolean;
+  /** Allow acting as the person without an iPad (`dev` commands, `reflex dev person`). */
+  dev?: boolean;
   log?: (msg: string) => void;
 }
 
 const APPROVAL_WAIT_S = 300;
+type Decision = "approved" | "denied" | "revoked";
 
 export class Link {
   readonly dir: string;
@@ -61,10 +75,13 @@ export class Link {
   #offers = new Offers();
   #coord!: Coordinator;
   #server: Server | null = null;
+  #agentServer: Server | null = null;
+  #db!: DatabaseSync;
+  #questions: AgentRecord[] = [];
+  #rl: ReturnType<typeof createInterface> | null = null;
   #ports: Record<string, number> = {};
   #keys!: { rpc: string; admin: string };
   #decisions = new Map<string, (() => void)[]>();
-  #pairWaiters = new Map<string, ((device: string) => void)[]>();
   #log: (msg: string) => void;
 
   constructor(opts: LinkOptions) {
@@ -76,16 +93,20 @@ export class Link {
 
   async start(): Promise<void> {
     this.#id = identity(this.dir, { name: this.#opts.name });
-    this.#me = { key: this.#id.key, person: this.#id.person, name: this.#id.name };
+    this.#me = { key: this.#id.key, person: this.#id.person, name: this.#id.name, kind: "link" };
     this.#keys = { rpc: localKey(this.dir, "rpc.key"), admin: localKey(this.dir, "admin.key") };
     this.#refuseSecondLink();
 
     const db = openDb(this.home.db);
+    this.#db = db;
     this.#inbox = new Inbox(db);
     this.#store = new SpaceStore(db, this.#id.actor, this.#inbox);
-    const rec = this.#store.recover();
     this.#assets = new AssetStore(this.home.assets);
     this.#catalog = new Catalog(db, this.#id.key);
+    // Who each recovered Send goes to: the Agents on its Space (set again by the Agent layer below).
+    this.#inbox.recipientsFor = (space) =>
+      (db.prepare("SELECT agent FROM space_agents WHERE space = ?").all(space) as { agent: string }[]).map((r) => `agent:${r.agent}`);
+    const rec = this.#store.recover();
     const devices = this.#catalog.devices();
     if (this.#catalog.rejected > 0) this.#log(`ignored ${this.#catalog.rejected} catalog records with bad signatures`);
 
@@ -98,10 +119,28 @@ export class Link {
       transports: [new LanTransport({ device: this.#id.key.device, port: this.#opts.port ?? 7420 })],
       log: this.#log,
     });
-    this.#coord.onPaired((d) => {
-      for (const w of this.#pairWaiters.get("*") ?? []) w(d.device);
-      this.#pairWaiters.delete("*");
+    this.#coord.onPaired((d) => process.stdout.write(`\nPaired with ${d.name} (${d.device}).\n`));
+    this.#coord.pendingAgents = () => this.#catalog.agents().filter((a) => a.status === "pending").map(({ id, name, color }) => ({ id, name, color }));
+    this.#coord.onAgentDecision = (device, id, status) => {
+      if (this.#catalog.agent(id)?.status !== "pending") return;
+      this.#decide(id, status, device);
+    };
+    // The Agent layer, on the durable Spaces and Inbox. Recipients are set before recovery indexes any Send.
+    const host = await startAgentHost({
+      db,
+      store: this.#store,
+      inbox: this.#inbox,
+      assets: this.#assets,
+      catalog: this.#catalog,
+      person: this.#id.person,
+      socket: agentSocketPath(this.dir),
+      token: this.#keys.rpc,
+      devPerson: Boolean(this.#opts.dev),
+      announce: (a) => this.#announce(a),
+      decision: (id, ms, signal) => this.#waitDecision(id, ms, signal),
+      log: (event, data = {}) => this.#log(`agent layer: ${event} ${JSON.stringify(data)}`),
     });
+    this.#agentServer = host.server;
     this.#ports = (await this.#coord.start()).ports;
     await this.#listen();
     writeFileSync(
@@ -113,6 +152,35 @@ export class Link {
         `${rec.replayed} journal entries replayed, ${this.#inbox.all().length} Sends in the Inbox, ` +
         `${devices.length} paired devices · LAN :${this.#ports.lan} · ${this.home.socket}`,
     );
+    if (this.#opts.prompt && process.stdin.isTTY) this.#terminal();
+  }
+
+  /** This terminal: Enter shows a fresh pairing code; y or n answers the Agent question on screen. */
+  #terminal(): void {
+    this.#rl = createInterface({ input: process.stdin, output: process.stdout });
+    this.#rl.on("line", (line) => {
+      const a = this.#questions[0];
+      if (a && this.#catalog.agent(a.id)?.status === "pending" && /^(y(es)?|n(o)?)$/i.test(line.trim())) {
+        this.#questions.shift();
+        this.#decide(a.id, /^y/i.test(line.trim()) ? "approved" : "denied", "terminal");
+        return this.#ask();
+      }
+      void this.showPairingCode();
+    });
+    void this.showPairingCode();
+  }
+
+  /** Prints a new single-use pairing code: a QR to scan, and the same code as text to type. */
+  async showPairingCode(): Promise<void> {
+    const o = this.#offers.create({ device: this.#id.key.device, key: b64(this.#id.key.publicRaw), name: this.#id.name, person: this.#id.person }, this.#ports.lan);
+    const qr = await qrText(o.uri);
+    process.stdout.write(`\nPair an iPad: open Reflex, tap Connect, and scan this code or type it (single use, 10 minutes).\n\n${qr}\n${o.uri}\n\nPress Enter for a new code.\n`);
+  }
+
+  #ask(): void {
+    const a = this.#questions.find((q) => this.#catalog.agent(q.id)?.status === "pending");
+    this.#questions = a ? this.#questions.slice(this.#questions.indexOf(a)) : [];
+    if (a) process.stdout.write(`\nAllow "${a.name}" (${a.id}) to use your Spaces? Answer here [y/N], or on your iPad.\n`);
   }
 
   #refuseSecondLink(): void {
@@ -128,6 +196,8 @@ export class Link {
   }
 
   async stop(): Promise<void> {
+    this.#rl?.close();
+    await new Promise<void>((r) => (this.#agentServer ? this.#agentServer.close(() => r()) : r()));
     await this.#coord.stop();
     await new Promise<void>((r) => (this.#server ? this.#server.close(() => r()) : r()));
     rmSync(this.home.runtime, { force: true });
@@ -230,33 +300,33 @@ export class Link {
     return { agent: a.id, name: a.name, color: a.color };
   }
 
+  /** Asks the person about a new Agent: on every connected iPad, and on this terminal. */
   #announce(a: AgentRecord): void {
-    this.#log(`new Agent "${a.name}" wants to connect. Approve: reflex-link approve ${a.id}   Deny: reflex-link deny ${a.id}`);
-    if (!this.#opts.prompt || !process.stdin.isTTY) return;
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(`Allow "${a.name}" (${a.id}) to use your Spaces? [y/N] `, (ans) => {
-      rl.close();
-      if (this.#catalog.agent(a.id)?.status !== "pending") return;
-      this.#decide(a.id, /^y(es)?$/i.test(ans.trim()) ? "approved" : "denied");
-    });
+    this.#log(`new Agent "${a.name}" (${a.id}) wants to use your Spaces. Allow it on your iPad or answer here.`);
+    this.#coord.askAboutAgent({ id: a.id, name: a.name, color: a.color });
+    if (!this.#rl) return;
+    this.#questions.push(a);
+    if (this.#questions.length === 1) this.#ask();
   }
 
-  #waitDecision(id: string, ms: number): Promise<void> {
+  #waitDecision(id: string, ms: number, signal?: AbortSignal): Promise<void> {
     return new Promise((resolve) => {
       const list = this.#decisions.get(id) ?? [];
       const done = (): void => {
         clearTimeout(t);
+        signal?.removeEventListener("abort", done);
         resolve();
       };
       const t = setTimeout(done, ms);
+      signal?.addEventListener("abort", done, { once: true });
       list.push(done);
       this.#decisions.set(id, list);
     });
   }
 
-  #decide(id: string, status: "approved" | "denied" | "revoked"): AgentRecord {
-    const a = this.#catalog.decide(id, status);
-    this.#log(`Agent ${a.name} (${a.id}) ${status}`);
+  #decide(id: string, status: Decision, by: string): AgentRecord {
+    const a = this.#catalog.decide(id, status, by);
+    this.#log(`Agent ${a.name} (${a.id}) ${status} by ${by}`);
     for (const w of this.#decisions.get(id) ?? []) w();
     this.#decisions.delete(id);
     return a;
@@ -317,33 +387,25 @@ export class Link {
         return this.#catalog.agents();
       case "agents.decide": {
         const status = String(p.status);
-        if (status !== "approved" && status !== "denied" && status !== "revoked")
-          throw new LinkError("bad_status", `'${status}' is not approved, denied or revoked.`);
-        return this.#decide(String(p.id), status);
+        if (status === "approved")
+          throw new LinkError(
+            "needs_person",
+            "Approving an Agent needs you, not a command: anything with your shell could run one.",
+            "Tap Allow on your iPad, or answer y in the Link's terminal.",
+          );
+        if (status !== "denied" && status !== "revoked") throw new LinkError("bad_status", `'${status}' is not denied or revoked.`);
+        return this.#decide(String(p.id), status, "command");
       }
-      case "pair.offer": {
-        const o = this.#offers.create({ device: this.#id.key.device, key: b64(this.#id.key.publicRaw), name: this.#id.name, person: this.#id.person }, this.#ports.lan);
-        return { offer: o.offer, uri: o.uri, expires: o.expires };
-      }
-      case "pair.wait": {
-        const offer = String(p.offer);
-        return new Promise((resolve, reject) => {
-          if (!this.#offers.live(offer)) return reject(new LinkError("offer_expired", "That pairing code expired.", "Run `reflex-link pair` again."));
-          const t = setTimeout(() => reject(new LinkError("offer_expired", "No device paired before the code expired.", "Run `reflex-link pair` again.")), this.#offers.remaining(offer));
-          const list = this.#pairWaiters.get("*") ?? [];
-          list.push((device) => {
-            clearTimeout(t);
-            resolve(this.#catalog.device(device));
-          });
-          this.#pairWaiters.set("*", list);
-        });
-      }
+      case "pair.offer":
+      case "pair.wait":
+        throw new LinkError("needs_person", "Pairing codes are shown only on the Link's own terminal.", "Press Enter in the terminal running `reflex link` for a new code.");
       case "pair.join":
         return this.#join(String(p.uri));
       case "dev.intent":
       case "dev.undo":
       case "dev.send": {
-        // Stand-ins for the iPad's person edits until T6 joins the iPad to the Link.
+        // Acting as the person without an iPad: only on a Link started with --dev.
+        if (!this.#opts.dev) throw new LinkError("needs_dev", "Acting as the person needs a Link started with --dev.", "Restart it with `reflex link --dev`.");
         const space = String(p.space ?? "");
         if (!this.#store.has(space)) throw new LinkError("unknown_space", `No Space '${space}'.`);
         const person = this.#id.person.id;

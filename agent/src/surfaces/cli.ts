@@ -9,6 +9,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { Client, type CallResult } from "../host/client.ts";
+import { credential, NoLink, type Who } from "../host/rpc.ts";
 import { TOOLS, description } from "../protocol.ts";
 
 type Flags = Record<string, string | boolean>;
@@ -27,15 +28,19 @@ class Usage extends Error {
   }
 }
 
-function agentName(f: Flags): { name: string } {
-  if (typeof f.agent === "string") return { name: f.agent };
-  if (process.env.REFLEX_AGENT_NAME) return { name: process.env.REFLEX_AGENT_NAME };
+function agentName(f: Flags): string {
+  if (typeof f.agent === "string") return f.agent;
+  if (process.env.REFLEX_AGENT_NAME) return process.env.REFLEX_AGENT_NAME;
   const project = basename(process.cwd());
   // Codex first: a Codex launched from a Claude Code shell inherits CLAUDECODE, but CODEX_THREAD_ID is set per Codex session.
-  if (process.env.CODEX_THREAD_ID) return { name: `Codex CLI · ${project}` };
-  if (process.env.CLAUDECODE) return { name: `Claude Code CLI · ${project}` };
-  return { name: `CLI · ${project}` };
+  if (process.env.CODEX_THREAD_ID) return `Codex CLI · ${project}`;
+  if (process.env.CLAUDECODE) return `Claude Code CLI · ${project}`;
+  return `CLI · ${project}`;
 }
+const who = (f: Flags): Who => {
+  const name = agentName(f);
+  return { name, credential: credential(name) };
+};
 
 const list = (v: string | boolean | undefined) => (typeof v === "string" ? v.split(",").map((s) => s.trim()).filter(Boolean) : undefined);
 function bounds(v: string | boolean | undefined) {
@@ -66,7 +71,7 @@ function imageDir() {
 
 /** Calls a tool and prints the result. Images go to files. */
 async function call(tool: string, args: Record<string, unknown>, f: Flags, human: (r: CallResult, files: string[]) => string[], o: { signal?: AbortSignal; files?: (r: CallResult) => string[] } = {}) {
-  const r = await (await host()).call(tool, args, agentName(f), { signal: o.signal });
+  const r = await (await host()).call(tool, args, who(f), { signal: o.signal });
   if (r.isError) {
     process.stderr.write(JSON.stringify(r.json) + "\n");
     return 1;
@@ -226,7 +231,7 @@ const COMMANDS: Record<string, Cmd> = {
   },
   "dev person": {
     usage: "reflex dev person circle|underline <space> <element> | reflex dev person send <space> [--said <text>]",
-    summary: "Act as the person on the iPad until the iPad connects (T6): mark an Element, press Send",
+    summary: "Act as the person without an iPad (a Link started with --dev): mark an Element, press Send",
     flags: ["said", "trigger"],
     run: async (p, f) => {
       const [action, space, target] = p;
@@ -265,6 +270,7 @@ function help(): string {
     "",
     "Usage: reflex <group> <action> [<resource>] [flags]",
     "",
+    "  reflex link             Start the Reflex Link and show a pairing code (reflex link --help)",
     ...rows,
     "",
     "Global flags:",
@@ -332,7 +338,8 @@ export async function main(argv: string[]): Promise<number> {
       errLine("invalid_input", e.message, `See: reflex ${key} --help`, e.next.length ? e.next : [`reflex ${key} --help`]);
       return 2;
     }
-    errLine("unavailable", (e as Error).message, "Check that the Reflex host can start; see ~/.reflex/dev/host-stdio.log.");
+    if (e instanceof NoLink) errLine("unavailable", e.message, "Start the Link with `reflex link`, then run this again.", ["reflex link"]);
+    else errLine("unavailable", (e as Error).message, "Check the Link's terminal for errors.");
     return 1;
   } finally {
     if (key !== "mcp") client?.close();

@@ -10,6 +10,14 @@
 //   asset         { hash, off, size } + bytes   one part of at most 1 MiB, in order; the whole
 //                                               asset is checked against the hash before it is kept
 //   ping / pong   { n, at }                     RTT
+//   agent_request { id, name, color }           an Agent is waiting for the person's approval (to iPads)
+//   agent_decision { id, status }               the person's answer, from an iPad that paired
+//                                               by scanning this Link's code
+//
+// Changes a peer sends are taken only if they were its to make: an iPad
+// writes for its person, another Link for its person and the Agents it hosts
+// (the kernel checks every record they touch). A peer that sends anything
+// else is disconnected.
 //
 // Sync state is restartable: on every new binding it is reset, so the two
 // sides run anti-entropy from scratch and repair anything a dropped
@@ -51,6 +59,10 @@ export class Coordinator {
   #timer: NodeJS.Timeout | null = null;
   #onPaired: ((d: PairedDevice) => void)[] = [];
   #pings = 0;
+  /** Agents waiting for approval, shown on every iPad that connects. */
+  pendingAgents: () => { id: string; name: string; color: string }[] = () => [];
+  /** The person's answer about an Agent, from a paired iPad. */
+  onAgentDecision: (device: string, id: string, status: "approved" | "denied") => void = () => {};
 
   constructor(opts: {
     me: Me;
@@ -113,7 +125,7 @@ export class Coordinator {
       if (r.offer) {
         // A code is single-use, even when the device that used it was already paired.
         this.#offers.consume(r.offer);
-        if (r.paired) this.#remember(r.peer, null);
+        if (r.paired) this.#remember(r.peer, null, "offer");
         else for (const f of this.#onPaired) f(this.#catalog.device(r.peer.device)!);
       }
       this.#bind(r.session, r.peer.device, r.peer.name, r.peer.device);
@@ -125,8 +137,8 @@ export class Coordinator {
     }
   }
 
-  #remember(peer: { device: string; key: string; person: PairedDevice["person"]; name: string }, at: Candidate | null): void {
-    const d: PairedDevice = { device: peer.device, key: peer.key, name: peer.name, person: peer.person, paired_at: Date.now() };
+  #remember(peer: { device: string; key: string; person: PairedDevice["person"]; name: string; kind: "ipad" | "link" }, at: Candidate | null, via: "offer" | "join"): void {
+    const d: PairedDevice = { device: peer.device, key: peer.key, name: peer.name, person: peer.person, kind: peer.kind, via, paired_at: Date.now() };
     this.#catalog.pairDevice(d);
     if (at) this.#catalog.seen(d.device, at.host, at.port);
     this.#log(`paired with ${peer.name} (${peer.device}, person ${peer.person.name})`);
@@ -148,7 +160,7 @@ export class Coordinator {
       }
       try {
         const r = await handshake(path, this.#me, this.#trust(), scanned);
-        this.#remember(r.peer, c);
+        this.#remember(r.peer, c, "join");
         this.#bind(r.session, r.peer.device, r.peer.name, this.#me.key.device);
         return this.#catalog.device(r.peer.device)!;
       } catch (e) {
@@ -226,6 +238,19 @@ export class Coordinator {
     this.#sendSpaces(peer);
     void peer.session.send({ t: "assets_have", hashes: this.#assets.list() }, undefined, "control").catch(() => {});
     for (const id of this.#store.ids()) this.#pump(id, peer);
+    for (const a of this.pendingAgents()) void peer.session.send({ t: "agent_request", ...a }, undefined, "control").catch(() => {});
+  }
+
+  /** Asks every connected iPad about an Agent waiting for approval. */
+  askAboutAgent(a: { id: string; name: string; color: string }): void {
+    for (const p of this.#peers.values()) void p.session.send({ t: "agent_request", ...a }, undefined, "control").catch(() => {});
+  }
+
+  /** Who a peer's changes may be written for, from its pairing record. */
+  #writers(device: string): string {
+    const d = this.#catalog.device(device);
+    if (!d) return JSON.stringify({ people: [] });
+    return JSON.stringify(d.kind === "ipad" ? { people: [d.person.id] } : { people: [d.person.id], agents: "*" });
   }
 
   #sendSpaces(p: Peer): void {
@@ -281,7 +306,12 @@ export class Coordinator {
       case "sync": {
         const space = String(h.space);
         if (!this.#store.has(space)) return; // announced first, so this is a peer bug; anti-entropy repairs it
-        this.#store.commit(space, `sync:${p.device}`, (s) => s.receiveSyncMessage(p.device, body));
+        const r = JSON.parse(this.#store.commit(space, `sync:${p.device}`, (s) => s.receiveSyncMessageChecked(p.device, body, this.#writers(p.device))));
+        if (!r.ok) {
+          this.#log(`refused changes to '${space}' from ${p.name} (${p.device}): ${r.errors.map((e: { msg: string }) => e.msg).join(" ")}`);
+          p.session.close("unauthorized changes");
+          return;
+        }
         this.#pump(space, p); // the sync protocol needs a reply even when nothing changed
         return;
       }
@@ -321,6 +351,15 @@ export class Coordinator {
         p.incoming.delete(hash);
         if (this.#assets.putVerified(hash, Buffer.concat(inc.parts))) this.announceAsset(hash);
         else this.#log(`rejected asset ${hash} from ${p.name}: bytes do not match the hash`);
+        return;
+      }
+      case "agent_decision": {
+        const d = this.#catalog.device(p.device);
+        const status = h.status === "approved" ? "approved" : "denied";
+        // Only a device the person paired by scanning this Link's own code may approve: an Agent with the
+        // user's shell can make this Link join a device of its own, but it can't scan the code shown here.
+        if (d?.kind !== "ipad" || d.via !== "offer") return this.#log(`ignored an Agent decision from ${p.name}: it did not pair by scanning this Link's code`);
+        this.onAgentDecision(p.device, String(h.id), status);
         return;
       }
       case "ping":

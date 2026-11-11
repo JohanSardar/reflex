@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 mod apply;
+mod auth;
 mod doc;
 pub mod model;
 mod ops;
@@ -480,6 +481,49 @@ impl Space {
         self.doc
             .receive_sync_message(state, m)
             .map_err(|e| KernelError::BadBytes(e.to_string()))
+    }
+
+    /// Takes a sync message from `peer` only if every change in it was the
+    /// peer's to make. `writers_json` says who the peer writes for, from its
+    /// authenticated pairing: `{"any": true}`, or `{"people": [..], "agents":
+    /// [..] | "*"}`. Returns `{"ok": true}`, or `{"ok": false, "reason":
+    /// "not_yours", "errors": [..]}` with nothing applied.
+    pub fn receive_sync_message_checked(
+        &mut self,
+        peer: &str,
+        msg: &[u8],
+        writers_json: &str,
+    ) -> Result<String> {
+        let writers = auth::Writers::parse(&parse_json(writers_json)?);
+        let m = sync::Message::decode(msg).map_err(|e| KernelError::BadBytes(e.to_string()))?;
+        if !writers.any && !m.changes.is_empty() {
+            let mut fork = self.doc.fork();
+            for c in m.changes.iter() {
+                fork.load_incremental(c)
+                    .map_err(|e| KernelError::BadBytes(e.to_string()))?;
+            }
+            let errs = auth::check(&self.doc, &fork, &writers);
+            if !errs.is_empty() {
+                let errors: Vec<Value> = errs
+                    .iter()
+                    .map(|e| json!({ "code": "not_yours", "msg": format!("The peer {e}."), "fix": "Only changes the peer's own person or Agents may make are accepted." }))
+                    .collect();
+                return Ok(
+                    json!({ "ok": false, "reason": "not_yours", "errors": errors }).to_string(),
+                );
+            }
+        }
+        let state = self.sync.entry(peer.to_string()).or_default();
+        self.doc
+            .receive_sync_message(state, m)
+            .map_err(|e| KernelError::BadBytes(e.to_string()))?;
+        Ok(json!({ "ok": true }).to_string())
+    }
+
+    /// One frozen Send's stored record, or `null`.
+    pub fn send(&self, send_id: &str) -> String {
+        doc::get_str(&self.doc, &doc::root(&self.doc, "sends"), send_id)
+            .unwrap_or_else(|| "null".into())
     }
 
     /// Forgets the sync state for `peer`, after a disconnect.

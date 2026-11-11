@@ -128,6 +128,22 @@ impl Space {
         self.inner.receive_sync_message(peer, msg).map_err(err)
     }
 
+    #[wasm_bindgen(js_name = receiveSyncMessageChecked)]
+    pub fn receive_sync_message_checked(
+        &mut self,
+        peer: &str,
+        msg: &[u8],
+        writers_json: &str,
+    ) -> Result<String, JsError> {
+        self.inner
+            .receive_sync_message_checked(peer, msg, writers_json)
+            .map_err(err)
+    }
+
+    pub fn send(&self, send_id: &str) -> String {
+        self.inner.send(send_id)
+    }
+
     #[wasm_bindgen(js_name = resetSync)]
     pub fn reset_sync(&mut self, peer: &str) {
         self.inner.reset_sync(peer)
