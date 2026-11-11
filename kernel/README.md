@@ -31,7 +31,7 @@ sync_message(peer) -> bytes?   receive_sync_message(peer, bytes)   reset_sync(pe
 - **Agent IDs are scoped to the Agent.** Claude's `n-auth` is stored as `claude/n-auth`. Claude sees it as `n-auth`; everyone else sees `claude/n-auth`.
 - **Agents change only their own Elements** and never a person's Ink. Only the person who drew a stroke can change or erase it.
 - **A batch is one atomic Automerge change.** Rejection is all or nothing and lists every failing op, each with a `fix`. Retrying the same request returns the first result. Reusing a request ID with different ops is rejected. The same request accepted on two replicas merges into one Element.
-- **Undo is per person, across devices.** History is one flat map keyed `<person>|<time>|<entry>`. Undo only reverts a field if it still holds the value that person wrote, so it never overwrites someone else's later change.
+- **Undo is per person, across devices.** History is one flat map keyed `<person>|<time>|<entry>`. Undo only reverts a field if it still holds the value that person wrote, so it never overwrites someone else's later change. A new action ends that person's redo chain: their undone entries become `abandoned` and are never redone.
 - **`freeze_send`** pins the frontier and, in the same commit, claims the person's strokes and changes since their last Send. A frozen Send never changes. Freezing the same ID again returns the stored record.
 - **Text is collaborative and indexed in UTF-16.** A connector's two ends, an Element's bounds and a stroke's geometry are each stored as one atomic value (ARCHITECTURE §7.1).
 - **Deleting writes an immutable removal record for that incarnation.** Restoring makes a new incarnation, so a concurrent patch can't bring an Element back.
