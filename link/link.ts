@@ -30,6 +30,7 @@ import { Inbox } from "./storage/inbox.ts";
 import { SpaceStore } from "./storage/journal.ts";
 import { Coordinator } from "./sync/coordinator.ts";
 import { startAgentHost } from "./agent-host.ts";
+import { route } from "./routing.ts";
 import { socketPath as agentSocketPath } from "../agent/src/host/rpc.ts";
 import { LanTransport } from "./transports/lan.ts";
 
@@ -103,9 +104,8 @@ export class Link {
     this.#store = new SpaceStore(db, this.#id.actor, this.#inbox);
     this.#assets = new AssetStore(this.home.assets);
     this.#catalog = new Catalog(db, this.#id.key);
-    // Who each recovered Send goes to: the Agents on its Space (set again by the Agent layer below).
-    this.#inbox.recipientsFor = (space) =>
-      (db.prepare("SELECT agent FROM space_agents WHERE space = ?").all(space) as { agent: string }[]).map((r) => `agent:${r.agent}`);
+    // Who each recovered Send goes to (link/routing.ts).
+    this.#inbox.recipientsFor = (space, send) => route(db, this.#store, space, send);
     const rec = this.#store.recover();
     const devices = this.#catalog.devices();
     if (this.#catalog.rejected > 0) this.#log(`ignored ${this.#catalog.rejected} catalog records with bad signatures`);
@@ -136,6 +136,9 @@ export class Link {
       socket: agentSocketPath(this.dir),
       token: this.#keys.rpc,
       devPerson: Boolean(this.#opts.dev),
+      presence: () => ({
+        devices: this.#coord.peers().filter((p) => this.#catalog.devices().find((d) => d.device === p.device)?.kind !== "link").length,
+      }),
       announce: (a) => this.#announce(a),
       decision: (id, ms, signal) => this.#waitDecision(id, ms, signal),
       log: (event, data = {}) => this.#log(`agent layer: ${event} ${JSON.stringify(data)}`),
