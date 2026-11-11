@@ -6,13 +6,15 @@
     "protocol",
     "kernel/wasm",
     "agent",
-    "link"
+    "link",
+    "relay"
   ],
   "scripts": {
     "build:kernel-wasm": "sh kernel/wasm/build.sh",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check:protocol": "npm run check -w @reflex/protocol",
-    "reflex-link": "node link/bin/reflex-link.ts"
+    "reflex-link": "node link/bin/reflex-link.ts",
+    "reflex-relay": "node relay/node/bin/reflex-relay.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261024.1",

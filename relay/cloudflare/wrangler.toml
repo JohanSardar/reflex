@@ -1,0 +1,52 @@
+# The Reflex Relay on Cloudflare. Local only in T9: `npx wrangler dev` (deploying is T14).
+name = "reflex-relay"
+main = "worker.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The Agent layer reads the protocol's files and compiles its validators at
+# start; a Worker can do neither, so build.ts bundles both ahead of time and
+# these aliases point the Agent layer at them. The renderer uses resvg's WASM.
+[build]
+command = "node build.ts"
+
+[alias]
+"node:fs" = "./shims/fs.ts"
+"ajv/dist/2020.js" = "./shims/ajv.ts"
+"@resvg/resvg-js" = "./shims/resvg.ts"
+# The Agent layer imports the Node binding in places; in the Worker it is the Workers one (same WASM module).
+"@reflex/kernel/node" = "../../kernel/wasm/js/workers.ts"
+
+# A Worker has no module URLs; the Agent layer only uses them to find protocol/ files (shims/fs.ts).
+[define]
+"import.meta.url" = "\"file:///worker/a/b/c/module.js\""
+
+[[rules]]
+type = "CompiledWasm"
+globs = ["**/*.wasm"]
+fallthrough = true
+
+[[rules]]
+type = "Data"
+globs = ["**/*.ttf"]
+fallthrough = true
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "RoomDO"
+
+[[durable_objects.bindings]]
+name = "LOG"
+class_name = "LogDO"
+
+[[durable_objects.bindings]]
+name = "AUTH"
+class_name = "AuthDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomDO", "LogDO", "AuthDO"]
+
+[[r2_buckets]]
+binding = "ASSETS"
+bucket_name = "reflex-relay-assets"

@@ -2,9 +2,19 @@ import CryptoKit
 import Foundation
 import Network
 
+/// Ordered, reliable frames to one Link, over any path: the LAN
+/// (`FramedConnection`) or the Relay (`RelayConnection`). The handshake and
+/// the session don't care which.
+protocol FrameChannel: AnyObject, Sendable {
+    var frames: AsyncThrowingStream<Data, Error> { get }
+    var remote: String { get }
+    func send(_ frame: Data)
+    func close()
+}
+
 /// TCP with length-prefixed frames (u32, big-endian), as the Link's LAN
 /// transport (`link/transports/lan.ts`).
-final class FramedConnection: @unchecked Sendable {
+final class FramedConnection: FrameChannel, @unchecked Sendable {
     private let conn: NWConnection
     private let queue = DispatchQueue(label: "si.eilmer.reflex.link-connection")
     private var buffer = Data()
@@ -105,13 +115,13 @@ private final class Once<T: Sendable>: @unchecked Sendable {
 /// header plus optional bytes (`link/pairing/handshake.ts`, `Session`).
 @MainActor
 final class Session {
-    let conn: FramedConnection
+    let conn: any FrameChannel
     let peer: PeerInfo
     private var tx: FrameCipher
     private var rx: FrameCipher
     private var iterator: AsyncThrowingStream<Data, Error>.AsyncIterator
 
-    init(conn: FramedConnection, peer: PeerInfo, tx: FrameCipher, rx: FrameCipher, iterator: AsyncThrowingStream<Data, Error>.AsyncIterator) {
+    init(conn: any FrameChannel, peer: PeerInfo, tx: FrameCipher, rx: FrameCipher, iterator: AsyncThrowingStream<Data, Error>.AsyncIterator) {
         self.conn = conn
         self.peer = peer
         self.tx = tx
@@ -173,7 +183,7 @@ struct DeviceIdentity {
 ///
 /// `pairedKey` is the Link's key when already paired; `offer` when pairing.
 @MainActor
-func handshake(_ conn: FramedConnection, me: DeviceIdentity, pairedKey: String?, offer: PairingOffer?) async throws -> Session {
+func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?, offer: PairingOffer?) async throws -> Session {
     var it = conn.frames.makeAsyncIterator()
     func next() async throws -> (raw: Data, msg: [String: Any]) {
         // A Link that never answers is cut off; its stream then ends.
