@@ -481,6 +481,34 @@ Prove it in the iPad Simulator against a real `reflex link` and a real Claude Co
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
 
+## Step 6 ticket (adapters)
+
+```md
+# Webhook and MCP App: the other two ways a Send can reach an Agent
+
+## Goal
+Build the two remaining push Send Adapters on T15's adapter contract (`link/adapters/`), so harnesses other than Claude Code can hear the person without sitting in `wait_for_user`. When this is done:
+- **Webhook.** `reflex adapters add webhook --url …` sets one up. The Link POSTs each new Send Bundle to that URL, signed with a per-target secret, with retries and backoff, and the receiver acknowledges it. An Agent SDK program (or any custom harness) can start a turn from it. A webhook that fails or never answers leaves the Send in the Inbox, delivered once.
+- **MCP App.** Reflex's MCP server offers a `ui://` view for chat hosts such as claude.ai and ChatGPT. The view shows the Space, and when the person presses Send it starts a new turn in the chat with `ui/message`. It works through the Relay at `reflex.eilmer.si`, for cloud Agents. Find out whether the view can be live or only read-only (SPEC open question) and report it.
+- The adapter contract still holds: config, secrets, callback and attempts live in the Link, outside each adapter, and `reflex link status` lists all three adapters' targets.
+
+Prove the webhook with a real receiver and a real Agent SDK (or `claude -p`) program answering a Send it was pushed. Prove the MCP App in a real MCP Apps host: claude.ai with a custom connector to `https://reflex.eilmer.si` if you can reach it, otherwise the MCP Apps reference host, and say which. Kill the receiver once mid-push and show the Send waiting in the Inbox afterwards.
+
+## Context
+- Read docs/adr/0002 and 0004; docs/SPEC.md §9 (delivery) and §15 (open questions); docs/ARCHITECTURE.md §2 (Send Adapter row), §6 (Send delivery) and §8.4; docs/harness-notes.md; `link/README.md`, `agent/README.md`, `relay/README.md`.
+- What exists on main: everything through T15 (the Claude Code channel and the adapter contract in `link/adapters/`), T13 (math tutor core) and T14 (the Relay live at `https://reflex.eilmer.si`, the default for every Link).
+- Carried over (docs/TICKETS.md, "Follow-ups"): `link/test/reapprove.test.ts` and the ask-again check in `link/test/terminal-queue.test.ts` fail unless `REFLEX_REASK_S=0` (T15).
+- T12 (math tutor iPad) runs at the same time in `apps/ipad/` with small Link changes; whoever merges second rebases. Redeploy the Relay with `wrangler deploy` from `relay/` only if your change needs it, and leave it running.
+- Codex's usage limit is exhausted until 2026-11-12 13:06; after that, also check the webhook path from a Codex session if it fits.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+- Don't publish anything to npm or a public registry.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
@@ -503,3 +531,5 @@ Found while building earlier tickets. Each goes into the named ticket's brief.
 - **T17:** `link/test/reapprove.test.ts` and the ask-again check in `link/test/terminal-queue.test.ts` fail unless `REFLEX_REASK_S=0` is set, on main too (T15).
 - **Declined review nits, open:** with more than 300 history entries a revert chip can miss an older Agent change; the iPad doesn't enforce the schema's size limits; remote Ink isn't refetched after a lasso move on another device (T7). The no-Ink check counts a stroke by its center; an explicit stroke list on a Region Send isn't limited to the Region (T13).
 - **Real iPad pass:** live mic transcription, camera capture, and drag-and-drop from another app (T7).
+- **T22:** a pairing code cut short in the middle of the person ID was accepted; the new device joined under a person ID that doesn't exist (T14).
+- **T21:** the protocol schemas' `$id`s are `https://reflex.eilmer.si/protocol/v0/…`, and that host now serves the Relay, so they return 404 (T14). Publishing the protocol should serve them or change them.
