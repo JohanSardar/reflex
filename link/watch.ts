@@ -29,8 +29,9 @@ const MIN_GAP_MS = env("REFLEX_WATCH_MIN_S", 8) * 1000;
 const PER_HOUR = env("REFLEX_WATCH_PER_HOUR", 60);
 
 type State = {
-  /** The person's strokes in the Region at the last snapshot. */
+  /** The person's strokes in the Region at the last snapshot, and when the Space last changed. */
   shown: string;
+  seen: string;
   /** When the person last changed the Region's Ink, and when the first change not yet shown was. */
   lastChange: number;
   firstPending?: number;
@@ -93,14 +94,14 @@ export class Watcher {
       let st = this.#regions.get(key);
       if (!st) {
         // Watch just came on: what is there now is the baseline; the next change is news.
-        this.#regions.set(key, { shown: ink, lastChange: 0, lastSnapshot: 0, recent: [] });
+        this.#regions.set(key, { shown: ink, seen: ink, lastChange: 0, lastSnapshot: 0, recent: [] });
         continue;
       }
-      if (ink === st.shown && st.firstPending === undefined) continue;
-      if (ink !== st.shown) {
-        st.lastChange = now;
-        st.firstPending ??= now;
-      }
+      // Only a change to this Region's Ink counts: an Agent's note or Ink elsewhere is not the person writing here.
+      if (ink === st.seen) continue;
+      st.seen = ink;
+      st.lastChange = now;
+      st.firstPending ??= now;
       this.#schedule(space, region, st);
     }
   }

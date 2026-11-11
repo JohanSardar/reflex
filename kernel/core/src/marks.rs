@@ -693,11 +693,21 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
             .unwrap_or_default()
     };
     // `context`: strokes a Region's earlier Sends already carried, shown again for its lines.
-    let earlier: std::collections::BTreeSet<String> = list("context").into_iter().collect();
+    let mut earlier: std::collections::BTreeSet<String> = list("context").into_iter().collect();
     let keys: Vec<String> = list("strokes")
         .into_iter()
         .chain(earlier.iter().cloned())
         .collect();
+    // A watch snapshot claims nothing, so its strokes that a Send already claimed were
+    // carried by an earlier Send from the Region.
+    if send.get("trigger").and_then(Value::as_str) == Some("watch") {
+        let claims = doc::root(at, "claims");
+        earlier.extend(
+            keys.iter()
+                .filter(|k| doc::get_str(at, &claims, &format!("stroke:{k}")).is_some())
+                .cloned(),
+        );
+    }
     let strokes: Vec<Stroke> = keys
         .iter()
         .filter_map(|k| doc::read_record(at, k))
