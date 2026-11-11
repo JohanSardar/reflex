@@ -24,7 +24,10 @@ Shared schemas:
 | `scene-item` | The compact view of an Element in outlines and Send Bundles, with `by`. |
 | `apply.input` | The `apply` batch: `add`, `patch`, `remove`, `arrange`, `focus`, `define`. |
 | `send-bundle` | What one Send reads like to the Agent. |
+| `raw-send` | What a device writes when the person presses Send or fires a Behavior: strokes, words with times, handwriting hints, crops. The kernel freezes it and the Link turns it into a Send Bundle. |
 | `error` | What every tool returns on failure: stable codes, each error with a `fix`. |
+
+Element IDs: an Agent's own Elements appear to it under its own IDs, and to everyone else as `<agent>:<id>`.
 
 The eleven tools are fixed (SPEC §11): `list_spaces`, `open_space`, `read`, `look`, `apply`, `exec`, `wait_for_user`, `read_me`, `recipe`, `request_attention`, `revert`. Plugins never add tools.
 

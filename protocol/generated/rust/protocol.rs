@@ -2651,6 +2651,161 @@ pub struct OpenSpaceOutput {
     pub next: String,
 }
 
+/// What sent it: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior (with element and on), a Region's Send button (with region), or watch mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RawSendTrigger {
+    #[serde(rename = "button")]
+    Button,
+    #[serde(rename = "pencil")]
+    Pencil,
+    #[serde(rename = "voice")]
+    Voice,
+    #[serde(rename = "behavior")]
+    Behavior,
+    #[serde(rename = "region")]
+    Region,
+    #[serde(rename = "watch")]
+    Watch,
+}
+
+impl RawSendTrigger {
+    pub const ALL: &'static [&'static str] = &["button", "pencil", "voice", "behavior", "region", "watch"];
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RawSendTrigger::Button => "button",
+            RawSendTrigger::Pencil => "pencil",
+            RawSendTrigger::Voice => "voice",
+            RawSendTrigger::Behavior => "behavior",
+            RawSendTrigger::Region => "region",
+            RawSendTrigger::Watch => "watch",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawSendWordsItem {
+    pub text: String,
+    /// A non-negative integer in the shared safe range.
+    pub start_ms: i64,
+    /// A non-negative integer in the shared safe range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawSendHintsItem {
+    pub strokes: Vec<String>,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawSendCropsItem {
+    pub asset: String,
+    /// [x, y, width, height] in the reading Agent's coordinates. x and y are the top-left corner.
+    pub bounds: [i64; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strokes: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawSendEmbedAnchorsItem {
+    /// A short ID the Agent chose, such as 'n-auth'. IDs are scoped to the Agent that made them, so two Agents never collide. Reflex-made IDs (Ink, user imports, generated) use the same alphabet.
+    pub element: String,
+    pub strokes: Vec<String>,
+    /// Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x and y; dom uses selector; part uses part; line uses line; local uses bounds. label is the Embed's or recognizer's short description.
+    pub anchor: Anchor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RawSendOn {
+    #[serde(rename = "tap")]
+    Tap,
+    #[serde(rename = "long_press")]
+    LongPress,
+    #[serde(rename = "drag_end")]
+    DragEnd,
+    #[serde(rename = "ink_inside")]
+    InkInside,
+    #[serde(rename = "panel_change")]
+    PanelChange,
+    #[serde(rename = "embed_event")]
+    EmbedEvent,
+}
+
+impl RawSendOn {
+    pub const ALL: &'static [&'static str] = &["tap", "long_press", "drag_end", "ink_inside", "panel_change", "embed_event"];
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RawSendOn::Tap => "tap",
+            RawSendOn::LongPress => "long_press",
+            RawSendOn::DragEnd => "drag_end",
+            RawSendOn::InkInside => "ink_inside",
+            RawSendOn::PanelChange => "panel_change",
+            RawSendOn::EmbedEvent => "embed_event",
+        }
+    }
+}
+
+/// What a device captures when the person sends, or when a Behavior fires, and hands to the kernel's freeze_send (ARCHITECTURE §7.4, §8.2). The kernel adds who sent it, the frontier, the strokes and the changes it claims, and stores it immutably. Mark grouping, Anchors and the transcript's Mark placement are computed later from it, where the Agent is. Times are the device's milliseconds since the Unix epoch, the same clock it passes as now_ms with each stroke, so words and strokes line up. IDs are as the device sees them: its own strokes by their stroke ID, an Agent's Elements as <agent>:<id>.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawSend {
+    /// A new Send ID the device makes.
+    pub send: String,
+    /// What sent it: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior (with element and on), a Region's Send button (with region), or watch mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<RawSendTrigger>,
+    /// What the screen showed, in Space coordinates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewport: Option<[i64; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<Vec<String>>,
+    /// Strokes to include besides the person's unsent ones, which are always claimed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strokes: Option<Vec<String>>,
+    /// The whole transcript, or text the person typed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub said: Option<String>,
+    /// The on-device transcript, word by word with timings, so Mark IDs can be placed where the person drew each Mark while speaking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<Vec<RawSendWordsItem>>,
+    /// Apple's on-device handwriting recognition: which strokes it read as writing, the text, and its confidence. A hint groups those strokes into one writing Mark unless they clearly form a gesture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hints: Option<Vec<RawSendHintsItem>>,
+    /// What the device rendered around the Marks, stored as assets before the Send refers to them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crops: Option<Vec<RawSendCropsItem>>,
+    /// Each Embed's answer, from the resolve function it registered, for the strokes drawn on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embed_anchors: Option<Vec<RawSendEmbedAnchorsItem>>,
+    /// trigger region: the Region whose Send button was pressed. The Send goes to the Region's owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// trigger behavior: the Element that was interacted with. The kernel runs that Element's Behaviors for on (and event): a send action makes a full Send, a notify makes a tap (nothing is claimed and the person's turn goes on), and set and apply_recipe are run by the Link as the Element's owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<RawSendOn>,
+    /// on embed_event: the event name the Embed emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<String>,
+    /// on panel_change: the Panel's ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<String>,
+    /// on panel_change: component id → the value entered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Map<String, Value>>,
+    /// From an Embed's reflex.notify(payload); otherwise the Behavior's own payload is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Map<String, Value>>,
+}
+
 /// outline (default): compact items. full: every field of the given Elements, as you would patch them. strokes: the raw points of Ink Elements or Marks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ReadInputDetail {
@@ -2704,6 +2859,28 @@ pub struct ReadOutputStrokesItem {
     pub points: Vec<(f64, f64, i64, f64)>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadOutputFilesItem {
+    /// A short ID the Agent chose, such as 'n-auth'. IDs are scoped to the Agent that made them, so two Agents never collide. Reflex-made IDs (Ink, user imports, generated) use the same alphabet.
+    pub id: String,
+    pub name: String,
+    pub mime: String,
+    /// A non-negative integer in the shared safe range.
+    pub size: i64,
+    /// The file's text, cut at 100,000 characters (truncated says so).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
+    /// true when this Link doesn't have the file's bytes yet. Read again once the device has synced it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing: Option<bool>,
+    /// CLI only: where the file's bytes were written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
 /// outline only: what matched nothing in this read.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2714,7 +2891,7 @@ pub struct ReadOutputElsewhere {
     pub off_screen: i64,
 }
 
-/// Exactly one of outline, elements or strokes is set, matching the requested detail.
+/// Exactly one of outline, elements or strokes is set, matching the requested detail. With detail full, files carries the contents of the file Elements read.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReadOutput {
@@ -2726,6 +2903,9 @@ pub struct ReadOutput {
     pub elements: Option<Vec<Element>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strokes: Option<Vec<ReadOutputStrokesItem>>,
+    /// detail full: the contents of the file Elements among ids. A text file comes as text; any other file is named by its mime and size, and the CLI writes its bytes to file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<ReadOutputFilesItem>>,
     /// outline only: what matched nothing in this read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elsewhere: Option<ReadOutputElsewhere>,
@@ -3066,6 +3246,9 @@ pub struct Image {
     pub shows: String,
     /// What part of the Space the image covers, in your coordinates.
     pub bounds: [i64; 4],
+    /// CLI only: where the image was written, because a shell can't receive image blocks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 /// send: the person finished their turn. watch: a snapshot of a watched Region while they may still be writing. tap: a notify Behavior fired; their turn is not over.

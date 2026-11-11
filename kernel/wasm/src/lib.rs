@@ -148,4 +148,36 @@ impl Space {
     pub fn reset_sync(&mut self, peer: &str) {
         self.inner.reset_sync(peer)
     }
+
+    pub fn marks(&self, send_id: &str, query_json: &str) -> Result<String, JsError> {
+        self.inner.marks(send_id, query_json).map_err(err)
+    }
+
+    pub fn revert(
+        &mut self,
+        by_json: &str,
+        request_id: &str,
+        selector_json: &str,
+        now_ms: f64,
+    ) -> Result<String, JsError> {
+        self.inner
+            .revert(by_json, request_id, selector_json, ms(now_ms))
+            .map_err(err)
+    }
+
+    pub fn timeline(&self, query_json: &str) -> Result<String, JsError> {
+        self.inner.timeline(query_json).map_err(err)
+    }
+
+    #[wasm_bindgen(js_name = requestAttention)]
+    pub fn request_attention(
+        &mut self,
+        agent: &str,
+        json: &str,
+        now_ms: f64,
+    ) -> Result<String, JsError> {
+        self.inner
+            .request_attention(agent, json, ms(now_ms))
+            .map_err(err)
+    }
 }

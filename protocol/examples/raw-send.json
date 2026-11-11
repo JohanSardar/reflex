@@ -1,0 +1,15 @@
+{
+  "send": "s_a81f2c9d04e6",
+  "trigger": "voice",
+  "viewport": [300, 100, 1200, 800],
+  "said": "merge these into one service",
+  "words": [
+    { "text": "merge", "start_ms": 1762862400100, "end_ms": 1762862400380 },
+    { "text": "these", "start_ms": 1762862400420, "end_ms": 1762862400700 },
+    { "text": "into", "start_ms": 1762862403100, "end_ms": 1762862403250 },
+    { "text": "one", "start_ms": 1762862403260, "end_ms": 1762862403400 },
+    { "text": "service", "start_ms": 1762862403420, "end_ms": 1762862403900 }
+  ],
+  "hints": [ { "strokes": ["9C1F0E2A-ink-14", "9C1F0E2A-ink-15", "9C1F0E2A-ink-16"], "text": "contradicts", "confidence": 0.71 } ],
+  "crops": [ { "asset": "4f9a1c0de0b8a3f1b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7081920", "bounds": [380, 160, 520, 180], "strokes": ["9C1F0E2A-ink-12", "9C1F0E2A-ink-13"] } ]
+}

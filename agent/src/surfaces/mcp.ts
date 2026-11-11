@@ -87,6 +87,11 @@ export async function runMcp() {
       log("call_end", { tool, request: extra.requestId, s: (Date.now() - callStarted) / 1000, isError: r.isError, progressSent, status: r.json.status ?? r.json.kind ?? (r.json.ok === false ? r.json.reason : "ok") });
       const content: any[] = [{ type: "text", text: JSON.stringify(r.json) }];
       for (const data of r.images) content.push({ type: "image", data, mimeType: "image/png" });
+      // A file the person added that isn't text: its bytes as an embedded resource (text is already in the JSON).
+      for (const f of r.files ?? []) {
+        const entry = (r.json.files ?? []).find((x: any) => x.id === f.id);
+        if (entry?.text === undefined) content.push({ type: "resource", resource: { uri: `reflex://${r.json.space}/files/${f.id}`, mimeType: f.mime, blob: f.data } });
+      }
       const pending = r.json.pending_sends ?? r.json.pending_after;
       if (pending > 0 && tool !== "wait_for_user") content.push({ type: "text", text: `📥 ${pending} pending Send${pending === 1 ? "" : "s"}. Read with wait_for_user(timeout_s: 0).` });
       return { content, isError: r.isError };

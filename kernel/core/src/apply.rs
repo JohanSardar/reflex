@@ -498,6 +498,10 @@ fn run_op(
         Op::Move { refs, by } => {
             let recs = owned_records(tx, p, i, refs, "ids")?;
             for rec in recs {
+                if rec.typ == "connector" {
+                    move_connector(tx, &rec, *by, i, out)?;
+                    continue;
+                }
                 let mut b = rec.bounds;
                 b[0] = clamp_safe(b[0] + by[0]);
                 b[1] = clamp_safe(b[1] + by[1]);
@@ -535,7 +539,11 @@ fn run_op(
             // One register per Agent, so two paths writing focus never create
             // competing containers.
             let agents = doc::root(tx, "agents");
-            tx.put(&agents, a.as_str(), json!({ "focus": value }).to_string())
+            let mut rec = doc::get_str(tx, &agents, a)
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                .unwrap_or(json!({}));
+            rec["focus"] = value.clone();
+            tx.put(&agents, a.as_str(), rec.to_string())
                 .map_err(am(i))?;
         }
         Op::Define { kind, name, entry } => {
@@ -735,6 +743,50 @@ fn write_bounds(
             new: Some(new),
         });
     }
+    Ok(())
+}
+
+/// Moving a connector: a free one (drawn by points) moves its points; one tied
+/// to two Elements follows them, so it stays where it is and says why.
+fn move_connector(
+    tx: &mut Tx,
+    rec: &Record,
+    by: [i64; 2],
+    i: usize,
+    out: &mut Outcome,
+) -> Result<(), Vec<OpError>> {
+    let Some(Value::Array(pts)) = rec.field_json("points") else {
+        out.repaired.push(format!(
+            "ops[{i}]: connector '{}' follows the Elements it joins, so it was not moved",
+            display_id(None, &rec.key)
+        ));
+        return Ok(());
+    };
+    let moved: Vec<Value> = pts
+        .iter()
+        .map(|p| {
+            let n = |j: usize| p.get(j).and_then(Value::as_f64).unwrap_or(0.0).round() as i64;
+            json!([clamp_safe(n(0) + by[0]), clamp_safe(n(1) + by[1])])
+        })
+        .collect();
+    let old = rec.fields.get("points").cloned();
+    let new = Value::Array(moved.clone()).to_string();
+    set_field(tx, &rec.key, "points", Some(&new)).map_err(am(i))?;
+    out.edits.push(Edit::Field {
+        key: rec.key.clone(),
+        field: "points".into(),
+        old,
+        new: Some(new),
+    });
+    let ob = doc::bounds_json(&rec.bounds);
+    let nb = doc::bounds_json(&points_bounds(&Value::Array(moved)));
+    set_field(tx, &rec.key, "bounds", Some(&nb)).map_err(am(i))?;
+    out.edits.push(Edit::Field {
+        key: rec.key.clone(),
+        field: "bounds".into(),
+        old: Some(ob),
+        new: Some(nb),
+    });
     Ok(())
 }
 

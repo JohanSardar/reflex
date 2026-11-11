@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 /// IDs only). A missing name falls back to the ID.
 pub type Names = BTreeMap<String, String>;
 
-fn viewer_of(q: &Value) -> Option<Principal> {
+pub fn viewer_of(q: &Value) -> Option<Principal> {
     let v = q.get("viewer")?;
     if let Some(a) = v.get("agent").and_then(|a| a.as_str()) {
         return Some(Principal::Agent(a.to_string()));
@@ -28,7 +28,7 @@ fn viewer_of(q: &Value) -> Option<Principal> {
         .map(|p| Principal::Person(p.to_string()))
 }
 
-fn names_of(q: &Value) -> Names {
+pub fn names_of(q: &Value) -> Names {
     q.get("names")
         .and_then(Value::as_object)
         .map(|m| {
@@ -252,11 +252,32 @@ pub fn scene<R: ReadDoc>(d: &R, q: &Value, heads: &[String]) -> Value {
             .filter_map(|(k, v)| {
                 serde_json::from_str::<Value>(&v)
                     .ok()
-                    .map(|v| (k, v["focus"].clone()))
+                    .and_then(|v| v.get("focus").cloned())
+                    .map(|f| (k, f))
             })
             .collect();
         if !focus.is_empty() {
             out["focus"] = Value::Object(focus);
+        }
+        let attention: Map<String, Value> = doc::str_map(d, &agents)
+            .into_iter()
+            .filter_map(|(k, v)| {
+                let mut a = serde_json::from_str::<Value>(&v)
+                    .ok()?
+                    .get("attention")?
+                    .clone();
+                if let Some(ids) = a.get("ids").and_then(Value::as_array).cloned() {
+                    a["ids"] = json!(ids
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(|k| display_id(viewer.as_ref(), k))
+                        .collect::<Vec<_>>());
+                }
+                Some((k, a))
+            })
+            .collect();
+        if !attention.is_empty() {
+            out["attention"] = Value::Object(attention);
         }
     }
     out

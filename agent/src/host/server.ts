@@ -57,7 +57,14 @@ export function serveHost(o: HostOptions): Promise<Server> {
             progress: (p) => send({ t: "progress", id: f.id, ...p }),
           });
           log("call", { client, who: who.name, tool: f.tool, ms: Date.now() - started, isError: r.isError, ...(r.isError ? { reason: r.json.reason } : {}), aborted: ac.signal.aborted });
-          send({ t: "result", id: f.id, json: r.json, images: r.images.map((b) => b.toString("base64")), isError: r.isError });
+          send({
+            t: "result",
+            id: f.id,
+            json: r.json,
+            images: r.images.map((b) => b.toString("base64")),
+            ...(r.files?.length ? { files: r.files.map((x) => ({ id: x.id, name: x.name, mime: x.mime, data: x.data.toString("base64") })) } : {}),
+            isError: r.isError,
+          });
         } else if (f.t === "person") {
           if (!o.devPerson)
             throw new ReflexError("unavailable", [{ code: "unavailable", msg: "Acting as the person needs a Link started with --dev.", fix: "Draw and press Send on the iPad, or restart the Link with `reflex link --dev`." }]);
@@ -65,6 +72,15 @@ export function serveHost(o: HostOptions): Promise<Server> {
           let json: Record<string, any>;
           if (f.action === "circle") json = core.personCircle(a.space, a.target);
           else if (f.action === "underline") json = core.personUnderline(a.space, a.target);
+          else if (f.action === "strike") json = core.personStrike(a.space, a.target);
+          else if (f.action === "arrow") json = core.personArrow(a.space, a.target, a.to);
+          else if (f.action === "write") json = core.personWrite(a.space, a.target, a.text, { confidence: a.confidence });
+          else if (f.action === "say") json = core.personSay(a.space, a.text);
+          else if (f.action === "move") json = core.personMove(a.space, a.target, a.by);
+          else if (f.action === "add-file") json = core.personAddFile(a.space, { name: a.name, bytes: Buffer.from(a.data, "base64"), mime: a.mime }, { near: a.near });
+          else if (f.action === "tap") json = core.personFire(a.space, a.target, a.on ?? "tap", { values: a.values });
+          else if (f.action === "revert") json = core.personRevert(a.space, a.agent);
+          else if (f.action === "history") json = core.timeline(a.space);
           else if (f.action === "stroke") json = core.personStroke(a.space, a.points);
           else if (f.action === "send") json = core.personSend(a.space, { said: a.said, trigger: a.trigger });
           else throw new Error(`unknown person action ${f.action}`);

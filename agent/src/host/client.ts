@@ -1,8 +1,8 @@
 // The surfaces' side of the local RPC to the Link.
 import { connect, type Socket } from "node:net";
-import { frames, home, NoLink, socketPath, token, type ClientFrame, type HostFrame, type Who } from "./rpc.ts";
+import { frames, home, NoLink, socketPath, token, type ClientFrame, type HostFrame, type WireFile, type Who } from "./rpc.ts";
 
-export type CallResult = { json: Record<string, any>; images: string[]; isError: boolean };
+export type CallResult = { json: Record<string, any>; images: string[]; files?: WireFile[]; isError: boolean };
 type Progress = (f: { elapsed_s: number; timeout_s: number }) => void;
 
 function dial(path: string): Promise<Socket> {

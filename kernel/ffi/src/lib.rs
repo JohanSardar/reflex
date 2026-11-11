@@ -167,4 +167,28 @@ impl Space {
     pub fn reset_sync(&self, peer: String) {
         self.lock().reset_sync(&peer)
     }
+
+    pub fn marks(&self, send_id: String, query_json: String) -> R<String> {
+        Ok(self.lock().marks(&send_id, &query_json)?)
+    }
+
+    pub fn revert(
+        &self,
+        by_json: String,
+        request_id: String,
+        selector_json: String,
+        now_ms: i64,
+    ) -> R<String> {
+        Ok(self
+            .lock()
+            .revert(&by_json, &request_id, &selector_json, now_ms)?)
+    }
+
+    pub fn timeline(&self, query_json: String) -> R<String> {
+        Ok(self.lock().timeline(&query_json)?)
+    }
+
+    pub fn request_attention(&self, agent: String, json: String, now_ms: i64) -> R<String> {
+        Ok(self.lock().request_attention(&agent, &json, now_ms)?)
+    }
 }
