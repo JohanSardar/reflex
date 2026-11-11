@@ -50,11 +50,27 @@ export class LanTransport implements Transport {
   #device: string;
   #port: number;
   #advertise: boolean;
+  #log: (msg: string) => void;
+  #lastError = "";
 
-  constructor(opts: { device: string; port: number; advertise?: boolean }) {
+  constructor(opts: { device: string; port: number; advertise?: boolean; log?: (msg: string) => void }) {
     this.#device = opts.device;
     this.#port = opts.port;
     this.#advertise = opts.advertise ?? true;
+    this.#log = opts.log ?? (() => {});
+  }
+
+  /**
+   * One mDNS responder for publishing and browsing. Its socket fails while the network changes
+   * (Wi-Fi off: EADDRNOTAVAIL on every send); that is logged once, not thrown, so the Link keeps
+   * running on its other paths and Bonjour picks up again when a network is back.
+   */
+  #mdns(): Bonjour {
+    this.#bonjour ??= new Bonjour({}, (e: Error) => {
+      if (e.message !== this.#lastError) this.#log(`LAN discovery: ${e.message}`);
+      this.#lastError = e.message;
+    });
+    return this.#bonjour;
   }
 
   listen(onPath: (p: Path) => void): Promise<{ port: number }> {
@@ -71,8 +87,7 @@ export class LanTransport implements Transport {
           const addr = server.address();
           const actual = typeof addr === "object" && addr ? addr.port : port;
           if (this.#advertise) {
-            this.#bonjour ??= new Bonjour();
-            this.#bonjour.publish({
+            this.#mdns().publish({
               name: `Reflex Link ${this.#device}`,
               type: SERVICE_TYPE,
               port: actual,
@@ -88,7 +103,7 @@ export class LanTransport implements Transport {
   }
 
   discover(onCandidate: (c: Candidate) => void): void {
-    this.#bonjour ??= new Bonjour();
+    const mdns = this.#mdns();
     const seen = (s: Service): void => {
       const dev = typeof s.txt?.dev === "string" ? s.txt.dev : null;
       if (dev === this.#device) return;
@@ -96,7 +111,7 @@ export class LanTransport implements Transport {
       if (s.referer?.address && !addrs.includes(s.referer.address)) addrs.unshift(s.referer.address);
       for (const host of addrs) onCandidate({ transport: this.name, device: dev, host, port: s.port });
     };
-    const browser = this.#bonjour.find({ type: SERVICE_TYPE });
+    const browser = mdns.find({ type: SERVICE_TYPE });
     browser.on("up", seen);
     browser.on("srv-update", seen);
     // Re-ask periodically so a peer that restarts is found again quickly.

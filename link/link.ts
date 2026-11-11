@@ -137,7 +137,7 @@ export class Link {
     if (this.#catalog.rejected > 0) this.#log(`ignored ${this.#catalog.rejected} catalog records with bad signatures`);
 
     const transports: Transport[] = [];
-    if (this.#opts.lan !== false) transports.push(new LanTransport({ device: this.#id.key.device, port: this.#opts.port ?? 7420 }));
+    if (this.#opts.lan !== false) transports.push(new LanTransport({ device: this.#id.key.device, port: this.#opts.port ?? 7420, log: this.#log }));
     if (this.#opts.p2p !== false) {
       const p2p = P2pTransport.available();
       if (p2p.ok) transports.push(new P2pTransport({ device: this.#id.key.device, log: this.#log }));
