@@ -12,7 +12,7 @@
 use crate::model::has_text;
 use crate::protocol::{self as p, Code, UnionError};
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -714,4 +714,80 @@ pub fn parse_intent(v: &Value) -> Result<Op, Vec<OpError>> {
         Some(op) if errs.is_empty() => Ok(op),
         _ => Err(errs),
     }
+}
+
+/// A file the person added from the device (SPEC §5, "User imports"):
+/// `{intent: "add_file", id, name, mime, size, src, at?, w?, h?, pages?}`.
+/// A photo (an `image/*` mime) becomes one image Element; a PDF with `pages`
+/// (`[{id, src, page, at?, w?, h?}]`, each page rendered by the device) becomes
+/// one image Element per page; anything else becomes a file Element. Returns
+/// the ops and what the import was, for the next Send's `added_file` change.
+pub fn parse_add_file(v: &Value) -> Result<(Vec<Op>, Value), Vec<OpError>> {
+    let bad = |m: &str, fix: &str| vec![OpError::new(0, Code::InvalidInput, m, fix)];
+    let o = v.as_object().cloned().unwrap_or_default();
+    for k in o.keys() {
+        if ![
+            "intent", "id", "name", "mime", "size", "src", "at", "w", "h", "pages",
+        ]
+        .contains(&k.as_str())
+        {
+            return Err(bad(
+                &format!("add_file has no field '{k}'."),
+                "Pass id, name, mime, size, src, at, w, h and, for a PDF, pages.",
+            ));
+        }
+    }
+    let s = |k: &str| o.get(k).and_then(Value::as_str).map(String::from);
+    let (Some(id), Some(name), Some(mime)) = (s("id"), s("name"), s("mime")) else {
+        return Err(bad(
+            "add_file needs id, name and mime.",
+            "Pass the file's name and mime type and a device-made ID.",
+        ));
+    };
+    let pick = |m: &Map<String, Value>, ks: &[&str]| -> Value {
+        Value::Object(
+            ks.iter()
+                .filter_map(|k| m.get(*k).map(|v| ((*k).to_string(), v.clone())))
+                .collect(),
+        )
+    };
+    let image = |mut el: Value, alt: String| -> Result<Op, Vec<OpError>> {
+        el["op"] = json!("add");
+        el["type"] = json!("image");
+        el["alt"] = json!(alt);
+        let parsed = p::Op::parse(&el).map_err(|e| vec![union_error(0, &el, e)])?;
+        convert(0, &parsed).map_err(|e| vec![e])
+    };
+    let mut info = json!({ "file": name, "mime": mime, "id": id });
+    let ops: Vec<Op> = if let Some(pages) = o.get("pages").and_then(Value::as_array) {
+        if pages.is_empty() {
+            return Err(bad("pages is empty.", "Pass one entry per rendered page."));
+        }
+        info["pages"] = json!(pages.len());
+        info["id"] = pages[0].get("id").cloned().unwrap_or(json!(id));
+        pages
+            .iter()
+            .map(|pg| {
+                let m = pg.as_object().cloned().unwrap_or_default();
+                let n = m.get("page").and_then(as_int).unwrap_or(1);
+                image(
+                    pick(&m, &["id", "src", "page", "at", "w", "h"]),
+                    format!("{name}, page {n}"),
+                )
+            })
+            .collect::<Result<_, _>>()?
+    } else if mime.starts_with("image/") {
+        vec![image(
+            pick(&o, &["id", "src", "at", "w", "h"]),
+            name.clone(),
+        )?]
+    } else {
+        let mut el = pick(&o, &["id", "name", "mime", "size", "src", "at", "w", "h"]);
+        el["type"] = json!("file");
+        if el.get("size").is_none() {
+            el["size"] = json!(0);
+        }
+        vec![Op::Add(add_from(0, el).map_err(|e| vec![e])?)]
+    };
+    Ok((ops, info))
 }
