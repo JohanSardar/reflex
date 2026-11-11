@@ -46,7 +46,8 @@ Options
   --dev           Allow acting as the person without an iPad
   --web-port <n>  The web viewer's port on 127.0.0.1 (default 7421; any free one if taken)
   --no-web        Don't serve the web viewer
-  --relay <url>   Sync through this Reflex Relay (ws://… or wss://…); remembered. --relay off forgets it
+  --relay <url>   Sync through this Reflex Relay (default wss://reflex.eilmer.si, or $REFLEX_RELAY);
+                  remembered. --relay off stops using one
   --no-lan        Don't listen or look for devices on the local network (Relay only)
   --json          Machine-readable output
   --no-prompt     Don't use this terminal for pairing codes or questions
@@ -82,20 +83,24 @@ async function admin<T>(method: string, params: Record<string, unknown> = {}): P
   }
 }
 
-/** The Relay this profile uses: --relay sets it and it is remembered, --relay off forgets it. */
+/** The official Relay; a profile that never chose one uses it. */
+const DEFAULT_RELAY = "wss://reflex.eilmer.si";
+
+/** The Relay this profile uses: --relay sets it and it is remembered, --relay off turns it off (also remembered). */
 function relayUrl(): string | undefined {
   const file = join(dir, "relay.json");
   if (flags.relay === "off") {
-    if (existsSync(file)) writeFileSync(file, "{}\n");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(file, "{}\n");
     return undefined;
   }
   if (flags.relay) {
-    if (!/^wss?:\/\/[^/]+/.test(flags.relay)) throw new LinkError("usage", `'${flags.relay}' is not a ws:// or wss:// URL.`, "For example: --relay wss://relay.eilmer.si");
+    if (!/^wss?:\/\/[^/]+/.test(flags.relay)) throw new LinkError("usage", `'${flags.relay}' is not a ws:// or wss:// URL.`, "For example: --relay wss://reflex.eilmer.si");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileSync(file, JSON.stringify({ url: flags.relay }) + "\n");
     return flags.relay;
   }
-  return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")).url ?? undefined) : process.env.REFLEX_RELAY;
+  return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")).url ?? undefined) : (process.env.REFLEX_RELAY ?? DEFAULT_RELAY);
 }
 
 async function start(): Promise<void> {

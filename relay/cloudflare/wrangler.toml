@@ -1,8 +1,25 @@
-# The Reflex Relay on Cloudflare. Local only in T9: `npx wrangler dev` (deploying is T14).
+# The Reflex Relay on Cloudflare: the official one at reflex.eilmer.si
+# (`wrangler deploy`), or locally with `wrangler dev`. To run your own on your
+# Cloudflare account, change `routes` to your domain (see README).
 name = "reflex-relay"
 main = "worker.ts"
 compatibility_date = "2026-10-01"
 compatibility_flags = ["nodejs_compat"]
+
+# Served only at its own domain, so the OAuth metadata names one origin.
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "reflex.eilmer.si", custom_domain = true }]
+
+[observability]
+enabled = true
+
+# `wrangler dev` would otherwise present every request as if it came to the
+# route's host, and the OAuth metadata would name reflex.eilmer.si locally.
+[dev]
+port = 8787
+host = "localhost:8787"
+upstream_protocol = "http"
 
 # The Agent layer reads the protocol's files and compiles its validators at
 # start; a Worker can do neither, so build.ts bundles both ahead of time and
