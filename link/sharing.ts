@@ -23,9 +23,9 @@
 //   the owner's Links  anything: they decide who is in, and pass on only what
 //                   they accepted (a member's own earlier strokes, too, after
 //                   they became a viewer)
-//   owner, editor   their iPads write as their person; a member's Link, as its
-//                   person, other editors and Agents (changes aren't signed one
-//                   by one, so a member's Link is trusted to pass them on)
+//   a person's own  their other Links pass on anything (what the owner's Link
+//   Links           sent them)
+//   owner, editor   their iPads, and a member's Link, write only as their person
 //   viewer          nothing
 //   not a member    nothing, and the Space isn't synced with them (`allowed`)
 //
@@ -83,8 +83,6 @@ export function roleIn(s: Share, person: string): Role | null {
   if (s.owner.id === person) return "owner";
   return s.members.find((m) => m.person.id === person)?.role ?? null;
 }
-
-const editors = (s: Share): string[] => [s.owner.id, ...s.members.filter((m) => m.role === "editor").map((m) => m.person.id)];
 
 /** The signed membership of every shared Space this Link holds, in the control catalog. */
 export class Shares {
@@ -182,6 +180,8 @@ export class Shares {
     } else if (s.owner.id === this.#me().person.id) {
       // One of this person's own Spaces, from another of their Links: that Link signs as the owner.
       if (from.person.id !== s.owner.id) return { ok: false, why: "it claims this person owns it" };
+    } else if (from.person.id === this.#me().person.id) {
+      // Passed on by another of this person's Links; its signature is checked above, and later records must match its signer.
     } else if (from.device !== s.device || from.key !== s.key) {
       return { ok: false, why: "it does not come from the owner's Link" };
     }
@@ -200,11 +200,14 @@ export class Shares {
       if (d.person.id !== me) return NONE;
       return JSON.stringify(d.kind === "ipad" ? { people: [d.person.id] } : { people: [d.person.id], agents: "*" });
     }
+    // This person's other Links pass on what the owner's Link sent them.
+    if (d.person.id === me && d.kind !== "ipad") return JSON.stringify({ any: true });
     const role = roleIn(s, d.person.id);
     if (role !== "owner" && role !== "editor") return NONE;
     if (d.kind === "ipad") return JSON.stringify({ people: [d.person.id] });
     if (role === "owner") return JSON.stringify({ any: true });
-    return JSON.stringify({ people: editors(s), agents: "*" });
+    // Another person's Link writes only as that person: members meet only the owner's Link, and their Agents don't see the Space.
+    return JSON.stringify({ people: [d.person.id] });
   }
 
   /** Whether a Space syncs with a device at all. */

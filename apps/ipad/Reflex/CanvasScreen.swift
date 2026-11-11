@@ -128,6 +128,8 @@ struct CanvasScreen: View {
             open?.refresh()
             if let open { lastSeen[open.id] = link.revision[open.id] ?? 0 }
         }
+        // A new role (made a viewer, removed) applies to the canvas at once, not at the next change.
+        .onChange(of: open.map { link.role($0.id) } ?? "") { _, _ in open?.refresh() }
         .onChange(of: incomingCode) { _, code in if code != nil { pairing = true } }
         // Which Space is on screen, so an Agent's request_attention knows the person is already looking at it.
         .onChange(of: open?.id, initial: true) { _, _ in reportPresence() }
