@@ -1,0 +1,17 @@
+{
+  "space": "auth-plan",
+  "created": false,
+  "you": { "agent": "a_cc7", "name": "Claude Code · reflex repo", "color": "violet" },
+  "people": [ { "person": "p_ana", "name": "Ana" } ],
+  "viewport": [0, 0, 1366, 1024],
+  "scene": [
+    { "id": "n-gateway", "type": "shape", "by": "you", "bounds": [100, 200, 160, 80], "text": "API gateway" },
+    { "id": "n-auth", "type": "shape", "by": "you", "bounds": [420, 200, 160, 80], "text": "Auth service" },
+    { "id": "e1", "type": "connector", "by": "you", "bounds": [260, 230, 160, 20], "text": "JWT", "from": "n-gateway", "to": "n-auth" },
+    { "id": "n-users", "type": "shape", "by": "Codex · api", "bounds": [740, 200, 160, 80], "text": "User service" },
+    { "id": "ink-41", "type": "ink", "by": "Ana", "bounds": [400, 180, 200, 120] }
+  ],
+  "elsewhere": { "on_screen": 0, "off_screen": 12 },
+  "pending_sends": 1,
+  "next": "1 Send is waiting. Call wait_for_user(timeout_s: 0) to read it."
+}

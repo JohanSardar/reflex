@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reflex.eilmer.si/protocol/v0/read_me.input.schema.json",
+  "title": "read_me input",
+  "type": "object",
+  "properties": {
+    "topic": {
+      "description": "'index' lists every Element type, Recipe, Embed Template and Guide. Any name from it returns that Guide.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    }
+  },
+  "required": ["topic"],
+  "additionalProperties": false
+}

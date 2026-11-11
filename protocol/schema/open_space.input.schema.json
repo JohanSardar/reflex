@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reflex.eilmer.si/protocol/v0/open_space.input.schema.json",
+  "title": "open_space input",
+  "type": "object",
+  "properties": {
+    "space": { "$ref": "common.schema.json#/$defs/space_name" },
+    "create": { "description": "Create the Space if it doesn't exist. Without it, a missing Space is an error.", "type": "boolean" },
+    "title": { "description": "create only: the title the person sees.", "type": "string", "maxLength": 120 },
+    "size": {
+      "description": "create only: an infinite canvas (default), fixed pages, or a set width.",
+      "type": "string",
+      "enum": ["infinite", "pages", "width"]
+    }
+  },
+  "required": ["space"],
+  "additionalProperties": false
+}

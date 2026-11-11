@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "request_attention input",
+  "type": "object",
+  "properties": {
+    "space": {
+      "$ref": "#/$defs/space_name"
+    },
+    "message": {
+      "description": "The banner text, one short line.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "ids": {
+      "description": "Elements to show when the person taps the banner.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/element_id"
+      },
+      "minItems": 1,
+      "maxItems": 100
+    }
+  },
+  "required": [
+    "space",
+    "message"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "element_id": {
+      "description": "A short ID the Agent chose, such as 'n-auth'. IDs are scoped to the Agent that made them, so two Agents never collide. Reflex-made IDs (Ink, user imports, generated) use the same alphabet.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$"
+    },
+    "space_name": {
+      "description": "A Space's short, stable name, such as 'auth-plan'.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    }
+  }
+}

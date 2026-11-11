@@ -1,0 +1,9 @@
+{
+  "space": "auth-plan",
+  "outline": [
+    { "id": "n-db", "type": "shape", "by": "you", "bounds": [420, 420, 160, 80], "text": "Postgres" },
+    { "id": "f-1", "type": "image", "by": "Ana", "bounds": [100, 600, 400, 300], "text": "whiteboard.jpg" }
+  ],
+  "elsewhere": { "on_screen": 5, "off_screen": 10 },
+  "pending_sends": 0
+}
