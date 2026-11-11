@@ -30,6 +30,7 @@ try {
   if (m.kind !== "circle") fail(`the circle came back as '${m.kind}'`, JSON.stringify(m));
   if (!(m.on ?? []).includes("node")) fail(`the circle names no Anchor (on: ${JSON.stringify(m.on)}), so the Agent cannot tell what was circled`, JSON.stringify(m));
   if (m.moved_since_marked !== true) fail("the Mark does not say the node moved after it was drawn", JSON.stringify(m));
+  if (JSON.stringify(m.marked_at) !== "[100,100,180,80]") fail("marked_at is not where the node was when it was circled", JSON.stringify(m));
   console.log(`PASS: ${m.id} circle on ${m.on.join(", ")} moved_since_marked, marked_at ${JSON.stringify(m.marked_at)}`);
   stop();
   process.exit(0);

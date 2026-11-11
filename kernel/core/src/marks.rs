@@ -4,9 +4,10 @@
 //! Here they are grouped into Marks, each Mark is read as a gesture (a circle,
 //! an arrow from one Element to another, a strikethrough, an underline, a
 //! check, a cross, or writing), and its Anchors are resolved: the Element IDs
-//! it points at. Everything is computed against the Send's pinned frontier, so
-//! the answer never changes however the Space changes later. When a target
-//! has moved since, the Mark says so (`moved_since_marked`, `marked_at`).
+//! it points at. The strokes come from the Send's pinned frontier, and each
+//! Mark's kind and Anchors are resolved against the Space as it was when the
+//! Mark was drawn. When a target has moved since, as the Space is now, the Mark
+//! says so (`moved_since_marked`, `marked_at`).
 //!
 //! The device's handwriting hints (`hints`: strokes, recognized text and a
 //! confidence, from Apple's on-device recognizer) group strokes into writing
