@@ -14,6 +14,8 @@ command = "node build.ts"
 "node:fs" = "./shims/fs.ts"
 "ajv/dist/2020.js" = "./shims/ajv.ts"
 "@resvg/resvg-js" = "./shims/resvg.ts"
+# The Agent layer imports the Node binding in places; in the Worker it is the Workers one (same WASM module).
+"@reflex/kernel/node" = "../../kernel/wasm/js/workers.ts"
 
 # A Worker has no module URLs; the Agent layer only uses them to find protocol/ files (shims/fs.ts).
 [define]
