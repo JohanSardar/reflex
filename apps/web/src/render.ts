@@ -333,6 +333,14 @@ export class SceneView {
     return [Math.round(this.camera.x), Math.round(this.camera.y), Math.round(r.width / this.camera.zoom), Math.round(r.height / this.camera.zoom)];
   }
 
+  /** Forgets the drawn nodes of Elements that match, so the next update builds them again. */
+  invalidate(match: (e: El) => boolean) {
+    for (const e of this.elements) {
+      const n = this.#nodes.get(e.id);
+      if (n && match(e)) n.sig = "";
+    }
+  }
+
   /** The DOM node drawing an Element, if it has one. */
   nodeOf(id: string): HTMLElement | undefined {
     return this.#nodes.get(id)?.node;

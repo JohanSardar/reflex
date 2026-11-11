@@ -11,6 +11,7 @@ export class LiveSpace {
   space = "";
   #frame = 0;
   #fitted = false;
+  #library = "";
   #listeners: ((elements: El[]) => void)[] = [];
 
   constructor(conn: Connection, root: HTMLElement) {
@@ -64,6 +65,12 @@ export class LiveSpace {
       if (r.kind !== "library") continue;
       const lib: Template[] = JSON.parse(r.space.scene(JSON.stringify({ detail: "full", ids: [] }))).library ?? [];
       for (const t of lib) if (t.kind === "embed") this.embeds.templates.set(t.name, t);
+    }
+    // A template that arrived or changed: rebuild the Embeds that use it.
+    const sig = JSON.stringify([...this.embeds.templates.values()]);
+    if (sig !== this.#library) {
+      this.#library = sig;
+      this.view.invalidate((e) => e.type === "embed");
     }
     const { elements, strokes } = this.scene();
     this.view.update(elements, strokes);

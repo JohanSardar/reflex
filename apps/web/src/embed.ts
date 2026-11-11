@@ -35,7 +35,7 @@ const BRIDGE = `(() => {
   });
 })();`;
 
-const safeJson = (v: unknown) => JSON.stringify(v ?? {}).replace(/</g, "\\u003c").replace(/ /g, "\\u2028").replace(/ /g, "\\u2029");
+const safeJson = (v: unknown) => JSON.stringify(v ?? {}).replace(/[<\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 
 /** The document an Embed runs: CSP first, then the bridge, then the template. */
 export function embedDocument(html: string, o: { props: unknown; state: unknown; allow: string[] }): string {

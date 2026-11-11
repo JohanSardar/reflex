@@ -19,8 +19,8 @@ sees no Space content until it is approved.
 
 - `src/protocol.ts`: the 11 tools, their text from `protocol/tool-text`,
   their schemas from `protocol/generated/tools`, and Ajv validators.
-  Six tools work here: `list_spaces`, `open_space`, `read`, `look`, `apply`
-  and `wait_for_user`. The rest return `unavailable` ("not yet available").
+  Seven tools work here: `list_spaces`, `open_space`, `read`, `look`, `apply`,
+  `wait_for_user` and `read_me`. The rest return `unavailable` ("not yet available").
 - `src/capabilities/`: the capability table, one implementation behind both
   surfaces. `normalize.ts` repairs common op mistakes before validating.
   `bundle.ts` projects a frozen Send into a Send Bundle.
@@ -34,6 +34,15 @@ sees no Space content until it is approved.
   credential it keeps in `$REFLEX_HOME/agents/` (0600), which is what the
   person approves.
 - `src/surfaces/`: `mcp.ts` (stdio MCP server) and `cli.ts`.
+- `src/library.ts`: the person's Library. `define` ops are checked like any
+  extension before they are saved in the Space of kind `library`;
+  `read_me("index")` lists every Library entry, and `read_me(<name>)` returns it.
+- `src/extensions/`: extensions as files (`files.ts`) and their contract checks
+  (`checks.ts`, `adapter.ts`), shared by `define` and `reflex test`.
+- `src/author/`: the author kit (`reflex create`, `reflex test`, `reflex dev`),
+  on an in-memory Space (`memory.ts`, `sandbox.ts`).
+- `src/web/server.ts`: serves the web viewer (`apps/web`) and syncs kernel
+  replicas to it; the Link and `reflex dev` both use it.
 
 It runs as TypeScript on Node 26 (type stripping); there is no build step.
 Run `npm install` at the repo root, and build the kernel's WASM once
@@ -79,6 +88,37 @@ reflex wait --timeout 300                # an Agent waiting for the person: circ
 Without an iPad, start the Link with `reflex link --dev`; then
 `reflex dev person circle demo "Auth service"` and
 `reflex dev person send demo --said "what's missing here?"` play the person.
+
+## Author kit
+
+For people and Agents who extend Reflex (ARCHITECTURE §5). These commands work
+offline and need no Link.
+
+```sh
+reflex create recipe service-card        # or guide | embed | adapter; writes a working example
+reflex test service-card.md              # the contract checks for its kind, then its saved examples
+reflex dev service-card.md               # the playground in your browser (--no-open, --port <n>)
+```
+
+| Kind | Files | What `reflex test` checks |
+|---|---|---|
+| Guide | `<name>.md` with front matter `kind: guide` | name, summary, a heading, an example, size |
+| Recipe | `<name>.md` with `kind: recipe` and fenced ```` ```json params ````, ```` ```json template ```` (and ```` ```json example ````) blocks | the params schema is in the protocol's subset; every `{{param}}` is declared and used; the filled template is applied to a fresh kernel Space, and its errors and lints are reported |
+| Embed Template | `<name>/reflex.json`, `index.html`, `params.schema.json`, `guide.md` | params; every host the HTML loads from is allowed (its `allow` list or an approved CDN) and on TLS; it uses only the bridge; it registers Anchors |
+| Send Adapter | `<name>/reflex.json`, `adapter.ts` (default export `{ name, config, deliver(bundle, { config, fetch, log }) }`) | it loads; `config` matches its schema; `deliver` handles the example Send Bundle against a recording `fetch`, over TLS |
+
+`reflex dev` opens the web viewer on an in-memory Space with the extension on it
+(a Recipe applied with its example parameters, an Embed Template saved and added
+as an Embed). It reloads on every save and has three panes: what the Agent reads
+(the calls a stand-in Agent made and their results), what a Send produces (draw
+with the mouse, press Send: the Send Bundle and its images, the adapter's
+requests, and what each Embed's Anchor resolver answered), and the contract
+checks, lints and Anchors. **Save example** writes the last Send's strokes and
+the Marks and Anchors they produced to `examples/`; `reflex test` replays each one
+on a fresh Space and fails if the Marks change.
+
+An Agent climbs the same ladder without the CLI: `apply`'s `define` op runs the
+same Recipe and Embed checks. Errors reject the batch; warnings come back as lints.
 
 ## Environment
 

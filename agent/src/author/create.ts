@@ -147,32 +147,35 @@ When the person circles or strikes bars, the Mark comes back with
     document.getElementById("title").textContent = title;
     const svg = document.getElementById("chart");
     const NS = "http://www.w3.org/2000/svg";
-    const chartTop = svg.getBoundingClientRect().top;
-    const width = document.body.clientWidth;
+    const width = Math.max(240, document.body.clientWidth || 480);
     const max = Math.max(1, ...rows.map((r) => r.value));
     const slot = (width - 24) / Math.max(1, rows.length);
-    // Where each bar is, in this Embed's own pixels, for the Anchor resolver below.
-    const boxes = rows.map((r, i) => {
+    svg.setAttribute("viewBox", "0 0 " + width + " 260");
+    const bars = rows.map((r, i) => {
       const h = Math.round((r.value / max) * 200);
-      const box = { id: r.id, x: 12 + i * slot + slot * 0.15, y: chartTop + 220 - h, w: slot * 0.7, h };
+      const x = 12 + i * slot + slot * 0.15;
       const rect = document.createElementNS(NS, "rect");
-      Object.entries({ x: box.x, y: box.y - chartTop, width: box.w, height: h, class: "bar" }).forEach(([k, v]) => rect.setAttribute(k, v));
+      Object.entries({ x, y: 220 - h, width: slot * 0.7, height: h, class: "bar" }).forEach(([k, v]) => rect.setAttribute(k, v));
       rect.addEventListener("click", () => {
         rect.classList.toggle("picked");
         reflex.element.setState({ picked: [...document.querySelectorAll(".picked")].length });
       });
       const label = document.createElementNS(NS, "text");
-      Object.entries({ x: box.x + box.w / 2, y: 240, "text-anchor": "middle" }).forEach(([k, v]) => label.setAttribute(k, v));
+      Object.entries({ x: x + slot * 0.35, y: 240, "text-anchor": "middle" }).forEach(([k, v]) => label.setAttribute(k, v));
       label.textContent = r.label;
       svg.append(rect, label);
-      return box;
+      return { id: r.id, rect };
     });
 
     // A Mark on this Embed: say which rows it covers, not just where it is.
+    // region.bounds is in this Embed's own pixels, the same space getBoundingClientRect uses.
     reflex.anchors.register({
       resolve(region) {
         const [x, y, w, h] = region.bounds;
-        const hit = boxes.filter((b) => b.x < x + w && x < b.x + b.w && b.y < y + h && y < b.y + b.h).map((b) => b.id);
+        const hit = bars.filter(({ rect }) => {
+          const b = rect.getBoundingClientRect();
+          return b.left < x + w && x < b.right && b.top < y + h && y < b.bottom;
+        }).map((b) => b.id);
         return hit.length ? { kind: "data", rows: hit, label: hit.length + " of " + rows.length + " bars" } : { kind: "local", bounds: region.bounds };
       },
     });
