@@ -19,7 +19,7 @@
 //   { "type": "send", "delivery", "target", "agent", "attempt", "bundle" }
 // `bundle` is what wait_for_user returns; each `images[i]` also carries its PNG
 // as base64 `data`.
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { Push, PushAdapter, PushOutcome, PushTarget } from "./contract.ts";
 
 /** How long one try waits for the receiver's answer. */
@@ -80,11 +80,3 @@ export function sign(secret: string, timestamp: string, body: string): string {
   return `v1=${createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex")}`;
 }
 
-/** Checks a request's signature (for receivers written in TypeScript): the header must match, within `toleranceMs`. */
-export function verify(secret: string, headers: { timestamp?: string | null; signature?: string | null }, body: string, toleranceMs = 5 * 60_000): boolean {
-  const ts = headers.timestamp ?? "";
-  if (!/^\d+$/.test(ts) || Math.abs(Date.now() - Number(ts)) > toleranceMs) return false;
-  const want = Buffer.from(sign(secret, ts, body));
-  const got = Buffer.from(headers.signature ?? "");
-  return got.length === want.length && timingSafeEqual(got, want);
-}

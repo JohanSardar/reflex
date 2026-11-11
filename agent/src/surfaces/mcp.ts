@@ -110,11 +110,17 @@ export async function runMcp(o: { channel?: boolean } = {}) {
       log("wait_capped", { asked: args.timeout_s, cap });
       args = { ...args, timeout_s: cap };
     }
-    // A plain wait (no filter, nothing to acknowledge) takes a Send the Link pushed for the view first.
-    if (tool === "wait_for_user" && held.length && !args.after && !args.region && !args.element) {
+    // A wait with no Region or Element filter takes a Send the Link pushed for the view first. The view's
+    // next wait carries `after` (the Send it just posted), so that acknowledgement still goes to the Link,
+    // with an Element filter no Send has, so the call takes nothing else.
+    if (tool === "wait_for_user" && held.length && !args.region && !args.element) {
       const i = held.findIndex((h) => !args.space || h.json.space === args.space);
       if (i >= 0) {
         const [h] = held.splice(i, 1);
+        if (args.after) {
+          const r = await (await link()).call("wait_for_user", { after: args.after, timeout_s: 0, element: "reflex-ack-only" }, who());
+          if (r.isError) log("app_ack_failed", { after: args.after, error: r.json });
+        }
         h.taken(true);
         log("app_push_taken", { send: h.json.send, request: extra.requestId });
         return { content: [{ type: "text", text: JSON.stringify(h.json) }, ...h.images.map((data) => ({ type: "image", data, mimeType: "image/png" }))] };
