@@ -568,6 +568,35 @@ Prove it with two people: two iPad Simulators paired to two different Links as t
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
 
+## Step 7 ticket (3D)
+
+```md
+# 3D Embed: a model the person can rotate, grab by its parts and mark up
+
+## Goal
+Make 3D a first-class Embed on the iPad and the web viewer, next to T16's HTML Embeds. When this is done:
+- **3D Embed.** An Agent places a USDZ or glTF model in one call (glTF is converted on import; a link or an uploaded file both work). It draws with RealityKit on the iPad and with a WebGL viewer in the web viewer. The person can rotate, zoom and pan it.
+- **Part maps.** The model's named nodes become parts with their bounds in screen space. A circle or arrow the person draws over a part becomes a Mark that names it (for example "part bracket_left"), through the same Anchor path T16 built for charts. The Mark records the camera pose at marking time, so the Agent sees what the person saw.
+- **Grab parts.** The person can drag a part to move it. The move is saved as Embed state, syncs to every device and shows in the next Send's `changes`. An Agent can set a part's transform, highlight it, or hide it.
+- **Import.** A glTF or USDZ file the person adds (Files, drag and drop) becomes a 3D Embed, and so does one an Agent adds.
+- **Guide.** `read_me("3d")` explains how to place a model, read part Marks and set parts.
+
+Prove it with a real Claude Code session: the Agent places a multi-part model (an assembly or an anatomy model with named parts); on the iPad Simulator you rotate it, circle one part and press Send, and the Agent answers about that part; you drag a part, and a second device and the next Send both show the new position.
+
+## Context
+- Read docs/SPEC.md §5 (Embeds, 3D) and scenarios 3 and 11; docs/ARCHITECTURE.md §4.3, §5 (the extension ladder, Anchors, marking-time evidence) and §7; docs/adr/0006.
+- What exists on main: everything through T17 plus T16. T16 built HTML Embeds with the Anchor bridge (`reflex.element.setState`, `emit`, Anchors with bounds), Embeds in Panels and the hardened sandbox; reuse its Anchor and state paths rather than adding new ones. T10 built the web viewer and the Library.
+- Carried over (docs/TICKETS.md, "Follow-ups"), from T16: the web viewer accepts an Embed's `setState` without saving it; a refused Panel save on the iPad isn't retried; Embeds on the iPad canvas don't take touches (Embeds in Panels do), which a 3D Embed needs; Embeds show as grey boxes in `look` and in Send images, so render a snapshot of the model there.
+- T22 (Shared Spaces) runs at the same time in `link/` and the iPad's presence and invite UI. Keep your iPad changes to Embeds; whoever merges second rebases.
+- Codex's usage limit is exhausted until 2026-11-12 13:06; after that, also check the 3D flow from a Codex session if it fits.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
@@ -595,3 +624,5 @@ Found while building earlier tickets. Each goes into the named ticket's brief.
 - **Declined review nit, open:** lifting the pen after the app goes to the background can report the Space as still on screen until the next update (T12).
 - **Real iPad pass:** the live pen-down signal and recognition of real handwriting (T12).
 - **T17 (done):** the reapprove and terminal-queue tests pass without `REFLEX_REASK_S=0`. **Open nits (T17):** a webhook URL removed and added again doesn't push Sends still pending from before; two narrow cases in passing a held Send's acknowledgement to the Link, if the Link restarts or a deadline lands during that call. Whether claude.ai or ChatGPT let an MCP App view hold a 25 s call isn't measured; the MCP App was proven in the MCP Apps reference host only.
+- **T18 (from T16):** the web viewer accepts an Embed's `setState` without saving it; a refused Panel save on the iPad isn't retried; Embeds on the iPad canvas don't take touches (Embeds in Panels do); Embeds show as grey boxes in `look` and in Send images. **Open nits (T16):** an Embed whose navigation was blocked can escape the busy-loop check; a stale Library copy of a built-in template isn't refreshed when the built-in's summary changes; `reflex dev` matches strokes by position rather than by ID; `reflex test` examples don't save the Mark's target; an allowed MCP server is remembered per iPad, not per person.
+- **SPEC decision (T16):** SPEC says approved CDNs are allowed by default; T16 allows CDNs for loading code only and blocks every other network call unless the Embed's allow list names the host. Update the SPEC sentence.
