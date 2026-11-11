@@ -7,7 +7,8 @@
 //   sync          { space } + kernel sync bytes
 //   assets_have   { hashes }                    assets this side holds
 //   asset_want    { hashes }
-//   asset         { hash } + bytes              checked against the hash before it is kept
+//   asset         { hash, off, size } + bytes   one part of at most 1 MiB, in order; the whole
+//                                               asset is checked against the hash before it is kept
 //   ping / pong   { n, at }                     RTT
 //
 // Sync state is restartable: on every new binding it is reset, so the two
@@ -20,7 +21,11 @@ import type { AssetStore } from "../storage/assets.ts";
 import type { SpaceStore } from "../storage/journal.ts";
 import type { Candidate, Path, Transport } from "../transports/transport.ts";
 
+const ASSET_PART = 1024 * 1024;
+
 export interface Peer {
+  /** Assets arriving from this peer, part by part. */
+  incoming: Map<string, { size: number; parts: Buffer[]; got: number }>;
   device: string;
   name: string;
   session: Session;
@@ -103,9 +108,11 @@ export class Coordinator {
   async #accept(path: Path): Promise<void> {
     try {
       const r = await handshake(path, this.#me, this.#trust());
-      if (r.paired) {
-        if (r.offer) this.#offers.consume(r.offer);
-        this.#remember(r.peer, null);
+      if (r.offer) {
+        // A code is single-use, even when the device that used it was already paired.
+        this.#offers.consume(r.offer);
+        if (r.paired) this.#remember(r.peer, null);
+        else for (const f of this.#onPaired) f(this.#catalog.device(r.peer.device)!);
       }
       this.#bind(r.session, r.peer.device, r.peer.name, r.peer.device);
     } catch (e) {
@@ -144,10 +151,10 @@ export class Coordinator {
         return this.#catalog.device(r.peer.device)!;
       } catch (e) {
         path.close("pairing failed");
-        throw e;
+        errors.push(`${host}: ${(e as Error).message}`);
       }
     }
-    throw new Error(`Could not reach ${offer.name || offer.device}: ${errors.join("; ")}`);
+    throw new Error(`Could not pair with ${offer.name || offer.device}: ${errors.join("; ")}`);
   }
 
   #candidate(c: Candidate): void {
@@ -209,7 +216,7 @@ export class Coordinator {
       }
       old.session.close("replaced by a preferred path");
     }
-    const peer: Peer = { device, name, session, initiator, since: Date.now() };
+    const peer: Peer = { incoming: new Map(), device, name, session, initiator, since: Date.now() };
     this.#peers.set(device, peer);
     this.#log(`connected to ${name} (${device}) over ${session.path.transport} ${session.path.remote}`);
     for (const id of this.#store.ids()) this.#store.read(id, (s) => s.resetSync(device));
@@ -282,14 +289,32 @@ export class Coordinator {
         return;
       }
       case "asset_want": {
-        for (const x of (h.hashes as string[]) ?? [])
-          if (this.#assets.has(x)) void p.session.send({ t: "asset", hash: x }, this.#assets.get(x), "asset").catch(() => {});
+        for (const x of (h.hashes as string[]) ?? []) {
+          if (!this.#assets.has(x)) continue;
+          const bytes = this.#assets.get(x);
+          for (let off = 0; off === 0 || off < bytes.length; off += ASSET_PART)
+            void p.session
+              .send({ t: "asset", hash: x, off, size: bytes.length }, bytes.subarray(off, off + ASSET_PART), "asset")
+              .catch((e: Error) => this.#log(`could not send asset ${x} to ${p.name}: ${e.message}`));
+        }
         return;
       }
       case "asset": {
         const hash = String(h.hash);
+        const off = Number(h.off);
+        const size = Number(h.size);
         if (this.#assets.has(hash)) return;
-        if (this.#assets.putVerified(hash, body)) this.announceAsset(hash);
+        let inc = p.incoming.get(hash);
+        if (off === 0) p.incoming.set(hash, (inc = { size, parts: [], got: 0 }));
+        if (!inc || inc.got !== off || inc.size !== size || off + body.length > size) {
+          p.incoming.delete(hash);
+          return this.#log(`dropped a malformed part of asset ${hash} from ${p.name}`);
+        }
+        inc.parts.push(Buffer.from(body));
+        inc.got += body.length;
+        if (inc.got < size) return;
+        p.incoming.delete(hash);
+        if (this.#assets.putVerified(hash, Buffer.concat(inc.parts))) this.announceAsset(hash);
         else this.#log(`rejected asset ${hash} from ${p.name}: bytes do not match the hash`);
         return;
       }
