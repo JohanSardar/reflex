@@ -5,12 +5,14 @@
   "workspaces": [
     "protocol",
     "kernel/wasm",
-    "agent"
+    "agent",
+    "link"
   ],
   "scripts": {
     "build:kernel-wasm": "sh kernel/wasm/build.sh",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check:protocol": "npm run check -w @reflex/protocol"
+    "check:protocol": "npm run check -w @reflex/protocol",
+    "reflex-link": "node link/bin/reflex-link.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261024.1",
