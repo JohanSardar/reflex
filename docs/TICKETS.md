@@ -204,3 +204,16 @@ The Link is what lets local Agents and the iPad meet. The round trip (T6) joins 
 ## Evidence of done
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
+
+## Follow-ups carried into later tickets
+
+Found while building earlier tickets. Each goes into the named ticket's brief.
+
+- **T6:** move the iPad's Element drawing from T3's stand-in scene JSON onto the Protocol v0 Element format.
+- **T6:** the kernel doesn't check authorization on changes it receives from peers yet (T2).
+- **T8:** T4 review items left open: Mark IDs are looked up per Agent, not per Space (S3); result indexes are off when a `define` op comes first (S5); a Space can't be named `library` and the error doesn't say why (S7); an `add` with type `ink` or `file` reports a missing type (S8).
+- **T8:** `read_me` and `recipe` aren't built, but the server instructions tell Agents to call `read_me` first.
+- **T8:** the CLI adds a `file` path to images that the schema has no field for. Agent Element IDs show to other Agents as `agent:id`, because the protocol's ID pattern doesn't allow `/`.
+- **T2 follow-ups for the kernel owner (T8):** the state digest covers Send IDs but not their contents; moving a connector is accepted but changes nothing; undo, redo, undo in the same millisecond can hide a restored Element; concurrent undo and a new action on two of one person's devices can make redo replay an older entry. Text measurement, Mark grouping, revert planning and migrations aren't built.
+- **T9:** check the kernel WASM (3.77 MB) against Workers' 128 MB with a real Space.
+- **Real iPad pass:** three-finger redo, Pencil double-tap and squeeze. Native WWDC26 stroke IDs need Xcode 27 (the app targets iPadOS 26 for now).
