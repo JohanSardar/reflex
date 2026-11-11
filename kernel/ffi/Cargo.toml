@@ -8,7 +8,7 @@ rust-version.workspace = true
 
 [lib]
 name = "reflex_kernel_ffi"
-crate-type = ["lib", "staticlib"]
+crate-type = ["lib", "staticlib", "cdylib"]
 
 [[bin]]
 name = "uniffi-bindgen"

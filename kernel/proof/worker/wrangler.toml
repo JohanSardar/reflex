@@ -1,0 +1,12 @@
+# Local proof only: run with `npx wrangler dev`. Never deployed.
+name = "reflex-kernel-proof"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+[[durable_objects.bindings]]
+name = "SPACE"
+class_name = "SpaceReplica"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SpaceReplica"]

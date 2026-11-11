@@ -19,7 +19,12 @@ fn viewer_of(q: &Value) -> Option<Principal> {
         .map(|p| Principal::Person(p.to_string()))
 }
 
-pub fn element_json<R: ReadDoc>(d: &R, rec: &Record, viewer: Option<&Principal>, full: bool) -> Value {
+pub fn element_json<R: ReadDoc>(
+    d: &R,
+    rec: &Record,
+    viewer: Option<&Principal>,
+    full: bool,
+) -> Value {
     let mut m = Map::new();
     m.insert("id".into(), json!(display_id(viewer, &rec.key)));
     m.insert("type".into(), json!(rec.typ));
@@ -55,7 +60,10 @@ pub fn element_json<R: ReadDoc>(d: &R, rec: &Record, viewer: Option<&Principal>,
                 m.insert(name.into(), v);
             }
         }
-        if let Some(p) = rec.field_json("parent").and_then(|p| p.as_str().map(String::from)) {
+        if let Some(p) = rec
+            .field_json("parent")
+            .and_then(|p| p.as_str().map(String::from))
+        {
             m.insert("parent".into(), json!(display_id(viewer, &p)));
         }
     }
@@ -65,10 +73,11 @@ pub fn element_json<R: ReadDoc>(d: &R, rec: &Record, viewer: Option<&Principal>,
 pub fn scene<R: ReadDoc>(d: &R, q: &Value, heads: &[String]) -> Value {
     let full = q.get("detail").and_then(|v| v.as_str()) != Some("outline");
     let viewer = viewer_of(q);
-    let only: Option<Vec<String>> = q
-        .get("ids")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let only: Option<Vec<String>> = q.get("ids").and_then(|v| v.as_array()).map(|a| {
+        a.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    });
     let elements: Vec<Value> = doc::live_records(d)
         .iter()
         .filter(|r| {
@@ -100,7 +109,11 @@ pub fn scene<R: ReadDoc>(d: &R, q: &Value, heads: &[String]) -> Value {
         let agents = doc::root(d, "agents");
         let focus: Map<String, Value> = doc::str_map(d, &agents)
             .into_iter()
-            .filter_map(|(k, v)| serde_json::from_str::<Value>(&v).ok().map(|v| (k, v["focus"].clone())))
+            .filter_map(|(k, v)| {
+                serde_json::from_str::<Value>(&v)
+                    .ok()
+                    .map(|v| (k, v["focus"].clone()))
+            })
             .collect();
         if !focus.is_empty() {
             out["focus"] = Value::Object(focus);
@@ -131,7 +144,9 @@ pub fn lints<R: ReadDoc>(d: &R, agent: &Principal, edits: &[Edit]) -> Vec<Value>
         if !seen.insert(key.clone()) {
             continue;
         }
-        let Some(rec) = doc::live_record(d, &key) else { continue };
+        let Some(rec) = doc::live_record(d, &key) else {
+            continue;
+        };
         if rec.typ == "connector" || rec.typ == "ink" {
             continue;
         }

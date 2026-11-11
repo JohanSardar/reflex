@@ -60,7 +60,9 @@ fn parse_json(s: &str) -> Result<Value> {
 fn check_id(what: &str, id: &str) -> Result<()> {
     let ok = !id.is_empty()
         && id.len() <= 64
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
     if ok {
         Ok(())
     } else {
@@ -165,7 +167,10 @@ impl Space {
                 )]))
             }
         };
-        let batch_id = format!("b_{}", &sha_hex(&[agent.as_bytes(), request_id.as_bytes()])[..12]);
+        let batch_id = format!(
+            "b_{}",
+            &sha_hex(&[agent.as_bytes(), request_id.as_bytes()])[..12]
+        );
         let hash = sha_hex(&[Value::Array(ops_v.clone()).to_string().as_bytes()]);
 
         // Idempotency (ARCHITECTURE §7.3).
@@ -255,7 +260,11 @@ impl Space {
             Ok(op) => op,
             Err(errs) => return Ok(reject(errs)),
         };
-        let kind_name = intent.get("intent").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let kind_name = intent
+            .get("intent")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let principal = Principal::Person(person.to_string());
         let entry_id = format!(
             "h_{}",
@@ -283,9 +292,13 @@ impl Space {
                 if out.edits.is_empty() {
                     return Ok(json!({ "ok": true, "entry": null, "ids": ids }));
                 }
-                history_push(tx, person, device, &entry_id, &kind_name, &out.edits, now_ms)
-                    .map_err(|e| vec![OpError::new(0, "internal", e.to_string(), "Retry.")])?;
-                Ok::<_, Vec<OpError>>(json!({ "ok": true, "entry": entry_id, "ids": ids, "repaired": out.repaired }))
+                history_push(
+                    tx, person, device, &entry_id, &kind_name, &out.edits, now_ms,
+                )
+                .map_err(|e| vec![OpError::new(0, "internal", e.to_string(), "Retry.")])?;
+                Ok::<_, Vec<OpError>>(
+                    json!({ "ok": true, "entry": entry_id, "ids": ids, "repaired": out.repaired }),
+                )
             },
         );
         Ok(match res {
@@ -326,7 +339,16 @@ impl Space {
         let actor_hex = self.actor_hex.clone();
         let tag = format!("{}:{}:{now_ms}", entry.id, if undo { "u" } else { "r" });
         let res = self.doc.transact_with(
-            |_| commit(now_ms, format!("{} {} by {device}", if undo { "undo" } else { "redo" }, entry.id)),
+            |_| {
+                commit(
+                    now_ms,
+                    format!(
+                        "{} {} by {device}",
+                        if undo { "undo" } else { "redo" },
+                        entry.id
+                    ),
+                )
+            },
             |tx| {
                 let ctx = Ctx {
                     principal: &principal,
@@ -360,7 +382,11 @@ impl Space {
 
     /// Projects the scene. `query_json`: `{detail?: "full"|"outline", viewer?: {agent}|{person}, ids?: [..]}`.
     pub fn scene(&self, query_json: &str) -> Result<String> {
-        let q = if query_json.trim().is_empty() { json!({}) } else { parse_json(query_json)? };
+        let q = if query_json.trim().is_empty() {
+            json!({})
+        } else {
+            parse_json(query_json)?
+        };
         Ok(scene::scene(&self.doc, &q, &self.heads_hex()).to_string())
     }
 
@@ -374,7 +400,13 @@ impl Space {
 
     /// Freezes a Send: pins the frontier, claims this person's unsent strokes
     /// and changes atomically, and stores it immutably. Returns the frozen Send.
-    pub fn freeze_send(&mut self, person: &str, device: &str, raw_json: &str, now_ms: i64) -> Result<String> {
+    pub fn freeze_send(
+        &mut self,
+        person: &str,
+        device: &str,
+        raw_json: &str,
+        now_ms: i64,
+    ) -> Result<String> {
         check_id("person id", person)?;
         check_id("device id", device)?;
         let raw = parse_json(raw_json)?;

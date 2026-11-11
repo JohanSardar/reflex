@@ -59,9 +59,11 @@ pub fn genesis(space_id: &str, kind: &str) -> Automerge {
     let mut doc = Automerge::new_with_encoding(ENCODING);
     doc.set_actor(genesis_actor(space_id));
     doc.transact_with::<_, _, automerge::AutomergeError, _>(
-        |_| automerge::transaction::CommitOptions::default()
-            .with_time(0)
-            .with_message("genesis".to_string()),
+        |_| {
+            automerge::transaction::CommitOptions::default()
+                .with_time(0)
+                .with_message("genesis".to_string())
+        },
         |tx| {
             for name in ROOTS {
                 tx.put_object(ROOT, *name, ObjType::Map)?;
@@ -120,7 +122,15 @@ pub fn str_map<R: ReadDoc>(doc: &R, m: &ObjId) -> BTreeMap<String, String> {
 }
 
 const ENVELOPE: &[&str] = &[
-    "id", "type", "type_version", "owner", "incarnation", "order", "bounds", "text", "data",
+    "id",
+    "type",
+    "type_version",
+    "owner",
+    "incarnation",
+    "order",
+    "bounds",
+    "text",
+    "data",
 ];
 
 pub fn read_record<R: ReadDoc>(doc: &R, key: &str) -> Option<Record> {
@@ -165,7 +175,12 @@ pub fn live_records<R: ReadDoc>(doc: &R) -> Vec<Record> {
     let mut out: Vec<Record> = doc
         .keys(&elements)
         .filter_map(|k| read_record(doc, &k))
-        .filter(|r| doc.get(&removed, r.incarnation.as_str()).ok().flatten().is_none())
+        .filter(|r| {
+            doc.get(&removed, r.incarnation.as_str())
+                .ok()
+                .flatten()
+                .is_none()
+        })
         .collect();
     out.sort_by(|a, b| a.order.cmp(&b.order).then_with(|| a.key.cmp(&b.key)));
     out
@@ -173,8 +188,12 @@ pub fn live_records<R: ReadDoc>(doc: &R) -> Vec<Record> {
 
 pub fn live_record<R: ReadDoc>(doc: &R, key: &str) -> Option<Record> {
     let removed = root(doc, "removed");
-    read_record(doc, key)
-        .filter(|r| doc.get(&removed, r.incarnation.as_str()).ok().flatten().is_none())
+    read_record(doc, key).filter(|r| {
+        doc.get(&removed, r.incarnation.as_str())
+            .ok()
+            .flatten()
+            .is_none()
+    })
 }
 
 pub fn write_record<T: Transactable + ReadDoc>(

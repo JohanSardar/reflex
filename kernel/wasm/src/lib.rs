@@ -10,7 +10,11 @@ fn err(e: reflex_kernel::KernelError) -> JsError {
 }
 
 fn ms(now_ms: f64) -> i64 {
-    if now_ms.is_finite() { now_ms as i64 } else { 0 }
+    if now_ms.is_finite() {
+        now_ms as i64
+    } else {
+        0
+    }
 }
 
 /// One replica of one Space.
@@ -22,11 +26,15 @@ pub struct Space {
 #[wasm_bindgen]
 impl Space {
     pub fn create(space_id: &str, kind: &str, actor_hex: &str) -> Result<Space, JsError> {
-        Ok(Space { inner: reflex_kernel::Space::create(space_id, kind, actor_hex).map_err(err)? })
+        Ok(Space {
+            inner: reflex_kernel::Space::create(space_id, kind, actor_hex).map_err(err)?,
+        })
     }
 
     pub fn load(bytes: &[u8], actor_hex: &str) -> Result<Space, JsError> {
-        Ok(Space { inner: reflex_kernel::Space::load(bytes, actor_hex).map_err(err)? })
+        Ok(Space {
+            inner: reflex_kernel::Space::load(bytes, actor_hex).map_err(err)?,
+        })
     }
 
     #[wasm_bindgen(js_name = spaceId)]
@@ -39,13 +47,29 @@ impl Space {
     }
 
     #[wasm_bindgen(js_name = applyAgentBatch)]
-    pub fn apply_agent_batch(&mut self, agent: &str, request_id: &str, batch_json: &str, now_ms: f64) -> Result<String, JsError> {
-        self.inner.apply_agent_batch(agent, request_id, batch_json, ms(now_ms)).map_err(err)
+    pub fn apply_agent_batch(
+        &mut self,
+        agent: &str,
+        request_id: &str,
+        batch_json: &str,
+        now_ms: f64,
+    ) -> Result<String, JsError> {
+        self.inner
+            .apply_agent_batch(agent, request_id, batch_json, ms(now_ms))
+            .map_err(err)
     }
 
     #[wasm_bindgen(js_name = applyUserIntent)]
-    pub fn apply_user_intent(&mut self, person: &str, device: &str, intent_json: &str, now_ms: f64) -> Result<String, JsError> {
-        self.inner.apply_user_intent(person, device, intent_json, ms(now_ms)).map_err(err)
+    pub fn apply_user_intent(
+        &mut self,
+        person: &str,
+        device: &str,
+        intent_json: &str,
+        now_ms: f64,
+    ) -> Result<String, JsError> {
+        self.inner
+            .apply_user_intent(person, device, intent_json, ms(now_ms))
+            .map_err(err)
     }
 
     pub fn undo(&mut self, person: &str, device: &str, now_ms: f64) -> Result<String, JsError> {
@@ -65,8 +89,16 @@ impl Space {
     }
 
     #[wasm_bindgen(js_name = freezeSend)]
-    pub fn freeze_send(&mut self, person: &str, device: &str, raw_json: &str, now_ms: f64) -> Result<String, JsError> {
-        self.inner.freeze_send(person, device, raw_json, ms(now_ms)).map_err(err)
+    pub fn freeze_send(
+        &mut self,
+        person: &str,
+        device: &str,
+        raw_json: &str,
+        now_ms: f64,
+    ) -> Result<String, JsError> {
+        self.inner
+            .freeze_send(person, device, raw_json, ms(now_ms))
+            .map_err(err)
     }
 
     pub fn save(&self) -> Vec<u8> {
