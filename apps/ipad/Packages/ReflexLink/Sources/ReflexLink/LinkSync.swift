@@ -162,6 +162,23 @@ public final class LinkSync {
         return try? space.scene(queryJson: Self.json(q))
     }
 
+    /// The person's Library (the Space of kind `library`): its ID and revision, so a view can tell when it changed.
+    public var library: (id: String, revision: Int)? {
+        guard let id = replicas.first(where: { $0.value.kind() == "library" })?.key else { return nil }
+        return (id, revision[id] ?? 0)
+    }
+
+    /// The Embed Templates saved in the person's Library: name, HTML, extra hosts and, for an MCP App view, its `ui://` source.
+    public func embedTemplates() -> [(name: String, html: String, allow: [String], source: String?)] {
+        guard let id = library?.id, let space = replicas[id],
+              let out = try? space.scene(queryJson: Self.json(["detail": "full", "ids": [String]()])),
+              let entries = Self.object(out)?["library"] as? [[String: Any]] else { return [] }
+        return entries.compactMap { e in
+            guard e["kind"] as? String == "embed", let name = e["name"] as? String, let html = e["template"] as? String else { return nil }
+            return (name, html, e["allow"] as? [String] ?? [], e["source"] as? String)
+        }
+    }
+
     /// Raw strokes (`scene({detail: "strokes"})`) for these Ink IDs: ID -> `[x, y, t, pressure]` points.
     public func strokes(_ id: String, ids: [String]) -> [String: [[Double]]] {
         guard let space = replicas[id], !ids.isEmpty else { return [:] }

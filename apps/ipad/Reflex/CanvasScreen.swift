@@ -30,10 +30,12 @@ struct CanvasScreen: View {
                     localInk: open.localInk, remoteInk: open.remoteInk, dragging: open.dragging
                 )
                 .environment(\.assetImages, AssetImages { [link] hash in AssetImageCache.shared.image(hash, link: link) })
+                .environment(\.embedHost, open.embeds)
                 .ignoresSafeArea()
                 InkCanvas(controller: open.ink).ignoresSafeArea().id(open.id)
                     .onDrop(of: [.item], delegate: CanvasDrop(session: open))
                 RegionButtons(session: open).ignoresSafeArea()
+                EmbedAllowButtons(session: open).ignoresSafeArea()
                 if showStrokeIDs {
                     StrokeIDOverlay(strokes: open.ink.strokes, offset: open.ink.contentOffset, zoom: open.ink.zoomScale)
                         .ignoresSafeArea()

@@ -57,7 +57,17 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
     public var latex: String?
     public var title: String?
     public var name: String?
+    /// embed: an Embed Template's name, its params, inline HTML, or a `ui://` or https URL; its extra hosts; its saved state.
     public var template: String?
+    public var params: JSONValue?
+    public var html: String?
+    public var url: String?
+    public var allow: [String]?
+    public var state: JSONValue?
+    /// What the person entered in this Element's Panels: Panel ID → component ID → value.
+    public var values: JSONValue?
+    /// The free map its Agent defined.
+    public var data: JSONValue?
     /// A file's media type and size in bytes.
     public var mime: String?
     public var fileSize: Int?
@@ -76,7 +86,7 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, type, owner, bounds, text, markdown, size, color, align, shape, fill, stroke, from, to, arrow, points
-        case src, alt, latex, title, name, template, mime, page, width, behaviors, draggable, locked
+        case src, alt, latex, title, name, template, params, html, url, allow, state, values, data, mime, page, width, behaviors, draggable, locked
         case ink, watch, agentsReadOnly = "agents_read_only", sendButton = "send_button"
     }
 
@@ -106,6 +116,13 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
         title = try? c.decodeIfPresent(String.self, forKey: .title)
         name = try? c.decodeIfPresent(String.self, forKey: .name)
         template = try? c.decodeIfPresent(String.self, forKey: .template)
+        params = try? c.decodeIfPresent(JSONValue.self, forKey: .params)
+        html = try? c.decodeIfPresent(String.self, forKey: .html)
+        url = try? c.decodeIfPresent(String.self, forKey: .url)
+        allow = try? c.decodeIfPresent([String].self, forKey: .allow)
+        state = try? c.decodeIfPresent(JSONValue.self, forKey: .state)
+        values = try? c.decodeIfPresent(JSONValue.self, forKey: .values)
+        data = try? c.decodeIfPresent(JSONValue.self, forKey: .data)
         mime = try? c.decodeIfPresent(String.self, forKey: .mime)
         page = try? c.decodeIfPresent(Int.self, forKey: .page)
         width = try? c.decodeIfPresent(Double.self, forKey: .width)
@@ -171,11 +188,16 @@ public struct Panel: Decodable, Sendable, Equatable {
         public var step: Double?
         /// button only: `send` or `notify`.
         public var action: String?
+        /// embed only: an Embed Template's name and its params, or inline HTML, and its height.
+        public var template: String?
+        public var params: JSONValue?
+        public var html: String?
+        public var h: Double?
 
-        public var id: String { key ?? "\(kind):\(label ?? text ?? "")" }
+        public var id: String { key ?? (kind == "embed" ? template ?? "embed" : "\(kind):\(label ?? text ?? "")") }
 
         enum CodingKeys: String, CodingKey {
-            case kind, key = "id", label, text, options, multiple, value, min, max, step, action = "do"
+            case kind, key = "id", label, text, options, multiple, value, min, max, step, action = "do", template, params, html, h
         }
     }
 }
@@ -210,6 +232,19 @@ public enum JSONValue: Codable, Sendable, Equatable {
         case .array(let a): try c.encode(a)
         case .object(let o): try c.encode(o)
         }
+    }
+
+    /// The value as JSON text, keys sorted.
+    public var json: String {
+        let e = JSONEncoder()
+        e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return (try? e.encode(self)).map { String(decoding: $0, as: UTF8.self) } ?? "null"
+    }
+
+    /// The fields of an object, or nil.
+    public var object: [String: JSONValue]? {
+        if case .object(let o) = self { return o }
+        return nil
     }
 
     /// As Foundation objects, for JSONSerialization.

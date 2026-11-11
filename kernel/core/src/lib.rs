@@ -307,6 +307,13 @@ impl Space {
                 if out.edits.is_empty() {
                     return Ok(json!({ "ok": true, "entry": null, "ids": ids }));
                 }
+                if kind_name == history::KEPT {
+                    if let Some(id) = coalesce_state(tx, person, &out.edits)
+                        .map_err(|e| vec![OpError::new(0, Code::Internal, e.to_string(), "Retry.")])?
+                    {
+                        return Ok(json!({ "ok": true, "entry": id, "ids": ids }));
+                    }
+                }
                 history_push(
                     tx,
                     person,
@@ -345,7 +352,9 @@ impl Space {
         check_id("device id", device)?;
         let entries = history_entries(&self.doc, person);
         let pick = if undo {
-            entries.iter().rposition(|e| e.state == "done")
+            entries
+                .iter()
+                .rposition(|e| e.state == "done" && e.kind != history::KEPT)
         } else {
             history::redo_pick(&entries)
         };
@@ -866,10 +875,11 @@ pub(crate) fn history_push(
 ) -> std::result::Result<(), automerge::AutomergeError> {
     let history = doc::root(tx, "history");
     // A new action ends the redo chain: undone entries can no longer be redone.
+    // Saved Embed state and Panel values don't: they aren't undo steps.
     let prefix = format!("{person}|");
     let undone: Vec<_> = tx
         .keys(&history)
-        .filter(|k| k.starts_with(&prefix))
+        .filter(|k| k.starts_with(&prefix) && kind != history::KEPT)
         .filter_map(|k| doc::obj(tx, &history, &k))
         .filter(|m| doc::get_str(tx, m, "state").as_deref() == Some("undone"))
         .collect();
@@ -888,6 +898,58 @@ pub(crate) fn history_push(
         tx.put(&m, "info", info.to_string())?;
     }
     Ok(())
+}
+
+/// A slider dragged across its range saves state many times. While the
+/// person's newest entry is saved state for the same Element and field that no
+/// Send has claimed yet, the new value goes into that entry, so the history
+/// keeps one entry per pause and the Send one change per Element.
+fn coalesce_state(
+    tx: &mut automerge::transaction::Transaction,
+    person: &str,
+    edits: &[Edit],
+) -> std::result::Result<Option<String>, automerge::AutomergeError> {
+    let [Edit::Field {
+        key,
+        field,
+        new,
+        ..
+    }] = edits
+    else {
+        return Ok(None);
+    };
+    let Some(last) = history_entries(tx, person).pop() else {
+        return Ok(None);
+    };
+    let claims = doc::root(tx, "claims");
+    if last.kind != history::KEPT
+        || last.state != "done"
+        || doc::get_str(tx, &claims, &format!("entry:{}", last.id)).is_some()
+    {
+        return Ok(None);
+    }
+    let [Edit::Field {
+        key: k0,
+        field: f0,
+        old: o0,
+        ..
+    }] = last.edits.as_slice()
+    else {
+        return Ok(None);
+    };
+    if k0 != key || f0 != field {
+        return Ok(None);
+    }
+    let merged = vec![Edit::Field {
+        key: key.clone(),
+        field: field.clone(),
+        old: o0.clone(),
+        new: new.clone(),
+    }];
+    let history = doc::root(tx, "history");
+    let m = doc::obj(tx, &history, &last.slot).expect("entry");
+    tx.put(&m, "edits", serde_json::to_string(&merged).expect("edits"))?;
+    Ok(Some(last.id))
 }
 
 pub(crate) fn history_entries<R: ReadDoc>(d: &R, person: &str) -> Vec<HistoryEntry> {

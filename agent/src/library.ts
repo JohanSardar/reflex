@@ -27,6 +27,8 @@ export type LibraryEntry = {
   template: unknown;
   guide?: string;
   allow?: string[];
+  /** An MCP App view: the 'ui://' resource its HTML came from. */
+  source?: string;
   by?: { agent?: string; person?: string };
 };
 
@@ -41,7 +43,7 @@ export function checkDefines(ops: { op: Record<string, any>; index: number }[]):
     const problems: Problem[] =
       op.kind === "recipe"
         ? checkRecipe({ kind: "recipe", name: op.name, summary: op.summary, params: op.params, template: op.template, guide: op.guide })
-        : checkEmbed({ kind: "embed", name: op.name, summary: op.summary, params: op.params, template: op.template, guide: op.guide, allow: op.allow });
+        : checkEmbed({ kind: "embed", name: op.name, summary: op.summary, params: op.params, template: op.template, guide: op.guide, allow: op.allow, source: op.source });
     for (const p of problems) {
       const msg = `define ${op.kind} '${op.name}': ${p.msg}`.slice(0, 400);
       if (p.level === "error")
@@ -78,12 +80,20 @@ function installed(extra: Extension[] = []): Extension[] {
   return out;
 }
 
+/** A built-in Embed Template (extensions/embeds), or one the caller adds, by name. */
+export function installedEmbed(name: string, extra: Extension[] = []): (Extension & { kind: "embed" }) | undefined {
+  return installed(extra).find((x): x is Extension & { kind: "embed" } => x.kind === "embed" && x.name === name);
+}
+
 const by = (e: LibraryEntry, names: (id: string) => string) => (e.by?.agent ? `saved by ${names(e.by.agent)}` : e.by?.person ? `saved by ${names(e.by.person)}` : "saved");
 
 /** read_me("index"): every Element type, Recipe, Embed Template and Guide, including the Library's. */
 export function index(spaces: SpaceStore, names: (id: string) => string, extra: Extension[] = []): string {
-  const lib = entries(spaces);
-  const ext = installed(extra).filter((x) => !lib.some((e) => e.name === x.name && e.kind === x.kind)); // a Library copy wins
+  const all = installed(extra);
+  // A built-in Embed Template copied into the Library when an Agent first added it is still the built-in one.
+  const builtin = (e: LibraryEntry) => all.some((x) => x.kind === e.kind && x.name === e.name && x.kind === "embed" && x.template === e.template);
+  const lib = entries(spaces).filter((e) => !builtin(e));
+  const ext = all.filter((x) => !lib.some((e) => e.name === x.name && e.kind === x.kind)); // a Library copy wins
   const line = (name: string, summary: string, where?: string) => `- ${name}${where ? ` (${where})` : ""}: ${summary}`;
   const recipes = [...ext.filter((e) => e.kind === "recipe").map((e) => line(e.name, e.summary)), ...lib.filter((e) => e.kind === "recipe").map((e) => line(e.name, e.summary, `Library, ${by(e, names)}`))];
   const embeds = [...ext.filter((e) => e.kind === "embed").map((e) => line(e.name, e.summary)), ...lib.filter((e) => e.kind === "embed").map((e) => line(e.name, e.summary, `Library, ${by(e, names)}`))];
@@ -110,7 +120,7 @@ export function index(spaces: SpaceStore, names: (id: string) => string, extra: 
 
 /** read_me(name) for a Library entry or an installed extension, or undefined. */
 export function topic(spaces: SpaceStore, name: string, names: (id: string) => string, extra: Extension[] = []): { text: string; source: "library" | "extension" } | undefined {
-  const e = entries(spaces).find((x) => x.name === name);
+  const e = entries(spaces).find((x) => x.name === name && !(x.kind === "embed" && installedEmbed(x.name, extra)?.template === x.template));
   if (e) {
     const use =
       e.kind === "recipe"

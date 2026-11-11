@@ -89,6 +89,7 @@ struct ElementView: View {
         case "frame": frameView
         case "region": regionView
         case "file": FileElementView(element: element)
+        case "embed": EmbedElementView(element: element)
         default: unknownView
         }
     }

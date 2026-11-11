@@ -18,7 +18,7 @@ use crate::protocol::Code;
 use automerge::transaction::{Transactable, Transaction};
 use automerge::{ObjType, ReadDoc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -595,6 +595,11 @@ fn run_op(
                 new: Some(entry),
             });
         }
+        Op::SetState {
+            target,
+            panel,
+            patch,
+        } => set_state(tx, p, i, target, panel.as_deref(), patch, out)?,
         Op::ErasePrecise { target, fragments } => {
             let rec = owned_records(tx, p, i, std::slice::from_ref(target), "id")?.remove(0);
             if rec.typ != "ink" {
@@ -615,6 +620,96 @@ fn run_op(
         }
     }
     Ok(())
+}
+
+/// The most an Element's saved state, or one Panel's values, may hold, in bytes of compact JSON.
+pub const STATE_LIMIT_BYTES: usize = 16 * 1024;
+
+/// A person saves an Embed's state (`setState`) or the values entered in one of
+/// an Element's Panels. Anyone in the Space may; it is the person's own action
+/// on the Element, whoever owns it.
+#[allow(clippy::too_many_arguments)]
+fn set_state(
+    tx: &mut Tx,
+    p: &Principal,
+    i: usize,
+    target: &str,
+    panel: Option<&str>,
+    patch: &Map<String, Value>,
+    out: &mut Outcome,
+) -> Result<(), Vec<OpError>> {
+    if !matches!(p, Principal::Person(_)) {
+        return Err(vec![OpError::new(
+            i,
+            Code::InvalidInput,
+            "set_state is the person's: an Embed's setState or a Panel's values.",
+            "Agents change their Elements with patch.",
+        )]);
+    }
+    let Some(rec) = resolve(tx, p, target).and_then(|k| doc::live_record(tx, &k)) else {
+        return Err(vec![unknown_id(tx, p, i, target, "id")]);
+    };
+    if panel.is_none() && rec.typ != "embed" {
+        return Err(vec![OpError::new(
+            i,
+            Code::InvalidInput,
+            format!("'{target}' is not an Embed, so it has no state."),
+            "Save a Panel's values with panel and values instead.",
+        )]);
+    }
+    let field = if panel.is_some() { "values" } else { "state" };
+    let mut all = rec
+        .field_json(field)
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    let merge = |into: &mut Map<String, Value>| {
+        for (k, v) in patch {
+            if v.is_null() {
+                into.remove(k);
+            } else {
+                into.insert(k.clone(), v.clone());
+            }
+        }
+    };
+    if let Some(pid) = panel {
+        let mut one = all
+            .get(pid)
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
+        merge(&mut one);
+        let size = Value::Object(one.clone()).to_string().len();
+        if size > STATE_LIMIT_BYTES {
+            return Err(vec![too_big(i, size, "Panel's values")]);
+        }
+        all.insert(pid.to_string(), Value::Object(one));
+    } else {
+        merge(&mut all);
+    }
+    let new = Value::Object(all).to_string();
+    if panel.is_none() && new.len() > STATE_LIMIT_BYTES {
+        return Err(vec![too_big(i, new.len(), "Embed's state")]);
+    }
+    let old = rec.fields.get(field).cloned();
+    if old.as_deref() == Some(new.as_str()) || (old.is_none() && new == "{}") {
+        return Ok(());
+    }
+    set_field(tx, &rec.key, field, Some(&new)).map_err(am(i))?;
+    out.edits.push(Edit::Field {
+        key: rec.key.clone(),
+        field: field.into(),
+        old,
+        new: Some(new),
+    });
+    Ok(())
+}
+
+fn too_big(i: usize, size: usize, what: &str) -> OpError {
+    OpError::new(
+        i,
+        Code::TooLarge,
+        format!("The {what} would be {size} bytes; the limit is {STATE_LIMIT_BYTES}."),
+        "Keep only what has to survive a reload in state; put bulk data in the Agent's own files.",
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

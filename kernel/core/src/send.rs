@@ -58,6 +58,10 @@ fn summarize(e: &Edit) -> Option<Value> {
                 json!({ "kind": "resized", "id": key, "bounds": n })
             }
         }
+        Edit::Field { key, field, new, .. } if field == "state" => {
+            let state: Value = serde_json::from_str(new.as_deref()?).ok()?;
+            json!({ "kind": "embed_state", "id": key, "state": state })
+        }
         Edit::Field { key, field, .. } => json!({ "kind": "edited", "id": key, "field": field }),
         Edit::Text { key, new, .. } => {
             json!({ "kind": "edited", "id": key, "field": "text", "text": new })
@@ -67,6 +71,33 @@ fn summarize(e: &Edit) -> Option<Value> {
         }
         Edit::Library { .. } => return None,
     })
+}
+
+/// What one edit tells the Agent. Panel values say which Panel changed, one
+/// change per Panel; everything else is one change or none.
+fn changes_of(e: &Edit) -> Vec<Value> {
+    if let Edit::Field {
+        key,
+        field,
+        old,
+        new,
+    } = e
+    {
+        if field == "values" {
+            let parse = |s: &Option<String>| {
+                s.as_deref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Map<String, Value>>(s).ok())
+                    .unwrap_or_default()
+            };
+            let (old, new) = (parse(old), parse(new));
+            return new
+                .iter()
+                .filter(|(panel, v)| old.get(*panel) != Some(*v))
+                .map(|(panel, v)| json!({ "kind": "panel", "id": key, "panel": panel, "values": v }))
+                .collect();
+        }
+    }
+    summarize(e).into_iter().collect()
 }
 
 /// The most strokes one watch snapshot carries (ARCHITECTURE §7.6, watch-mode size budget).
@@ -217,6 +248,20 @@ pub fn freeze(
     if trigger == "watch" {
         kind = "watch";
     }
+    // An Embed's reflex.notify(payload): a "notify agent" event, which claims
+    // nothing and leaves the person's turn open, like a notify Behavior. The
+    // element is the Embed, or the Element whose Panel hosts it.
+    if trigger == "embed" {
+        if !extra.contains_key("element") || raw.get("on").is_some() {
+            return Err(FreezeError::Rejected(vec![OpError::new(
+                0,
+                Code::InvalidInput,
+                "An embed Send comes from an Embed's reflex.notify, and needs its Element as element.",
+                "Pass the Embed's ID (or the Element whose Panel holds it) as \"element\" and its payload, with no on.",
+            )]));
+        }
+        kind = "tap";
+    }
     let within = |b: [i64; 4]| scope.is_none_or(|r| inside(r, b));
     let claims = doc::root(tx, "claims");
     let claimed = |tx: &Transaction, k: &str| doc::get_str(tx, &claims, k).is_some();
@@ -305,7 +350,7 @@ pub fn freeze(
                 }
                 vec![c]
             }
-            _ => e.edits.iter().filter_map(summarize).collect(),
+            _ => e.edits.iter().flat_map(changes_of).collect(),
         })
         .collect();
 

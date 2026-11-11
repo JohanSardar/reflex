@@ -1,3 +1,4 @@
+import ReflexEmbed
 import ReflexRender
 import SwiftUI
 
@@ -80,8 +81,31 @@ struct PanelView: View {
                 set: { set(c, .bool($0)) }
             ))
             .accessibilityIdentifier("panel-\(c.id)")
-        default: // embed comes with the Embed ticket
+        case "embed":
+            embed(c)
+        default:
             Label("\(c.kind) isn't shown on this iPad yet", systemImage: "square.dashed").foregroundStyle(.secondary)
+        }
+    }
+
+    /// An Embed inside the Panel, with the same bridge and sandbox as on the canvas. It
+    /// takes touches, and what it saves with setState is this component's value.
+    @ViewBuilder
+    private func embed(_ c: Panel.Component) -> some View {
+        let state: JSONValue? = if case .object? = session.panelValue(c.id) { session.panelValue(c.id) } else { nil }
+        if let element = session.panel?.element,
+           let spec = session.embeds.spec(template: c.template, html: c.html, url: nil, params: c.params, data: nil, state: state, allow: nil) {
+            let key = SpaceSession.panelKey(element, c)
+            EmbedView(host: session.embeds, key: key, spec: spec, interactive: true)
+                .frame(height: min(max(c.h ?? 240, 40), 1200))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+                .overlay(alignment: .bottomLeading) {
+                    if let note = session.embeds.notes[key] { EmbedNoteView(note: note) }
+                }
+                .accessibilityIdentifier("panel-\(c.id)")
+        } else {
+            Label("\(c.template ?? "This Embed") isn't on this iPad yet", systemImage: "square.dashed").foregroundStyle(.secondary)
         }
     }
 

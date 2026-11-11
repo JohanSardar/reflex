@@ -18,6 +18,8 @@ packages:
     path: Packages/ReflexRender
   ReflexLink:
     path: Packages/ReflexLink
+  ReflexEmbed:
+    path: Packages/ReflexEmbed
 targets:
   Reflex:
     type: application
@@ -28,6 +30,7 @@ targets:
       - package: ReflexInput
       - package: ReflexRender
       - package: ReflexLink
+      - package: ReflexEmbed
     info:
       path: Reflex/Info.plist
       properties:

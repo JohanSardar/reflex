@@ -7,9 +7,9 @@
   "properties": {
     "send": { "description": "A new Send ID the device makes.", "$ref": "common.schema.json#/$defs/send_id" },
     "trigger": {
-      "description": "What sent it: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior (with element and on), a Region's Send button (with region), or watch mode.",
+      "description": "What sent it: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior (with element and on), a Region's Send button (with region), watch mode, or an Embed's reflex.notify (with element and payload; a tap that claims nothing).",
       "type": "string",
-      "enum": ["button", "pencil", "voice", "behavior", "region", "watch"]
+      "enum": ["button", "pencil", "voice", "behavior", "region", "watch", "embed"]
     },
     "viewport": { "description": "What the screen showed, in Space coordinates.", "$ref": "common.schema.json#/$defs/bounds" },
     "selection": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/element_id" }, "maxItems": 1000 },
@@ -90,7 +90,7 @@
     "event": { "description": "on embed_event: the event name the Embed emitted.", "type": "string", "pattern": "^[a-z][a-z0-9_]{0,39}$" },
     "panel": { "description": "on panel_change: the Panel's ID.", "$ref": "common.schema.json#/$defs/element_id" },
     "values": { "description": "on panel_change: component id → the value entered.", "type": "object" },
-    "payload": { "description": "From an Embed's reflex.notify(payload); otherwise the Behavior's own payload is used.", "type": "object" }
+    "payload": { "description": "From an Embed's reflex.notify(payload) or reflex.emit(name, payload); otherwise the Behavior's own payload is used.", "type": "object" }
   },
   "required": ["send"],
   "additionalProperties": false

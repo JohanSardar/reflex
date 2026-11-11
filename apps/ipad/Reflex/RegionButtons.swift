@@ -32,3 +32,31 @@ struct RegionButtons: View {
         .clipped()
     }
 }
+
+/// When an MCP App view on the canvas called one of its server's tools and was denied,
+/// a button over it lets the person allow that server (kept on this iPad). Its later
+/// calls then reach the Agent that placed it.
+struct EmbedAllowButtons: View {
+    let session: SpaceSession
+
+    var body: some View {
+        let zoom = session.ink.zoomScale, offset = session.ink.contentOffset
+        Color.clear.overlay(alignment: .topLeading) {
+            ZStack(alignment: .topLeading) {
+                ForEach(session.scene.elements.filter { $0.type == "embed" && $0.frame != nil }) { e in
+                    if let server = session.embeds.notes[e.id]?.server {
+                        let f = e.frame!
+                        Button("Allow \(server)") { session.embeds.allow(server: server) }
+                            .buttonStyle(.glass)
+                            .fixedSize()
+                            .padding(10)
+                            .frame(width: f.width * zoom, height: f.height * zoom, alignment: .topTrailing)
+                            .offset(x: f.minX * zoom - offset.x, y: f.minY * zoom - offset.y)
+                            .accessibilityIdentifier("embed-allow-\(e.id)")
+                    }
+                }
+            }
+        }
+        .clipped()
+    }
+}

@@ -456,6 +456,19 @@ export class Core {
         throw new ReflexError(result!.reason, errs, next);
       }
     }
+    // A built-in Embed Template (extensions/embeds) goes into the person's Library the first time
+    // an Agent adds it, so every device draws it from the Library like any other.
+    // A copy from an older Reflex (same name and summary, older HTML) is brought up to date.
+    const builtins = [...new Set(rest.filter((o) => o.op === "add" && o.type === "embed" && typeof o.template === "string").map((o) => o.template as string))]
+      .map((name) => library.installedEmbed(name, this.#extensions))
+      .filter((x) => x !== undefined)
+      .filter((x) => !this.#library().some((e) => e.kind === "embed" && e.name === x.name && (e.template === x.template || e.summary !== x.summary)));
+    if (builtins.length) {
+      const lib = this.spaces.get(library.LIBRARY) ?? this.spaces.create(library.LIBRARY, { kind: "library" });
+      const ops = builtins.map(({ kind, name, summary, params, template, guide, allow }) => ({ op: "define", kind, name, summary, params, template, ...(guide ? { guide } : {}), ...(allow ? { allow } : {}) }));
+      const r = JSON.parse(this.spaces.write(lib, "agent", (s) => s.applyAgentBatch(agent, `${request}.builtin`, JSON.stringify({ ops }), now)));
+      if (!r.ok) throw new ReflexError(r.reason, r.errors);
+    }
     if (defines.length) {
       const lib = this.spaces.get(library.LIBRARY) ?? this.spaces.create(library.LIBRARY, { kind: "library" });
       const r = remap(JSON.parse(this.spaces.write(lib, "agent", (s) => s.applyAgentBatch(agent, `${request}.define`, JSON.stringify({ ops: defines }), now))), defIndex);

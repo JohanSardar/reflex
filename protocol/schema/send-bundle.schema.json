@@ -17,9 +17,9 @@
       "$ref": "common.schema.json#/$defs/person_ref"
     },
     "trigger": {
-      "description": "How it was sent: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior, a Region's Send button, or watch mode.",
+      "description": "How it was sent: the floating Send button, a Pencil squeeze or double-tap, releasing the mic button, a Behavior, a Region's Send button, watch mode, or an Embed's reflex.notify.",
       "type": "string",
-      "enum": ["button", "pencil", "voice", "behavior", "region", "watch"]
+      "enum": ["button", "pencil", "voice", "behavior", "region", "watch", "embed"]
     },
     "said": {
       "description": "The person's spoken words, transcribed on the iPad, with Mark IDs such as [m1] placed where they drew each Mark while speaking.",

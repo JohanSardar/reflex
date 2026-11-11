@@ -141,8 +141,13 @@ export function project(opts: {
       return out;
     })
     .filter((c) => c.kind && c.id);
-  // Values entered in a Panel arrive with the panel_change Behavior that fired.
-  if (frozen.values && frozen.element) changes.push({ kind: "panel", id: opts.displayId(frozen.element), ...(frozen.panel ? { panel: frozen.panel } : {}), values: frozen.values });
+  // Values entered in a Panel are saved on its Element (the kernel's set_state), so the next Send
+  // claims them as a panel change. A panel_change Behavior's Send also carries the values it fired
+  // with; they are added only when no claimed change already says the same.
+  if (frozen.values && frozen.element) {
+    const id = opts.displayId(frozen.element);
+    if (!changes.some((c) => c.kind === "panel" && c.id === id && (!frozen.panel || c.panel === frozen.panel))) changes.push({ kind: "panel", id, ...(frozen.panel ? { panel: frozen.panel } : {}), values: frozen.values });
+  }
   // A photo or PDF page the person added comes as an image: the image Element with anything drawn on it.
   for (const c of changes.filter((c) => c.kind === "added_file")) {
     const el = byId.get(c.id);

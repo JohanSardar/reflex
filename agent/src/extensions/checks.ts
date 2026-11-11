@@ -35,6 +35,8 @@ export interface EmbedExt {
   template: string;
   guide?: string;
   allow?: string[];
+  /** An MCP App view: the 'ui://' resource its HTML came from. */
+  source?: string;
   example?: Record<string, unknown>;
 }
 export interface GuideExt {
@@ -232,13 +234,16 @@ export function checkEmbed(e: EmbedExt): Problem[] {
     else if (!allow.has(host) && ![...allow].some((a) => host.endsWith(`.${a}`)))
       out.push(err("blocked_host", `The template loads from ${host}, which isn't allowed: ${url}`, `Add "${host}" to allow, or load it from an approved CDN (${DEFAULT_ALLOW.join(", ")}).`, "/allow"));
   }
-  if (/\b(window\.parent|window\.top|top\.location|parent\.postMessage)\b/.test(html))
+  // An MCP App view talks to window.parent by design; the bridge is that parent.
+  if (!e.source && /\b(window\.parent|window\.top|top\.location|parent\.postMessage)\b/.test(html))
     out.push(err("outside_bridge", "The template reaches for the page around it (window.parent or window.top).", "Talk to Reflex only through the reflex bridge: reflex.element, reflex.notify, reflex.emit, reflex.panel and reflex.anchors.", "/template"));
   if (/\b(localStorage|sessionStorage|indexedDB|document\.cookie)\b/.test(html))
     out.push(warn("storage", "The template uses browser storage, which an Embed doesn't keep (its data store is nonpersistent).", "Save state with reflex.element.setState(patch); it syncs to every device and survives reloads.", "/template"));
-  if (!/reflex\.anchors\.register\s*\(/.test(html))
+  if (e.source && !/^ui:\/\/[^/\s]+/.test(e.source)) out.push(err("invalid_source", `source ${JSON.stringify(e.source)} is not a 'ui://' resource URI.`, "Set source to the MCP App resource the template came from, such as ui://weather/forecast.", "/source"));
+  if (!e.source && !/reflex\.anchors\.register\s*\(/.test(html))
     out.push(warn("no_anchors", "The template registers no Anchors, so a Mark on it comes back as pixel coordinates only.", "Call reflex.anchors.register({ resolve(region) { return { kind: 'data', rows: [...] } } }) so Marks say what they point at.", "/template"));
-  if (!/reflex\.element\.props\s*\(/.test(html) && Object.keys((e.params as any)?.properties ?? {}).length)
+  // An MCP App view gets its parameters as ui/notifications/tool-input, not props().
+  if (!e.source && !/reflex\.element\.props\s*\(/.test(html) && Object.keys((e.params as any)?.properties ?? {}).length)
     out.push(warn("unused_params", "The template never reads its parameters.", "Read them with reflex.element.props().", "/template"));
   if (!e.guide?.trim()) out.push(warn("missing_guide", "There is no guide.", "Add a short guide: what the Embed shows, its parameters, and what its Anchors report. read_me(name) shows it.", "/guide"));
   if (validate) {

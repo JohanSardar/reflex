@@ -27,7 +27,7 @@ xcodebuild -project Reflex.xcodeproj -scheme Reflex \
 - `Packages/ReflexInput`: Ink. The PencilKit canvas, tools, eraser, undo gestures, Pencil double-tap and squeeze, stroke identity and local saving.
 - `Packages/ReflexRender`: draws Protocol v0 Elements (text, Markdown, shapes, sticky notes, math, frames, regions, connectors, images) from the kernel's scene JSON. Unknown types draw as a labelled placeholder. LaTeX (`math`) is typeset natively with [SwiftMath](https://github.com/mgriebling/SwiftMath) (MIT), drawn at the screen's scale times the zoom so it stays crisp when zoomed in; LaTeX that doesn't parse shows as its source.
 
-`ReflexEmbed` joins with the Embed ticket.
+- `Packages/ReflexEmbed`: HTML Embeds. Each runs in its own `WKWebView` with a nonpersistent data store, a content rule list that blocks every load but its approved CDNs (code only) and `allow` hosts, the same Content Security Policy as the web viewer, no navigation, popups or dialogs, and the shared bridge (`Resources/bridge.js` links to `apps/web/src/bridge.js`) on a script message handler. A 5-second heartbeat stops an Embed that keeps the processor busy, a crashed web process is reported, and every block shows as a note on the Embed. Canvas Embeds don't take touches (the Pencil draws over them); Embeds in a Panel do. `setState` is saved on the Element (`set_state`) and syncs; an Embed in a Panel saves it as its component's value. `notify` becomes a tap for the Agent, `emit` fires `embed_event` Behaviors, and a Mark drawn on an Embed asks its Anchor resolver what it points at (`embed_anchors` on the Send). An MCP App view's tool calls are denied until the person taps "Allow <server>" on it; this iPad remembers the server.
 
 ## Minimum iPadOS: 26.0
 
@@ -75,6 +75,7 @@ Send claims the strokes drawn since the last Send in the kernel (`freeze_send`),
 
 - The device key and pairing are files in Application Support, not the Keychain.
 - Remote Ink can't be erased or lassoed from this iPad; only its own Ink is in PencilKit.
+- An MCP App server the person allowed is allowed on this iPad only.
 
 ## Debug
 
