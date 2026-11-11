@@ -4,7 +4,10 @@
 // aliases in wrangler.toml put in place of node:fs and Ajv for the Agent layer.
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import standaloneCode from "ajv/dist/standalone/index.js";
+import standalone from "ajv/dist/standalone/index.js";
+
+// A CommonJS module: its function is on `.default`.
+const standaloneCode = (standalone as unknown as { default: (ajv: Ajv2020, refs: Record<string, string>) => string }).default;
 
 const protocol = new URL("../../protocol/", import.meta.url);
 const gen = new URL("./gen/", import.meta.url);

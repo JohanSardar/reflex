@@ -49,6 +49,8 @@ public final class LinkSync {
     @ObservationIgnored private var discovered: NWEndpoint?
     @ObservationIgnored private var dialing = false
     @ObservationIgnored private var assetsWritten: Set<String> = []
+    /// The Relay the Link said to use when the local network can't reach it (RelayConnection.swift).
+    @ObservationIgnored private var relay: RelayInfo?
 
     struct Paired: Codable {
         var device: String
@@ -87,6 +89,7 @@ public final class LinkSync {
             Self.writeSecret(Saved(key: B64.encode(key.rawRepresentation), actor: actor, name: deviceName, person: nil), to: idURL)
         }
         paired = (try? Data(contentsOf: Self.linkDir.appending(path: "paired.json"))).flatMap { try? JSONDecoder().decode(Paired.self, from: $0) }
+        relay = (try? Data(contentsOf: Self.linkDir.appending(path: "relay.json"))).flatMap { try? JSONDecoder().decode(RelayInfo.self, from: $0) }
         loadReplicas()
         if paired != nil {
             state = .connecting
@@ -286,6 +289,18 @@ public final class LinkSync {
                 conn.close()
             }
         }
+        // The local network can't reach the Link: go through the Relay, if it named one.
+        if let relay, let conn = try? RelayConnection(relay: relay, me: identity, link: paired.device) {
+            do {
+                try await conn.start()
+                let s = try await handshake(conn, me: identity, pairedKey: paired.key, offer: nil)
+                bind(s)
+                return
+            } catch {
+                conn.close()
+                linkLog.info("Relay path to \(paired.name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         state = .offline("\(paired.name) is not reachable")
         reconnectSoon(after: 2)
     }
@@ -355,6 +370,14 @@ public final class LinkSync {
             }
         case "ping":
             s.send(["t": "pong", "n": h["n"] ?? 0, "at": h["at"] ?? 0])
+        case "relay":
+            guard let url = h["url"] as? String, let room = h["room"] as? String else { return }
+            let info = RelayInfo(url: url, room: room)
+            if info != relay {
+                relay = info
+                Self.writeSecret(info, to: Self.linkDir.appending(path: "relay.json"))
+                linkLog.info("The Link syncs through the Relay at \(url, privacy: .public)")
+            }
         case "agent_request":
             guard let id = h["id"] as? String, !agentRequests.contains(where: { $0.id == id }) else { return }
             agentRequests.append(AgentRequest(id: id, name: h["name"] as? String ?? id, color: h["color"] as? String ?? "violet"))

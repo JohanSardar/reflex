@@ -194,7 +194,9 @@ export class Coordinator {
   async #dial(device: string): Promise<void> {
     if (this.#dialing.has(device) || this.#peers.has(device)) return;
     const known = this.#catalog.device(device);
-    if (!known) return;
+    // An iPad always dials its Link (it listens on no path); dialing it back
+    // through the Relay would only cut into its own session.
+    if (!known || known.kind === "ipad") return;
     const list = [...(this.#candidates.get(device) ?? [])];
     if (known.last_seen) list.push({ transport: "lan", device, host: known.last_seen.host, port: known.last_seen.port });
     // The LAN first; the Relay is the path for when the LAN can't reach the device.

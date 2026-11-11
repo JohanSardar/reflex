@@ -77,12 +77,14 @@ export class Room {
     s.state = { ...st, device, watch: [], logs: [] };
     s.send(JSON.stringify({ t: "welcome", device }));
     this.#log(`${device} joined room ${this.id}`);
-    this.#presence(device, true);
+    // `joined`: a new socket, so channels to the device's old one are gone.
+    this.#presence(device, true, true);
   }
 
   /** Tells every socket watching `device` that it came or went. */
-  #presence(device: string, online: boolean): void {
-    for (const o of this.#authed()) if (o.state.device !== device && o.state.watch.includes(device)) o.send(JSON.stringify({ t: "presence", device, online }));
+  #presence(device: string, online: boolean, joined = false): void {
+    const msg = JSON.stringify(joined ? { t: "presence", device, online, joined } : { t: "presence", device, online });
+    for (const o of this.#authed()) if (o.state.device !== device && o.state.watch.includes(device)) o.send(msg);
   }
 
   closed(s: Sock): void {
@@ -126,7 +128,7 @@ export class Room {
         return;
       }
       case "log.append":
-        return reply(await this.#hubs.log(logId()).append(String(m.token), this.id, (m.entries as string[]) ?? []));
+        return reply(await this.#hubs.log(logId()).append(String(m.token), this.id, (m.entries as string[]) ?? [], m.snapshot === true));
       case "log.read":
         return reply(await this.#hubs.log(logId()).read(String(m.token), Number(m.after ?? 0), Math.min(Number(m.limit ?? 500), 1000)));
       case "log.watch": {

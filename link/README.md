@@ -1,12 +1,13 @@
 # Reflex Link
 
-The process on your computer that keeps a copy of every Space, stores it durably, and syncs it with your other devices over the local network (ARCHITECTURE §1, §2, §6). Every Space operation goes through the Rust kernel (`@reflex/kernel/node`); the Link never edits Space data itself.
+The process on your computer that keeps a copy of every Space, stores it durably, and syncs it with your other devices over the local network, or through a Reflex Relay when they aren't on one (ARCHITECTURE §1, §2, §6). Every Space operation goes through the Rust kernel (`@reflex/kernel/node`); the Link never edits Space data itself.
 
 ```sh
 sh kernel/wasm/build.sh && npm install
 reflex link                                 # start the Link: shows a pairing QR code and its text (or: node agent/bin/reflex.mjs link)
 reflex link --home /tmp/b pair 'reflex://pair?...'   # a second Link pairs with the first one's code
 reflex link status                          # Spaces, peers, Agents, the Inbox
+reflex link --relay wss://relay.example     # also sync through a Relay, and let cloud Agents in (relay/README.md)
 reflex link --help
 ```
 
@@ -22,7 +23,8 @@ The Link runs in its terminal. Enter shows a new pairing code; when an Agent ask
 | `storage/assets.ts` | content-addressed, chunked asset store |
 | `storage/db.ts` | the one SQLite database (WAL, `synchronous=FULL`) |
 | `sync/coordinator.ts` | binds Paths to devices, runs the kernel's sync per Space per peer, moves assets |
-| `transports/` | the transport seam, and LAN: TCP frames plus Bonjour `_reflex-link._tcp` |
+| `transports/` | the transport seam; LAN (TCP frames plus Bonjour `_reflex-link._tcp`) and the Relay (WebSocket channels through `relay/`) |
+| `relay/` | the Relay's encrypted log from this side: Space keys, pushing and pulling entries, crops, grants for cloud Agents |
 | `pairing/` | device keys and the handshake, QR pairing offers, the signed control catalog |
 | `rpc/client.ts` | the client for the local RPC |
 | `web.ts` | the person's web viewer on 127.0.0.1 (`apps/web`); its address and key are printed in this terminal at start |
@@ -46,4 +48,4 @@ The Link runs in its terminal. Enter shows a new pairing code; when an Agent ask
 - The `dev` commands (with `--dev`) act as the person without an iPad, for testing.
 - The check on received changes knows people and Agents but not roles; roles come with T22.
 - Approval can't be given through any Reflex command, but a local process running as your OS user can still read the Link's files (`identity.json`, `link.db`) or its terminal. OS-level separation, and the platform credential stores, come later.
-- Fastest-path selection waits for a second transport (T11). The fault-injection transport and the headless renderer aren't built yet.
+- Paths are tried LAN first, then the Relay; picking the fastest live path waits for T11. The fault-injection transport and the headless renderer aren't built yet.

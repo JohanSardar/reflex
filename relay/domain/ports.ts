@@ -34,7 +34,8 @@ export interface SockState {
 
 /** A log, as a room reaches it (another Durable Object, or an object in the same process). */
 export interface LogApi {
-  append(token: string, room: string, entries: string[]): Promise<{ seqs: number[] }>;
+  /** `snapshot`: the (only) entry is a whole-Space snapshot, so a session can start there. */
+  append(token: string, room: string, entries: string[], snapshot?: boolean): Promise<{ seqs: number[] }>;
   read(token: string, after: number, limit: number): Promise<{ entries: { seq: number; data: string }[]; last: number }>;
   watch(token: string, room: string): Promise<{ last: number }>;
   assetsHave(token: string, ids: string[]): Promise<{ have: string[] }>;

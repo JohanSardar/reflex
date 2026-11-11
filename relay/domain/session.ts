@@ -20,6 +20,8 @@ import type { Grant } from "./wire.ts";
 /** The kernel binding: `@reflex/kernel/node` or `@reflex/kernel/workers`. */
 export interface Kernel {
   create(id: string, kind: string, actor: string): Space;
+  /** Opens a saved document (a snapshot) directly: far less memory than receiving it into a new replica. */
+  load(bytes: Uint8Array, actor: string): Space;
   /** WASM linear memory in bytes, when the binding can say. */
   memoryBytes?(): number;
 }
@@ -31,8 +33,10 @@ export interface SessionDeps {
   sql: Sql;
   bucket: Bucket;
   renderer: Renderer;
-  /** Entries after `seq`, oldest first. */
-  entries(after: number): { seq: number; data: Uint8Array }[];
+  /** Entries after `seq`, oldest first, at most `limit`. */
+  entries(after: number, limit: number): { seq: number; data: Uint8Array }[];
+  /** The newest entry marked as a whole-Space snapshot, or 0. */
+  lastSnapshot(): number;
   /** Appends one sealed entry durably and returns its sequence number. */
   append(sealed: Uint8Array): number;
   log: (m: string) => void;
@@ -60,8 +64,29 @@ export class CloudSession {
     this.grant = d.grant;
     for (const stmt of SCHEMA.trim().split("\n")) d.sql.run(stmt);
     const t0 = Date.now();
-    this.#space = d.kernel.create(d.grant.space, d.grant.kind, hex(random(16)));
+    const actor = hex(random(16));
     const first = this.#sql<{ n: number }>("SELECT count(*) AS n FROM c_sends WHERE gid = ?", d.grant.grant)[0].n === 0;
+    // Replay starts at the newest snapshot, if its sealed header agrees it is
+    // one. Loading it directly, rather than receiving it into a new replica,
+    // keeps the WASM memory near the size of the Space (a 5.5 MB snapshot
+    // received took 290 MB; loaded, a fraction of that).
+    let space: Space | null = null;
+    const snap = d.lastSnapshot();
+    if (snap > 0) {
+      const e = d.entries(snap - 1, 1)[0];
+      try {
+        const opened = e && openEntry(d.keys, e.data);
+        if (opened && opened.header.snapshot && opened.header.space === d.grant.space) {
+          space = d.kernel.load(opened.bytes, actor);
+          this.#seq = snap;
+          this.stats.entries++;
+          this.stats.change_bytes += opened.bytes.length;
+        }
+      } catch (err) {
+        d.log(`the snapshot at entry ${snap} did not load (${(err as Error).message}); replaying the whole log`);
+      }
+    }
+    this.#space = space ?? d.kernel.create(d.grant.space, d.grant.kind, actor);
     // Sends that were there before this grant began aren't news to its Agent.
     this.catchUp(!first);
     if (first) this.#index(false);
@@ -92,7 +117,9 @@ export class CloudSession {
   /** Takes in log entries this session hasn't seen (from the person's devices). */
   catchUp(route = true): void {
     let changed = false;
-    for (const e of this.#d.entries(this.#seq)) {
+    // Page by page, so a long log never sits in memory at once.
+    for (let page = this.#d.entries(this.#seq, 32); page.length; page = this.#d.entries(this.#seq, 32))
+    for (const e of page) {
       this.#seq = e.seq;
       let opened;
       try {
@@ -102,7 +129,8 @@ export class CloudSession {
         continue;
       }
       if (opened.header.space !== this.grant.space) continue;
-      if (opened.header.author === `grant:${this.grant.grant}`) continue; // this session wrote it
+      // This grant's own entries too: a session that starts again needs them, and
+      // receiving a change the Space already has does nothing.
       this.#space.receive(opened.bytes);
       this.stats.entries++;
       this.stats.change_bytes += opened.bytes.length;
@@ -113,7 +141,7 @@ export class CloudSession {
 
   /** Indexes Sends the Space holds that this session hasn't seen. */
   #index(route: boolean): void {
-    const sends: string[] = JSON.parse(this.#space.scene(JSON.stringify({ detail: "full" }))).sends ?? [];
+    const sends: string[] = JSON.parse(this.#space.scene(JSON.stringify({ detail: "full", ids: [] }))).sends ?? [];
     const g = this.grant.grant;
     const agents = this.#sql<{ agent: string }>("SELECT agent FROM c_attached WHERE gid = ?", g).map((r) => r.agent);
     let added = 0;
@@ -137,7 +165,8 @@ export class CloudSession {
     if (this.#space.heads() === before) return out;
     const bytes = this.#space.changesSince(before);
     const sealed = sealEntry(this.#d.keys, { v: 0, space: this.grant.space, kind: this.grant.kind, author: `grant:${this.grant.grant}`, at: Date.now() }, bytes);
-    this.#seq = Math.max(this.#seq, this.#d.append(sealed));
+    // `#seq` stays put: entries from devices may sit before this one, and catchUp reads them all.
+    this.#d.append(sealed);
     if (origin === "send") this.#index(true);
     return out;
   }
@@ -182,7 +211,7 @@ export class CloudSession {
 
   /** Fetches and opens the crops the Space's Sends refer to, so the Agent layer can read them synchronously. */
   async prefetch(): Promise<void> {
-    const sends: string[] = JSON.parse(this.#space.scene(JSON.stringify({ detail: "full" }))).sends ?? [];
+    const sends: string[] = JSON.parse(this.#space.scene(JSON.stringify({ detail: "full", ids: [] }))).sends ?? [];
     const want = new Set<string>();
     for (const s of sends) {
       const f = JSON.parse(this.#space.send(s)) as FrozenSend | null;

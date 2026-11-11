@@ -13,11 +13,14 @@ import type { Renderer } from "../../agent/src/render.ts";
 import type { Bucket, Hubs, Sql } from "./ports.ts";
 import { b64, b64url, deviceIdFor, hex, random, sha256hex, spaceKeys, timingSafeEqualStr, unb64, unb64url, unwrapKey, verifyEd25519, wrapKey } from "./seal.ts";
 import { CloudSession, type Kernel } from "./session.ts";
-import { ASSET_ID, grantText, MAX_FRAME, type Grant } from "./wire.ts";
+import { ASSET_ID, grantText, type Grant } from "./wire.ts";
+
+/** One sealed entry: a whole-Space snapshot of a large Space must fit. */
+const MAX_ENTRY = 16 * 1024 * 1024;
 
 const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
-  "CREATE TABLE IF NOT EXISTS entries (seq INTEGER PRIMARY KEY AUTOINCREMENT, data BLOB NOT NULL, at INTEGER NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS entries (seq INTEGER PRIMARY KEY AUTOINCREMENT, data BLOB NOT NULL, at INTEGER NOT NULL, snap INTEGER NOT NULL DEFAULT 0)",
   "CREATE TABLE IF NOT EXISTS rooms (room TEXT PRIMARY KEY)",
   "CREATE TABLE IF NOT EXISTS grants (gid TEXT PRIMARY KEY, body TEXT NOT NULL, sig TEXT NOT NULL, plain_key BLOB, code TEXT, status TEXT NOT NULL, expires INTEGER NOT NULL)",
   "CREATE TABLE IF NOT EXISTS tokens (hash TEXT PRIMARY KEY, gid TEXT NOT NULL, wrapped BLOB NOT NULL, expires INTEGER NOT NULL)",
@@ -25,6 +28,9 @@ const SCHEMA = [
 
 /** The longest grant a device may issue. */
 const MAX_GRANT_MS = 30 * 24 * 3600_000;
+
+const tooBig = () =>
+  new LogError(507, "this Space is too big to open in a cloud session on this Relay; use a self-hosted Relay (relay/node), which has no such limit, or a smaller Space");
 
 export class LogError extends Error {
   status: number;
@@ -44,6 +50,8 @@ export interface LogDeps {
   log: (m: string) => void;
   /** Asks the platform to call `expire()` at this time (a Durable Object alarm, or a timer). */
   wakeAt: (at: number) => void;
+  /** The most WASM memory a cloud session may take (Workers: the isolate's 128 MB, less room for the rest). */
+  memoryLimit?: number;
 }
 
 export class SpaceLog {
@@ -53,6 +61,7 @@ export class SpaceLog {
   constructor(d: LogDeps) {
     this.#d = d;
     for (const s of SCHEMA) d.sql.run(s);
+    if (!d.sql.all<{ name: string }>("PRAGMA table_info(entries)").some((c) => c.name === "snap")) d.sql.run("ALTER TABLE entries ADD COLUMN snap INTEGER NOT NULL DEFAULT 0");
   }
 
   get id(): string {
@@ -86,10 +95,15 @@ export class SpaceLog {
       .map((r) => ({ seq: r.seq, data: new Uint8Array(r.data) }));
   }
 
-  #insert(data: Uint8Array): number {
-    if (data.length > MAX_FRAME) throw new LogError(413, "an entry is over the 4 MiB limit");
-    this.#d.sql.run("INSERT INTO entries (data, at) VALUES (?, ?)", data, Date.now());
+  #insert(data: Uint8Array, snapshot = false): number {
+    if (data.length > MAX_ENTRY) throw new LogError(413, "an entry is over the 16 MiB limit");
+    this.#d.sql.run("INSERT INTO entries (data, at, snap) VALUES (?, ?, ?)", data, Date.now(), snapshot ? 1 : 0);
     return this.last();
+  }
+
+  /** Where replay can start: the newest entry a writer marked as a whole-Space snapshot (0: the beginning). */
+  lastSnapshot(): number {
+    return this.#d.sql.all<{ n: number | null }>("SELECT max(seq) AS n FROM entries WHERE snap = 1")[0]?.n ?? 0;
   }
 
   #notify(): void {
@@ -100,10 +114,10 @@ export class SpaceLog {
 
   // ---------- what a room asks for, on behalf of a device ----------
 
-  async append(token: string, room: string, entries: string[]): Promise<{ seqs: number[] }> {
+  async append(token: string, room: string, entries: string[], snapshot = false): Promise<{ seqs: number[] }> {
     this.#check(token, true);
     this.#d.sql.run("INSERT OR IGNORE INTO rooms (room) VALUES (?)", room);
-    const seqs = entries.map((e) => this.#insert(unb64(e)));
+    const seqs = entries.map((e) => this.#insert(unb64(e), snapshot && entries.length === 1));
     this.#session?.catchUp();
     if (seqs.length) this.#notify();
     return { seqs };
@@ -211,24 +225,52 @@ export class SpaceLog {
     const { grant, key } = this.#resolve(token);
     if (this.#session?.grant.grant === grant.grant) return this.#session;
     this.#session?.close();
+    this.#session = null;
+    // A Space too big to materialize here would take the whole isolate down
+    // on every try. The marker is set before loading and cleared after, so a
+    // load that never returned (out of memory) is not tried again until the
+    // Space gets a new snapshot.
+    const snap = String(this.lastSnapshot());
+    if (this.#meta("too_big") === snap) throw tooBig();
+    this.#setMeta("too_big", snap);
     const keys = spaceKeys(key);
     key.fill(0);
-    this.#session = new CloudSession({
+    const before = this.#d.kernel.memoryBytes?.() ?? 0;
+    let session: CloudSession;
+    try {
+      session = new CloudSession({
       grant,
       keys,
       kernel: this.#d.kernel,
       sql: this.#d.sql,
       bucket: this.#d.bucket,
       renderer: this.#d.renderer(),
-      entries: (after) => this.entries(after),
+      entries: (after, limit) => this.entries(after, limit),
+      lastSnapshot: () => this.lastSnapshot(),
       append: (sealed) => {
         const seq = this.#insert(sealed);
         queueMicrotask(() => this.#notify());
         return seq;
       },
       log: this.#d.log,
-    });
-    return this.#session;
+      });
+    } catch (e) {
+      this.#d.sql.run("DELETE FROM meta WHERE k = 'too_big'");
+      throw e;
+    }
+    const after = this.#d.kernel.memoryBytes?.() ?? 0;
+    if (this.#d.memoryLimit && after > this.#d.memoryLimit && after > before) {
+      session.close();
+      this.#d.log(`'${grant.space}' took ${after} bytes of WASM memory to open, over the ${this.#d.memoryLimit} a cloud session may use here`);
+      throw tooBig();
+    }
+    this.#d.sql.run("DELETE FROM meta WHERE k = 'too_big'");
+    this.#session = session;
+    return session;
+  }
+
+  #setMeta(k: string, v: string): void {
+    this.#d.sql.run("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v", k, v);
   }
 
   async fetch(req: Request, path: string[], origin: string): Promise<Response> {
@@ -264,7 +306,7 @@ export class SpaceLog {
         if (bearer) {
           const s = this.#sessionFor(bearer);
           const scene = JSON.parse(s.space.scene(JSON.stringify({ detail: "full" })));
-          return Response.json({ ...base, session: { ...s.stats, wasm_memory_bytes: this.#d.kernel.memoryBytes?.() ?? 0, elements: scene.elements.length, sends: (scene.sends ?? []).length } });
+          return Response.json({ ...base, session: { ...s.stats, wasm_memory_bytes: this.#d.kernel.memoryBytes?.() ?? 0, elements: scene.elements.length, sends: (scene.sends ?? []).length, digest: s.space.digest().slice(0, 12) } });
         }
         this.#check(token);
         return Response.json({ ...base, grants: this.#d.sql.all("SELECT gid, status, expires FROM grants ORDER BY expires") });

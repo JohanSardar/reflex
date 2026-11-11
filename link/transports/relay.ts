@@ -6,7 +6,7 @@
 //
 // Wire format: relay/domain/wire.ts (`reflex-relay/v0`). It is restated here
 // because nothing imports `relay/`.
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { b64, signWith, type DeviceKey } from "../pairing/crypto.ts";
 import type { Candidate, Path, PathMeasurements, Priority, Transport } from "./transport.ts";
 
@@ -243,6 +243,8 @@ export class RelayTransport implements Transport {
       case "presence": {
         const d = String(m.device);
         if (m.online) {
+          // A device that joined anew lost every channel it had through its old socket.
+          if (m.joined) for (const p of [...this.#paths.values()]) if (p.device === d) p.finish(`${d} reconnected to the relay`);
           this.#online.add(d);
           this.#onCandidate?.({ transport: this.name, device: d, host: this.url, port: 0 });
         } else {
@@ -316,10 +318,5 @@ export class RelayTransport implements Transport {
 
   forget(p: RelayPath): void {
     this.#paths.delete(p.id);
-  }
-
-  /** A random ID, for callers that need one. */
-  static id(): string {
-    return randomBytes(8).toString("hex");
   }
 }
