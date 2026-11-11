@@ -1,0 +1,23 @@
+[package]
+name = "reflex-kernel-ffi"
+description = "Swift binding (UniFFI) for the Reflex kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "reflex_kernel_ffi"
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+reflex-kernel = { path = "../core" }
+uniffi = "0.32.2"

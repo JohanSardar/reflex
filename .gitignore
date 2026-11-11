@@ -1,0 +1,10 @@
+/target
+node_modules/
+/kernel/wasm/pkg/
+/kernel/swift/.build/
+/kernel/swift/Sources/ReflexKernel/reflex_kernel_ffi.swift
+/kernel/swift/ReflexKernelFFI.xcframework/
+/kernel/proof/ipad/*.xcodeproj/
+/kernel/proof/**/build/
+.wrangler/
+.DS_Store

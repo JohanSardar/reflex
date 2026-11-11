@@ -1,0 +1,39 @@
+{
+  "name": "Two replicas edit the same Space at once: create, patch and delete, then one restart",
+  "space": "auth-plan",
+  "replicas": ["ipad", "link"],
+  "steps": [
+    { "on": "link", "agent": "claude", "request": "r1", "batch": { "ops": [
+      { "op": "add", "id": "n-gateway", "type": "shape", "text": "Gateway", "at": { "x": 100, "y": 100 } },
+      { "op": "add", "id": "n-auth", "type": "shape", "text": "Auth", "at": { "right_of": "n-gateway", "gap": 80 } },
+      { "op": "add", "id": "n-cache", "type": "shape", "text": "Cache", "at": { "below": "n-auth" } },
+      { "op": "add", "id": "e1", "type": "connector", "from": "n-gateway", "to": "n-auth", "text": "JWT" }
+    ] }, "expect": { "ok": true } },
+    { "sync": ["ipad", "link"] },
+    { "converged": true },
+
+    { "on": "link", "agent": "claude", "request": "r2", "batch": { "ops": [
+      { "op": "patch", "id": "n-auth", "text_insert": { "at": 4, "text": " service" } },
+      { "op": "patch", "id": "n-cache", "set": { "text": "Redis" } },
+      { "op": "add", "id": "n-db", "type": "shape", "text": "DB", "at": { "below": "n-cache" } }
+    ] }, "expect": { "ok": true } },
+    { "on": "ipad", "person": "p_ana", "device": "ipad-1", "intent": { "intent": "patch", "id": "claude/n-auth", "text_insert": { "at": 0, "text": "New " } }, "expect": { "ok": true } },
+    { "on": "ipad", "person": "p_ana", "device": "ipad-1", "intent": { "intent": "erase", "ids": ["claude/n-cache"] }, "expect": { "ok": true } },
+    { "on": "ipad", "person": "p_ana", "device": "ipad-1", "intent": { "intent": "add_stroke", "id": "stroke-1", "stroke": { "points": [[300, 300], [320, 340], [360, 310]], "width": 3 } }, "expect": { "ok": true } },
+
+    { "sync": ["ipad", "link"] },
+    { "converged": true },
+    { "on": "ipad", "expect_text": { "claude/n-auth": "New Auth service" } },
+    { "on": "ipad", "expect_absent": ["claude/n-cache"] },
+    { "on": "link", "expect_present": ["claude/n-gateway", "claude/n-auth", "claude/e1", "claude/n-db", "stroke-1"] },
+
+    { "restart": "ipad" },
+    { "restart": "link" },
+    { "converged": true },
+    { "on": "link", "agent": "claude", "request": "r3", "batch": { "ops": [ { "op": "remove", "ids": ["e1"] } ] }, "expect": { "ok": true } },
+    { "on": "ipad", "person": "p_ana", "device": "ipad-1", "intent": { "intent": "move", "ids": ["claude/e1", "claude/n-db"], "by": [10, 0] }, "expect": { "ok": true } },
+    { "sync": ["ipad", "link"] },
+    { "converged": true },
+    { "on": "link", "expect_absent": ["claude/e1"] }
+  ]
+}
