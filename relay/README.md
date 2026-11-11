@@ -103,6 +103,10 @@ A cloud session loads the Space's newest snapshot directly (the Link writes the 
 
 Automerge's whole-document load peaks at about three times what the same Space takes when built change by change. A Space of up to roughly 2,000 strokes fits in a Worker. A bigger one does not: the session refuses it with `507` and a message pointing to a self-hosted Relay, and doesn't try again until the Space has a new snapshot. If it died while loading, it is refused next time instead of taking the Durable Object down on every call. `SESSION_MEMORY_LIMIT` sets the budget (default 96 MB of the isolate's 128). On the deployed Worker, 3,500 strokes whose newest snapshot was small opened in 62 MB, and 8,000 strokes (a 2.6 MB snapshot) got the `507`. The Node Relay has no limit. Per ADR-0004, if real Spaces outgrow a Worker, cloud execution moves to a separate service and the Durable Object stays the router and log. `GET /v0/log/<log>/stats` with a grant's token reports the session's own numbers and digest.
 
+## Shared Spaces
+
+A Space shared with other people (ADR-0008, `link/sharing.ts`) has one key, made by the owner's Link and given to each member's Link inside their end-to-end session; removing someone makes a new key, so a new log the removed person can't name. Each member's Link joins the owner's person room and watches only the owner's Link. An invite is presented in its own room, `sha256("reflex-relay/v0 invite room " + secret)`, where the owner's Link watches `"*"` (any device) until the invite is used or expires; the handshake inside still needs the invite's secret.
+
 ## Not here yet
 
 - Only Links write the log. The iPad syncs through the Relay (routing, end to end) but doesn't read or write the log itself, so its changes reach the log through a Link.
@@ -110,4 +114,4 @@ Automerge's whole-document load peaks at about three times what the same Space t
 - Both Links push what they hold, so a log can hold the same change twice. Duplicates are harmless.
 - Space titles and sizes (the Link's `space_meta`) aren't in the log; a cloud session uses the defaults.
 - A Space whose snapshot is over 15 MB can't go in one entry.
-- Key rotation, invites and other people's devices come with shared Spaces (T22).
+- iPads hold no Space keys, in a shared Space too: a member's iPad reaches the log through its Link.

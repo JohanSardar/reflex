@@ -89,6 +89,11 @@ export class Core {
     this.#names.set(o.person.person, o.person.name);
   }
 
+  /** Names a principal, such as a person someone shared a Space with, for Send Bundles and scenes. */
+  name(id: string, name: string): void {
+    if (name) this.#names.set(id, name);
+  }
+
   // ---------- the one entry point ----------
 
   async call(tool: string, args: unknown, ctx: Ctx): Promise<Result> {

@@ -1,3 +1,4 @@
+import CoreGraphics
 import CryptoKit
 import Foundation
 import Network
@@ -23,6 +24,35 @@ public struct AgentInfo: Codable, Identifiable, Sendable, Equatable {
     public var status: String
 }
 
+/// A shared Space (ADR-0008): who owns it, who is in it, and this person's role.
+public struct ShareInfo: Sendable, Equatable {
+    public struct Member: Sendable, Equatable, Identifiable {
+        public var person: Person
+        public var role: String
+        public var id: String { person.id }
+    }
+    public var space: String
+    public var owner: Person
+    /// "owner", "editor", "viewer", or nil once the owner removed this person.
+    public var role: String?
+    public var members: [Member]
+    public var epoch: Int
+}
+
+/// Someone else's device in a Space right now: its person, cursor and selection (link/here.ts).
+/// Short-lived, never part of the Space.
+public struct HereEntry: Sendable, Equatable, Identifiable {
+    public var device: String
+    public var space: String
+    public var person: Person
+    public var name: String
+    /// In Space coordinates.
+    public var cursor: CGPoint?
+    public var selection: [String]
+    public var at: Date
+    public var id: String { device }
+}
+
 /// The iPad's replicas of every Space, kept in the Rust kernel (through
 /// UniFFI), saved on this iPad, and in sync with the paired Link over the
 /// local network (ARCHITECTURE §1, §8).
@@ -34,6 +64,14 @@ public struct AgentInfo: Codable, Identifiable, Sendable, Equatable {
 /// Agent's name and color, for the chips). The iPad also sends `presence`
 /// (which Space is on screen and whether the pen is down) and `hints` (its
 /// handwriting recognizer's lines for the person's Ink in a watched Region).
+///
+/// Shared Spaces: the Link sends `shares` (each shared Space, its people and
+/// this person's role) and `here` (other devices' cursors, names and
+/// selections). The iPad asks it for an invite (`invite_create`, answered by
+/// `invite`), to change someone's role or remove them (`member_set`), and to
+/// join with an invite (`join_invite`, answered by `joined`). When the Link
+/// refuses this iPad's changes to a Space (`refused`, a viewer drew), the iPad
+/// starts that Space over from the Link and says so (`reset`).
 @MainActor @Observable
 public final class LinkSync {
     public enum State: Equatable {
@@ -55,6 +93,16 @@ public final class LinkSync {
     public private(set) var assetRevision = 0
     public private(set) var person: Person?
     public var deviceID: String { identity.device }
+    /// Shared Spaces, by Space.
+    public private(set) var shares: [String: ShareInfo] = [:]
+    /// Other devices in each Space now, by device.
+    public private(set) var here: [String: HereEntry] = [:]
+    /// The latest invite the Link made for this iPad, and anything it said went wrong with sharing.
+    public private(set) var invite: (space: String, role: String, uri: String)?
+    public var shareError: String?
+    /// Bumps each time the Link refused this iPad's changes to a Space and it started over, with why.
+    public private(set) var resets: [String: Int] = [:]
+    public private(set) var refusal: (space: String, reason: String)?
 
     @ObservationIgnored private var identity: DeviceIdentity
     @ObservationIgnored private var actor: String
@@ -69,6 +117,7 @@ public final class LinkSync {
     @ObservationIgnored private var relay: RelayInfo?
     /// Assets arriving in parts from the Link, by hash.
     @ObservationIgnored private var incoming: [String: (size: Int, data: Data)] = [:]
+    @ObservationIgnored private var joining: CheckedContinuation<String, Error>?
 
     struct Paired: Codable {
         var device: String
@@ -303,6 +352,11 @@ public final class LinkSync {
 
     /// What this iPad shows and does now, sent again on every new session.
     @ObservationIgnored private var presence: (space: String?, pen: Bool) = (nil, false)
+    /// Where the person's pen or finger is, in Space coordinates, and what they picked.
+    @ObservationIgnored private var cursor: CGPoint?
+    @ObservationIgnored private var selection: [String] = []
+    @ObservationIgnored private var cursorSent = Date.distantPast
+    @ObservationIgnored private var cursorTimer: Task<Void, Never>?
     /// The latest recognized lines per watched Region, by Space and Region.
     @ObservationIgnored private var watchHints: [String: [String: [[String: Any]]]] = [:]
 
@@ -315,7 +369,99 @@ public final class LinkSync {
     }
 
     private func sendPresence(_ s: Session) {
-        s.send(["t": "presence", "space": presence.space ?? NSNull(), "pen": presence.pen])
+        var m: [String: Any] = ["t": "presence", "space": presence.space ?? NSNull(), "pen": presence.pen, "selection": selection]
+        m["cursor"] = cursor.map { [($0.x * 10).rounded() / 10, ($0.y * 10).rounded() / 10] } ?? NSNull()
+        s.send(m)
+    }
+
+    /// Where the pen or finger is now (nil when it left), and what the person picked, for the
+    /// other people in a shared Space. At most ten updates a second; the last one always goes.
+    public func reportCursor(_ point: CGPoint?, selection: [String]? = nil) {
+        cursor = point
+        if let selection { self.selection = selection }
+        cursorTimer?.cancel()
+        let wait = 0.1 - Date().timeIntervalSince(cursorSent)
+        guard wait > 0 else {
+            cursorSent = Date()
+            if let session { sendPresence(session) }
+            return
+        }
+        cursorTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(wait))
+            guard let self, !Task.isCancelled else { return }
+            self.cursorSent = Date()
+            if let session = self.session { self.sendPresence(session) }
+        }
+    }
+
+    // MARK: Shared Spaces
+
+    /// This person's role in a Space: "owner" for one nobody shared with them, nil once removed.
+    public func role(_ space: String) -> String? {
+        shares[space].map(\.role) ?? "owner"
+    }
+
+    /// Asks the Link for a single-use invite to a Space this person owns; it arrives as `invite`.
+    public func createInvite(_ space: String, role: String) {
+        invite = nil
+        shareError = nil
+        session?.send(["t": "invite_create", "space": space, "role": role])
+    }
+
+    /// Makes someone an editor or a viewer, or removes them ("remove").
+    public func setMember(_ space: String, person: String, role: String) {
+        shareError = nil
+        session?.send(["t": "member_set", "space": space, "person": person, "role": role])
+    }
+
+    /// Joins someone's Space with the invite they sent: the Link presents it to theirs. Returns the Space.
+    public func join(invite code: String) async throws -> String {
+        guard let session else { throw LinkError.unreachable("This iPad isn't connected to its Link.") }
+        joining?.resume(throwing: LinkError.refused("Replaced by a newer invite."))
+        return try await withCheckedThrowingContinuation { c in
+            joining = c
+            session.send(["t": "join_invite", "uri": code.trimmingCharacters(in: .whitespacesAndNewlines)])
+        }
+    }
+
+    /// The Link refused this iPad's changes to a Space: start it over from the Link, dropping them.
+    private func startOver(_ id: String, reason: String, _ s: Session) {
+        guard let old = replicas[id], let fresh = try? Space.create(spaceId: id, kind: old.kind(), actorHex: actor) else { return }
+        replicas[id] = fresh
+        persist(id)
+        revision[id, default: 0] += 1
+        resets[id, default: 0] += 1
+        refusal = (id, reason)
+        linkLog.error("The Link refused changes to \(id, privacy: .public): \(reason, privacy: .public)")
+        s.send(["t": "reset", "space": id])
+        pump(id, s)
+    }
+
+    private func readShares(_ list: [[String: Any]]) {
+        var next: [String: ShareInfo] = [:]
+        for x in list {
+            guard let space = x["space"] as? String, let o = x["owner"] as? [String: Any], let oid = o["id"] as? String else { continue }
+            let members = (x["members"] as? [[String: Any]] ?? []).compactMap { m -> ShareInfo.Member? in
+                guard let p = m["person"] as? [String: Any], let id = p["id"] as? String else { return nil }
+                return .init(person: Person(id: id, name: p["name"] as? String ?? id), role: m["role"] as? String ?? "viewer")
+            }
+            next[space] = ShareInfo(space: space, owner: Person(id: oid, name: o["name"] as? String ?? oid), role: x["role"] as? String, members: members, epoch: x["epoch"] as? Int ?? 0)
+        }
+        shares = next
+    }
+
+    private func readHere(_ h: [String: Any]) {
+        guard let device = h["device"] as? String, device != identity.device else { return }
+        if h["gone"] as? Bool == true {
+            here[device] = nil
+            return
+        }
+        guard let space = h["space"] as? String, let p = h["person"] as? [String: Any], let pid = p["id"] as? String else { return }
+        let c = h["cursor"] as? [Double]
+        here[device] = HereEntry(
+            device: device, space: space, person: Person(id: pid, name: p["name"] as? String ?? pid), name: h["name"] as? String ?? "",
+            cursor: c.flatMap { $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil }, selection: h["selection"] as? [String] ?? [], at: Date()
+        )
     }
 
     /// The recognizer's lines for the person's Ink in a watched Region, so the
@@ -448,6 +594,7 @@ public final class LinkSync {
         s.close()
         if session === s {
             session = nil
+            here = [:] // who is here comes again with the next session
             for (_, space) in replicas { space.resetSync(peer: s.peer.device) }
             state = .offline("Reconnecting to \(s.peer.name)")
             reconnectSoon(after: 1)
@@ -514,6 +661,31 @@ public final class LinkSync {
                 Self.writeSecret(info, to: Self.linkDir.appending(path: "relay.json"))
                 linkLog.info("The Link syncs through the Relay at \(url, privacy: .public)")
             }
+        case "shares":
+            readShares(h["shares"] as? [[String: Any]] ?? [])
+            // An invite is single use: once someone joined with it, it is no longer worth showing.
+            if let live = h["invites"] as? [String], let inv = invite,
+               let id = URLComponents(string: inv.uri)?.queryItems?.first(where: { $0.name == "i" })?.value, !live.contains(id) {
+                invite = nil
+            }
+        case "here":
+            readHere(h)
+        case "invite":
+            if let space = h["space"] as? String, let uri = h["uri"] as? String { invite = (space, h["role"] as? String ?? "editor", uri) }
+        case "share_error":
+            let message = h["message"] as? String ?? "The Link could not do that."
+            if let j = joining {
+                joining = nil
+                j.resume(throwing: LinkError.refused(message))
+            } else {
+                shareError = message
+            }
+        case "joined":
+            joining?.resume(returning: h["space"] as? String ?? "")
+            joining = nil
+        case "refused":
+            guard let id = h["space"] as? String else { return }
+            startOver(id, reason: h["reason"] as? String ?? "", s)
         case "agent_request":
             guard let id = h["id"] as? String, !agentRequests.contains(where: { $0.id == id }) else { return }
             agentRequests.append(AgentRequest(id: id, name: h["name"] as? String ?? id, color: h["color"] as? String ?? "violet"))

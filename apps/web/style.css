@@ -76,3 +76,12 @@ button.btn.on { background: #e1f0ff; border-color: var(--accent); }
 .bundle-img { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; margin-top: 6px; }
 .toast { position: fixed; bottom: 16px; left: 16px; background: var(--ink); color: #fff; padding: 8px 12px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; z-index: 10; }
 .toast.on { opacity: .92; }
+
+/* Who else is here (link/here.ts): names in the header, cursors and selections on the canvas. */
+.here { display: flex; gap: 6px; }
+.here .who { font-size: 12px; padding: 3px 9px; border-radius: 10px; color: #fff; white-space: nowrap; }
+.cursors { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 100000; }
+.cursor { position: absolute; transform-origin: 0 0; }
+.cursor .dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.35); margin: -7px 0 0 -7px; }
+.cursor .label { position: absolute; left: 10px; top: 6px; font: 600 12px system-ui, sans-serif; color: #fff; padding: 2px 7px; border-radius: 8px; white-space: nowrap; }
+.picked { position: absolute; border: 2px dashed; border-radius: 6px; pointer-events: none; z-index: 99999; }

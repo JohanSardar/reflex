@@ -58,6 +58,8 @@ final class ReflexCanvasView: PKCanvasView {
     var claims: ((CGPoint) -> Bool)?
     /// Whether a pen stroke starting at this point (content coordinates) is refused, as in a Region with `ink: false`.
     var refuses: ((CGPoint) -> Bool)?
+    /// Where a touch or the hovering Pencil is now (content coordinates), or nil once it left.
+    var moved: ((CGPoint?) -> Void)?
 }
 
 /// Watches every touch on the canvas without recognizing anything. When a
@@ -68,6 +70,7 @@ final class TouchWatcher: UIGestureRecognizer {
     private var held = false
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let canvas, let t = touches.first { canvas.moved?(t.location(in: canvas)) }
         guard let canvas, let t = touches.first, !held else { return }
         if (event.allTouches?.count ?? 1) == 1, canvas.refuses?(t.location(in: canvas)) == true {
             held = true
@@ -79,6 +82,10 @@ final class TouchWatcher: UIGestureRecognizer {
             canvas.drawingGestureRecognizer.isEnabled = false
             canvas.panGestureRecognizer.isEnabled = false
         }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let canvas, let t = touches.first { canvas.moved?(t.location(in: canvas)) }
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { release() }
@@ -132,6 +139,10 @@ public final class InkCanvasController: NSObject {
     /// Whether a pen stroke may not start at this Space point (a Region with `ink: false`); `onRefused` is told when one is stopped.
     @ObservationIgnored public var refusesInk: ((CGPoint) -> Bool)?
     @ObservationIgnored public var onRefused: (() -> Void)?
+    /// Nothing may be drawn or erased (the person is a viewer in this shared Space); `onRefused` is told when someone tries.
+    @ObservationIgnored public var readOnly = false
+    /// Where the pen or finger is, in Space points, as it moves (nil once it leaves), for other people's screens.
+    @ObservationIgnored public var onCursor: ((CGPoint?) -> Void)?
 
     /// Size of the scrollable Space, in points.
     public static let spaceSize = CGSize(width: 6000, height: 6000)
@@ -272,9 +283,19 @@ public final class InkCanvasController: NSObject {
                 return [ElementTouch.tap, .longPress, .drag].contains { self.claimsTouch?($0, p) == true }
             }
         }
+        canvas.moved = { [weak self] screen in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.onCursor?(screen.map { self.spacePoint($0) }) }
+        }
+        let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))
+        canvas.addGestureRecognizer(hover)
         canvas.refuses = { [weak self] screen in
             guard let self else { return false }
             return MainActor.assumeIsolated {
+                if self.readOnly {
+                    self.onRefused?()
+                    return true
+                }
                 guard !self.tool.isEraser, self.tool != .lasso, self.refusesInk?(self.spacePoint(screen)) == true else { return false }
                 self.onRefused?()
                 return true
@@ -301,6 +322,15 @@ public final class InkCanvasController: NSObject {
     private func spacePoint(_ screen: CGPoint) -> CGPoint {
         // `location(in: canvasView)` is in content coordinates, which already include the scroll offset.
         CGPoint(x: screen.x / canvasView.zoomScale, y: screen.y / canvasView.zoomScale)
+    }
+
+    /// The Pencil hovering over the canvas moves the cursor too.
+    @objc private func hovered(_ g: UIHoverGestureRecognizer) {
+        switch g.state {
+        case .began, .changed: onCursor?(spacePoint(g.location(in: canvasView)))
+        case .ended, .cancelled: onCursor?(nil)
+        default: break
+        }
     }
 
     @objc private func elementTap(_ g: UITapGestureRecognizer) {
@@ -392,6 +422,14 @@ public final class InkCanvasController: NSObject {
     /// driving the Simulator, whose automation has no freeform path gesture.
     public func debugDraw(screen: [CGPoint]) {
         let zoom = canvasView.zoomScale, offset = canvasView.contentOffset
+        // As a real touch would be: refused where the person may not draw, and the cursor follows it.
+        guard let first = screen.first else { return }
+        let start = CGPoint(x: (first.x + offset.x) / zoom, y: (first.y + offset.y) / zoom)
+        if readOnly {
+            onRefused?()
+            return
+        }
+        onCursor?(start)
         let points = screen.enumerated().map { i, p in
             PKStrokePoint(
                 location: CGPoint(x: (p.x + offset.x) / zoom, y: (p.y + offset.y) / zoom),
@@ -403,6 +441,7 @@ public final class InkCanvasController: NSObject {
         var drawing = canvasView.drawing
         drawing.strokes.append(stroke)
         canvasView.drawing = drawing
+        if let last = points.last { onCursor?(last.location) }
     }
     #endif
 

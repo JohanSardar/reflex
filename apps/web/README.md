@@ -41,6 +41,7 @@ erasable TypeScript (`npx tsc -p apps/web`).
 ## Not here yet
 
 - Typing, tapping and Sending from the viewer (SPEC §3). It shows Spaces; the iPad and Agents change them.
-- Live cursors, Behaviors, Panels, and math typesetting (LaTeX shows as its source).
+- The viewer shows who else is in the Space (names, cursors, selections) but doesn't report its own. Cursors move with the canvas only when the next update arrives.
+- Behaviors, Panels, and math typesetting (LaTeX shows as its source).
 - An Embed's `setState` and events stay in the page; they don't sync yet.
 - The viewer runs only on the Link's computer. Reaching it from another device needs the Relay (T9).

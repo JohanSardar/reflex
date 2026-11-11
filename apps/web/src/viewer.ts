@@ -37,6 +37,7 @@ function spaces() {
 
 function open(id: string) {
   live.show(id);
+  drawHere();
   $("title").textContent = id;
   document.title = `${id} · Reflex`;
   spaces();
@@ -52,7 +53,69 @@ conn.on(({ event }) => {
   const id = want() && ids.includes(want()!) ? want()! : live.space || ids[0];
   if (id) open(id);
 });
-live.onDraw((els) => ($("count").textContent = `${els.length} Element${els.length === 1 ? "" : "s"}`));
+live.onDraw((els) => {
+  $("count").textContent = `${els.length} Element${els.length === 1 ? "" : "s"}`;
+  drawHere();
+});
+
+// Who else is here: each device in a Space, with its person's name, cursor and selection (link/here.ts).
+// Short-lived: never part of the Space.
+type Here = { device: string; space: string; person: { id: string; name: string }; name: string; cursor: [number, number] | null; selection: string[]; at: number };
+const here = new Map<string, Here>();
+const PALETTE = ["#7c3aed", "#0d9488", "#2563eb", "#ea580c", "#db2777", "#16a34a"];
+const colorOf = (person: string) => PALETTE[[...person].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 7) % PALETTE.length];
+const layer = document.createElement("div");
+layer.className = "cursors";
+live.view.world.append(layer);
+
+conn.on(({ event }) => {
+  if (event.t !== "here") return;
+  const e = event as unknown as Here & { gone?: boolean };
+  if (e.gone) here.delete(e.device);
+  else here.set(e.device, { ...e, at: Date.now() });
+  drawHere();
+});
+
+function drawHere() {
+  const now = [...here.values()].filter((h) => h.space === live.space);
+  const people = new Map(now.map((h) => [h.person.id, h.person.name || h.person.id]));
+  $("here").replaceChildren(
+    ...[...people].map(([id, name]) => {
+      const b = document.createElement("span");
+      b.className = "who";
+      b.style.background = colorOf(id);
+      b.textContent = name;
+      b.title = now.filter((h) => h.person.id === id).map((h) => h.name).join(", ");
+      return b;
+    }),
+  );
+  const byId = new Map(live.view.elements.map((e) => [e.id, e]));
+  const zoom = live.view.camera.zoom || 1;
+  layer.replaceChildren(
+    ...now.flatMap((h) => {
+      const color = colorOf(h.person.id);
+      const out: HTMLElement[] = [];
+      for (const id of h.selection) {
+        const b = (byId.get(id) as { bounds?: number[] } | undefined)?.bounds;
+        if (!b) continue;
+        const r = document.createElement("div");
+        r.className = "picked";
+        Object.assign(r.style, { left: `${b[0] - 4}px`, top: `${b[1] - 4}px`, width: `${b[2] + 8}px`, height: `${b[3] + 8}px`, borderColor: color });
+        out.push(r);
+      }
+      if (h.cursor) {
+        const c = document.createElement("div");
+        c.className = "cursor";
+        // Constant size on screen, whatever the zoom.
+        Object.assign(c.style, { left: `${h.cursor[0]}px`, top: `${h.cursor[1]}px`, transform: `scale(${1 / zoom})` });
+        c.innerHTML = `<div class="dot" style="background:${color}"></div><div class="label" style="background:${color}"></div>`;
+        (c.lastChild as HTMLElement).textContent = h.person.name || h.person.id;
+        out.push(c);
+      }
+      return out;
+    }),
+  );
+}
 
 if (!key) {
   status.textContent = "No key";

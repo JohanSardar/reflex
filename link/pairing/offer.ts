@@ -101,6 +101,8 @@ export function parseOffer(uri: string): ParsedOffer {
     return v;
   };
   if (g("v") !== "0") throw new Error(`Pairing code version ${g("v")} is not supported.`);
+  // The person comes last in the code, so a code cut short shows here: a damaged ID, or no name after it.
+  if (!/^p_[0-9a-f]{12}$/.test(g("pi")) || u.searchParams.get("pn") === null) throw new Error("The pairing code is cut short. Copy the whole code.");
   return {
     offer: g("o"),
     device: g("d"),
