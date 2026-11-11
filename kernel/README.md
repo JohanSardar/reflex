@@ -28,13 +28,28 @@ freeze_send(person, device, raw_json, now_ms) -> frozen Send JSON    send(send_i
 save() -> bytes   heads() -> JSON   changes_since(heads_json) -> bytes   receive(bytes)
 sync_message(peer) -> bytes?   receive_sync_message(peer, bytes)   reset_sync(peer)
 receive_sync_message_checked(peer, bytes, writers_json) -> {"ok":true} or {"ok":false,"reason":"not_yours","errors":[...]}
+marks(send_id, query_json) -> {send, marks}  timeline(query_json) -> {entries}
+revert(by_json, request_id, selector_json, now_ms) -> result JSON
+request_attention(agent, json, now_ms) -> result JSON
 ```
+
+- `freeze_send` takes the raw Send a device writes
+  ([raw-send](../protocol/schema/raw-send.schema.json)): the strokes, the
+  person's words with times, handwriting hints, crops, and for a Behavior
+  trigger the `element` and `on`. A trigger whose actions are only `notify` is
+  a `tap`, one with a `send` action a full Send that claims strokes, anything
+  else an `action` the Link runs and no Agent receives.
+- `apply_user_intent` also takes `{intent: "add_file", …}`: a photo becomes an
+  image Element, each rendered PDF page another, and any other file a `file`
+  Element.
 
 - **Owners** are `person:<id>` or `agent:<id>` (ADR-0008). They come from the caller's authenticated context and never from the batch.
 - **Agent IDs are scoped to the Agent.** Claude's `n-auth` is stored as `claude/n-auth`. Claude sees it as `n-auth`; everyone else sees `claude:n-auth` (`/` is not in the protocol's ID alphabet). Both forms resolve.
 - **Agents change only their own Elements** and never a person's Ink. Only the person who drew a stroke can change or erase it.
 - **A batch is one atomic Automerge change.** Rejection is all or nothing and lists every failing op, each with a `fix`. Retrying the same request returns the first result. Reusing a request ID with different ops is rejected. The same request accepted on two replicas merges into one Element.
 - **Undo is per person, across devices.** History is one flat map keyed `<person>|<time>|<entry>`. Undo only reverts a field if it still holds the value that person wrote, so it never overwrites someone else's later change. A new action ends that person's redo chain: their undone entries become `abandoned` and are never redone.
+- **Marks are computed at the Send's frontier.** `marks` groups the Send's strokes by time and place (a handwriting hint groups first), classifies each group (circle, arrow, strike, underline, cross, check, writing, ink), anchors it to the Elements it touches, and notes a target that moved or was removed since.
+- **Revert replays inverses, newest first.** An Agent reverts only its own batches; a person reverts any Agent's from the history chip. A field someone changed after the batch stays as they left it, and the result says so. Reverted state is derived from batch and history records, so no new root map is needed.
 - **`freeze_send`** pins the frontier and, in the same commit, claims the person's strokes and changes since their last Send. A frozen Send never changes. Freezing the same ID again returns the stored record.
 - **Received changes are checked before they apply.** `receive_sync_message_checked` applies a peer's changes to a fork, compares the state before and after, and applies them for real only if every difference is one the peer may write. `writers_json` says for whom: `{"people":["p_1"]}` for an iPad, `{"people":["p_1"],"agents":"*"}` for a Link that hosts Agents, `{"any":true}` to trust everything. A person's Ink changes only by that person; an Element's owner, type and ID never change; a Send must come from a writing person and never changes; `meta` never changes. Otherwise nothing is applied, and the errors say which change was refused.
 - **Text is collaborative and indexed in UTF-16.** A connector's two ends, an Element's bounds and a stroke's geometry are each stored as one atomic value (ARCHITECTURE §7.1).

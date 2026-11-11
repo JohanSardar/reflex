@@ -10,7 +10,7 @@ without it, every call answers `unavailable` and says to run `reflex link`.
 ```
 claude / codex ──MCP stdio──▶ reflex mcp ─┐                                     ┌▶ kernel (WASM): durable Spaces (SQLite journal)
 claude / codex ──shell──────▶ reflex …   ─┴─ agent.sock + rpc.key + credential ─▶ Link: Core ─┼▶ durable Inbox, assets
-                                                                                └▶ SvgRenderer (look, Send crops)
+                                                                                └▶ SvgRenderer (headless look, Send crops)
 ```
 
 The first time an Agent calls, the Link asks the person: Allow on the iPad, or
@@ -19,15 +19,27 @@ sees no Space content until it is approved.
 
 - `src/protocol.ts`: the 11 tools, their text from `protocol/tool-text`,
   their schemas from `protocol/generated/tools`, and Ajv validators.
-  Six tools work here: `list_spaces`, `open_space`, `read`, `look`, `apply`
-  and `wait_for_user`. The rest return `unavailable` ("not yet available").
+  All eleven work on both surfaces; the CLI names them in `reflex --help`
+  (`read_me` is `reflex docs read`, `recipe` is `reflex recipes apply`,
+  `exec` is `reflex elements exec`, `revert` is `reflex elements revert`,
+  `request_attention` is `reflex spaces attention`).
 - `src/capabilities/`: the capability table, one implementation behind both
   surfaces. `normalize.ts` repairs common op mistakes before validating.
-  `bundle.ts` projects a frozen Send into a Send Bundle.
+  `bundle.ts` projects a frozen Send into a Send Bundle: the kernel's Marks
+  (`Space.marks`), the transcript with each Mark's ID where it was drawn,
+  crops, the person's changes and added files. `index.ts` also runs the
+  `set` and `apply_recipe` Behavior actions as the Element's owner, and plays
+  the person for `reflex dev person` on a Link started with `--dev`.
+- `src/extensions.ts`: the Guides and Recipes `read_me` and `recipe` serve,
+  from [extensions/](../extensions/) and the person's Library. Element type
+  Guides are built from the protocol schema.
+- `src/exec.ts`: the `exec` sandbox (QuickJS in WebAssembly, no clock,
+  network or files, 5 s and 64 MB).
 - `src/store.ts`: the §6 interfaces (`SpaceStore`, `Inbox`, `Assets`). The
   Link implements them on its storage.
-- `src/render.ts`: the `Renderer` interface and a basic SVG→PNG renderer
-  (resvg). The full headless renderer is T8.
+- `src/render.ts`: the `Renderer` interface and the headless SVG→PNG
+  renderer (resvg) `look` uses without an iPad: pictures from the asset
+  store, Ink with pressure, Markdown headings and lists, file cards.
 - `src/host/`: the local RPC (newline-delimited JSON over
   `$REFLEX_HOME/agent.sock`, with the Link's 0600 `rpc.key`): `client.ts` for
   the surfaces, `server.ts` for the Link. Each Agent also presents a
@@ -97,8 +109,7 @@ taken from the client's `clientInfo`. A CLI Agent is called "Codex CLI · …",
 
 - An Element an answer adds without `at` (apply with `in_reply_to`) is placed
   next to the Send's first Mark, as `at: {near: "m1"}` would.
-- The CLI adds a `file` path to `look` results and to Send Bundle images,
-  because a shell can't receive image blocks.
-- Agent Element IDs are kept as `<agent>/<id>` in the kernel and shown to
-  other Agents as `<agent>:<id>`, because `/` is not allowed by the protocol's
-  ID pattern.
+- The CLI adds a `file` path to `look` results, Send Bundle images and
+  files `read` returns, because a shell can't receive image or file blocks.
+  The schemas list it as CLI-only.
+- MCP returns a non-text file from `read` as an embedded resource block.

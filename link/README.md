@@ -37,6 +37,8 @@ The Link runs in its terminal. Enter shows a new pairing code; when an Agent ask
 - **Pairing:** the QR code carries the offering device's key, a single-use secret valid for 10 minutes, its addresses, and its person. A device that holds nothing yet becomes that person's device (ADR-0008).
 - **One path per peer.** If both sides dial at once, both keep the path dialed by the lower device ID. Sync state is reset on every new binding, so anti-entropy runs after each reconnect.
 - **Agent approval.** Agents reach the Link on `agent.sock` with `rpc.key` and a credential they keep (`agents/*.cred`, 0600). The first time, the Link asks the person: Allow on an iPad that paired by scanning this Link's code, or `y` in the Link's terminal. Nothing else can approve: the admin RPC (`admin.key`) can deny or revoke but never approve, and another Link can't decide either. The Agent sees no Space content until it is approved. The decision is kept in the signed control catalog against the credential's hash, and records whose signature doesn't verify are ignored.
+- **Routing.** A Send goes to the Agent that owns the Element or Region it came from, else to the Agents that own what its Marks point at, else to every Agent on the Space ([routing.ts](routing.ts)). A Behavior trigger with only `set`, `apply_recipe` or `open_panel` reaches no Agent: the Link runs `set` and `apply_recipe` itself, as the Element's owner, once (each action has a fixed request ID).
+- **Re-asking is throttled.** After the person denies or revokes an Agent, its calls answer `rate_limited` for 10 minutes (`REFLEX_REASK_S`) before it may ask again.
 - **Received changes are checked.** The kernel tries a peer's changes on a fork first and applies them only if that peer may make them: an iPad writes only as its person (its own Ink, its Sends, its removals), a paired Link also on behalf of Agents. A rejected message is logged and the session is closed. The Agent layer writes as each Agent through the kernel's own checks.
 
 ## Not here yet
@@ -44,4 +46,4 @@ The Link runs in its terminal. Enter shows a new pairing code; when an Agent ask
 - The `dev` commands (with `--dev`) act as the person without an iPad, for testing.
 - The check on received changes knows people and Agents but not roles; roles come with T22.
 - Approval can't be given through any Reflex command, but a local process running as your OS user can still read the Link's files (`identity.json`, `link.db`) or its terminal. OS-level separation, and the platform credential stores, come later.
-- Fastest-path selection waits for a second transport (T11). The fault-injection transport and the headless renderer aren't built yet.
+- Fastest-path selection waits for a second transport (T11). The fault-injection transport isn't built yet.

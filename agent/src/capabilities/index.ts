@@ -1,7 +1,7 @@
 // The capability table (ADR-0003): every tool exists exactly once, here. The
 // MCP server and the CLI are thin surfaces over `Core.call`, so the two can't
 // drift apart.
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { IMPLEMENTED, TOOLS, explain, inputSchema, validateError, validateInput, validateOutput, type ProtocolError, type Tool } from "../protocol.ts";
 import type { Renderer, SceneElement } from "../render.ts";
 import type { Assets, Bounds, FrozenSend, Inbox, SpaceEntry, SpaceStore } from "../store.ts";
@@ -726,8 +726,11 @@ export class Core {
     if (!frozen?.actions?.length || !agent || !frozen.element) return;
     const who: Identity = { agent, name: this.#names.get(agent) ?? agent, color: this.#colors.get(agent) ?? "blue" };
     const element = frozen.element.startsWith(`${agent}/`) ? frozen.element.slice(agent.length + 1) : frozen.element;
+    // Each action is one batch with a fixed request ID, so one already in the Space (say, before a restart) is skipped.
+    const done = new Set<string>(JSON.parse(entry.space.timeline(JSON.stringify({ limit: 1_000_000 }))).entries.map((e: { id?: string }) => e.id));
     for (const [i, b] of frozen.actions.entries()) {
       const request = `${send}.b${i}`;
+      if (done.has(batchId(agent, request))) continue;
       let r: Result | undefined;
       if (b.do === "set") r = await this.call("apply", { space, request, ops: [{ op: "patch", id: b.target ?? element, set: b.set }] }, { who });
       else if (b.do === "apply_recipe") r = await this.call("recipe", { space, request, name: b.recipe, params: b.params ?? {}, at: { near: element } }, { who });
@@ -739,6 +742,8 @@ export class Core {
 
   /** What the person said since their last Send, word by word with times, and handwriting hints. */
   #said = new Map<string, { text: string; start_ms: number; end_ms: number }[]>();
+  /** When the dev person last finished a stroke, by Space. */
+  #inkAt = new Map<string, number>();
   #hints = new Map<string, { strokes: string[]; text: string; confidence: number }[]>();
 
   #findForPerson(entry: SpaceEntry, id: string): SceneElement {
@@ -765,6 +770,7 @@ export class Core {
     // A real Pencil stroke carries time and pressure: [x, y, t, pressure].
     const timed = points.map((p, i) => [p[0], p[1], i * 8, 0.6]);
     this.#intent(entry, { intent: "add_stroke", id, stroke: { points: timed, width: o.width ?? 3 }, color: o.color ?? "red" });
+    this.#inkAt.set(entry.name, Date.now());
     return { id };
   }
 
@@ -859,11 +865,12 @@ export class Core {
   personSay(space: string, text: string) {
     const entry = this.#entry(space);
     const list = this.#said.get(entry.name) ?? [];
-    let t = Date.now();
-    for (const w of text.split(/\s+/).filter(Boolean)) {
-      list.push({ text: w, start_ms: t, end_ms: t + 220 });
-      t += 260;
-    }
+    // The words were just spoken: they end now, so what is drawn next comes after them.
+    const words = text.split(/\s+/).filter(Boolean);
+    const now = Date.now();
+    const from = Math.max(now - words.length * 260, (this.#inkAt.get(entry.name) ?? 0) + 1, (list.at(-1)?.end_ms ?? 0) + 1);
+    const step = Math.max(1, (now - from) / Math.max(1, words.length));
+    words.forEach((w, i) => list.push({ text: w, start_ms: Math.round(from + i * step), end_ms: Math.round(from + (i + 1) * step) }));
     this.#said.set(entry.name, list);
     return { words: list.length };
   }
@@ -1009,4 +1016,16 @@ function renameIds(v: any, map: Map<string, string>, key?: string): any {
   if (Array.isArray(v)) return v.map((x) => renameIds(x, map, key === "ids" ? "id" : key));
   if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, renameIds(x, map, k)]));
   return v;
+}
+
+/** The batch ID the kernel gives an Agent's request (kernel/core/src/lib.rs, apply_agent_batch). */
+function batchId(agent: string, request: string): string {
+  const h = createHash("sha256");
+  for (const part of [agent, request]) {
+    const bytes = Buffer.from(part);
+    const len = Buffer.alloc(8);
+    len.writeBigUInt64LE(BigInt(bytes.length));
+    h.update(len).update(bytes);
+  }
+  return `b_${h.digest("hex").slice(0, 12)}`;
 }
