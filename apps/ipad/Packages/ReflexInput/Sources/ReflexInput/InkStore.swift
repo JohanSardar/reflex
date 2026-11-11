@@ -11,7 +11,7 @@ let inkLog = Logger(subsystem: "si.eilmer.reflex", category: "ink")
 /// comes with the round-trip ticket (T6); the whole drawing archive is never
 /// what gets synced.
 struct InkStore {
-    struct Saved: Codable {
+    struct Saved: Codable, Sendable {
         var version = 1
         var strokes: [PortableStroke]
         /// Strokes erased or undone, kept for lineage.
@@ -65,17 +65,24 @@ struct InkStore {
         }
     }
 
+    /// Writes on a serial background queue, so saves land in order and drawing
+    /// never waits on the disk.
     func save(_ drawing: PKDrawing, portable: [PortableStroke], retired: [StrokeRecord]) {
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let encoder = JSONEncoder()
-            let saved = Saved(strokes: portable, retired: retired)
-            // If the app dies between these two writes, load() still pairs the
-            // strokes both files share; only the difference gets new IDs.
-            try encoder.encode(saved).write(to: strokesURL, options: .atomic)
-            try drawing.dataRepresentation().write(to: drawingURL, options: .atomic)
-        } catch {
-            inkLog.error("Could not save Ink: \(error.localizedDescription)")
+        let archive = drawing.dataRepresentation()
+        let saved = Saved(strokes: portable, retired: retired)
+        let directory = directory, strokesURL = strokesURL, drawingURL = drawingURL
+        Self.queue.async {
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                // If the app dies between these two writes, load() still pairs the
+                // strokes both files share; only the difference gets new IDs.
+                try JSONEncoder().encode(saved).write(to: strokesURL, options: .atomic)
+                try archive.write(to: drawingURL, options: .atomic)
+            } catch {
+                inkLog.error("Could not save Ink: \(error.localizedDescription)")
+            }
         }
     }
+
+    private static let queue = DispatchQueue(label: "si.eilmer.reflex.ink-store", qos: .utility)
 }
