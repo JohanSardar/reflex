@@ -331,6 +331,8 @@ export class Link {
 
   #decide(id: string, status: Decision, by: string): AgentRecord {
     const a = this.#catalog.decide(id, status, by);
+    // The question is answered, on whichever surface: stop asking it here.
+    this.#questions = this.#questions.filter((q) => q.id !== id);
     this.#log(`Agent ${a.name} (${a.id}) ${status} by ${by}`);
     for (const w of this.#decisions.get(id) ?? []) w();
     this.#decisions.delete(id);
