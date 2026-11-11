@@ -205,12 +205,51 @@ The Link is what lets local Agents and the iPad meet. The round trip (T6) joins 
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
 
+## Step 3 ticket
+
+```md
+# Round trip: an Agent draws, you circle, the Agent answers
+
+## Goal
+Join the iPad app, the Link and the Agent layer into the first real Reflex round trip. When this is done:
+- `reflex link` (from the repo; publishing comes later) starts the Link with the Agent layer inside it. A harness connects through `reflex mcp` or the CLI to the running Link, so Agents read and write the Link's durable Spaces and Inbox instead of T4's in-memory ones.
+- The iPad app pairs with the Link (scanning the QR code, or typing the code where there is no camera, such as the Simulator), syncs Spaces with it over the local network, and talks to the Rust kernel through T2's Swift bindings.
+- The iPad draws Elements from the real Space in the Protocol v0 Element format, replacing T3's stand-in scene JSON, and shows Agent changes live as they sync.
+- When the person presses Send, the iPad freezes the Send in the kernel with its stroke IDs, viewport and the crops it rendered, and syncs it to the Link. The Link groups the strokes into Marks and finds what a circle encloses. A waiting `wait_for_user` call is released with a Send Bundle that names the circled Element's ID and includes the crop.
+
+Prove the whole loop with a real Claude Code session and the app in the iPad Simulator: the Agent draws a small graph, you circle one node and press Send, the Agent gets the Mark with that node's ID and a crop, and it answers on its own layer next to the circle, which you then see on the iPad. Then press Send once more and kill the Link right after; when the Link restarts, that Send is still delivered.
+
+This is the first time the whole product works end to end. Every scenario after it builds on this loop.
+
+## Context
+- Read docs/ARCHITECTURE.md §1–§4, §6, §7 (especially the Send state machine and marking-time evidence) and §8.1–§8.2; docs/SPEC.md §3, §5, §8, §9 and §13; docs/adr/0002 and 0008; docs/harness-notes.md; and the READMEs in agent/, link/, kernel/ and apps/ipad/.
+- What exists on main:
+  - `protocol/` (T1): schemas, examples and tool text.
+  - `kernel/` (T2): Rust kernel on Automerge with Swift (UniFFI) and WASM bindings. `freeze_send` exists; Mark grouping and Anchor resolution don't yet.
+  - `apps/ipad/` (T3): PencilKit Ink with stable stroke IDs, Goodnotes-style eraser and undo, an Element renderer on stand-in scene JSON, and a Send button. It targets iPadOS 26.
+  - `agent/` (T4): MCP and CLI surfaces for `open_space`, `apply`, `read`, `look` and `wait_for_user`, running on an in-memory Space and Inbox behind storage interfaces. Codex cuts MCP calls at 300 s, so waits are held for at most 280 s there.
+  - `link/` (T5): durable SQLite journal and Inbox, LAN sync over Bonjour and TCP, QR pairing with encrypted connections, Agent approval. Its `dev` subcommands stand in for the iPad and an Agent.
+- Carried over from earlier tickets (docs/TICKETS.md, "Follow-ups"):
+  - The kernel doesn't check authorization on changes it receives from peers, so a paired device is trusted for everything it sends. Check owners and roles on received changes at the writer's frontier (ARCHITECTURE §7.2).
+  - `link/`'s `admin.key` is readable by the user's account, so a local Agent with shell access could read it and approve itself. Close that.
+- A circle around one Element is enough Mark recognition here. Arrows, strikethrough and writing come in T7 and T8.
+- Drive the Simulator with T3 Code's device tools so the user can watch. Claude Code is installed on this machine.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
 
 - **T6:** move the iPad's Element drawing from T3's stand-in scene JSON onto the Protocol v0 Element format.
 - **T6:** the kernel doesn't check authorization on changes it receives from peers yet (T2).
+- **T6:** `link/admin.key` is readable by the user's account, so a local Agent with shell access could approve itself (T5).
+- **T11:** the fault-injection transport isn't built (T5).
 - **T8:** T4 review items left open: Mark IDs are looked up per Agent, not per Space (S3); result indexes are off when a `define` op comes first (S5); a Space can't be named `library` and the error doesn't say why (S7); an `add` with type `ink` or `file` reports a missing type (S8).
 - **T8:** `read_me` and `recipe` aren't built, but the server instructions tell Agents to call `read_me` first.
 - **T8:** the CLI adds a `file` path to images that the schema has no field for. Agent Element IDs show to other Agents as `agent:id`, because the protocol's ID pattern doesn't allow `/`.
