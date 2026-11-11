@@ -31,7 +31,7 @@
   ],
   "$defs": {
     "anchor": {
-      "description": "Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x and y; dom uses selector; part uses part; line uses line; local uses bounds. label is the Embed's or recognizer's short description.",
+      "description": "Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x and y; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description.",
       "type": "object",
       "properties": {
         "kind": {
@@ -106,6 +106,18 @@
           "type": "string",
           "maxLength": 256
         },
+        "parts": {
+          "description": "part: every part the Mark covers, the one in part first.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "maxItems": 100
+        },
+        "camera": {
+          "$ref": "#/$defs/camera"
+        },
         "line": {
           "description": "line: the 1-based line of a math or text Element.",
           "type": "integer",
@@ -145,6 +157,31 @@
       ],
       "items": false,
       "minItems": 4
+    },
+    "camera": {
+      "description": "part: how the person was looking at the 3D model when they drew the Mark. yaw and pitch are degrees around the model's center (yaw 0, pitch 0 looks at its front, +Z; yaw 90 from its right, +X; pitch 90 from above); zoom 1 fits the whole model. position and target are in the model's own units, and fov is the vertical field of view in degrees.",
+      "type": "object",
+      "properties": {
+        "yaw": {
+          "type": "number"
+        },
+        "pitch": {
+          "type": "number"
+        },
+        "zoom": {
+          "type": "number"
+        },
+        "position": {
+          "$ref": "#/$defs/vec3"
+        },
+        "target": {
+          "$ref": "#/$defs/vec3"
+        },
+        "fov": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
     },
     "change": {
       "description": "One thing the person changed since their last Send. kind picks which other fields apply: moved uses by; resized uses was_bounds; edited uses text; removed uses was; panel uses panel and values; embed_state uses state; added_file uses file, mime and image or pages. A photo or PDF page comes as an image; any other file is read with read(ids: [id], detail: 'full').",
@@ -641,6 +678,23 @@
       "description": "An Element ID or a Mark ID from a Send Bundle.",
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$"
+    },
+    "vec3": {
+      "description": "[x, y, z] in a 3D model's own units.",
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "items": false,
+      "minItems": 3
     }
   }
 }

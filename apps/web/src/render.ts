@@ -104,6 +104,8 @@ const dashOf = (stroke?: string) => (stroke === "dashed" ? "10 6" : stroke === "
 export interface ViewHooks {
   /** An Embed's live content: an iframe the caller builds, or undefined for a placeholder. */
   embed?: (e: El) => HTMLElement | undefined;
+  /** A 3D Embed whose parameters or state changed, told in place so its camera stays. */
+  embedUpdate?: (e: El) => void;
   /** An object URL for an asset's bytes. */
   asset?: (hash: string) => Promise<string | undefined>;
 }
@@ -136,7 +138,9 @@ export class SceneView {
     sorted.forEach((e, i) => {
       if (e.type === "connector" || e.type === "ink") return;
       seen.add(e.id);
-      const sig = JSON.stringify(e);
+      // A 3D Embed keeps its page (and the person's camera) when only its params or state change.
+      const live3d = e.type === "embed" && typeof e.model === "string";
+      const sig = live3d ? JSON.stringify({ ...e, params: undefined, state: undefined }) : JSON.stringify(e);
       let have = this.#nodes.get(e.id);
       if (!have || have.sig !== sig) {
         const node = this.#node(e);
@@ -146,6 +150,7 @@ export class SceneView {
         this.#nodes.set(e.id, have);
       }
       have.node.style.zIndex = String(i);
+      if (live3d) this.#hooks.embedUpdate?.(e);
     });
     for (const [id, n] of this.#nodes) if (!seen.has(id)) (n.node.remove(), this.#nodes.delete(id));
 
