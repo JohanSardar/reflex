@@ -1,0 +1,31 @@
+{
+  "name": "Undo covers one person's own actions across their devices, and nobody else's",
+  "space": "shared",
+  "replicas": ["ana-ipad", "ana-mac", "ben-ipad"],
+  "steps": [
+    { "on": "ana-ipad", "person": "p_ana", "device": "ana-ipad", "intent": { "intent": "add_stroke", "id": "s-ana-1", "stroke": { "points": [[0, 0], [10, 10]] } }, "expect": { "ok": true } },
+    { "on": "ben-ipad", "person": "p_ben", "device": "ben-ipad", "intent": { "intent": "add_stroke", "id": "s-ben-1", "stroke": { "points": [[50, 50], [60, 60]] } }, "expect": { "ok": true } },
+    { "sync": ["ana-ipad", "ana-mac", "ben-ipad"] },
+    { "on": "ana-mac", "person": "p_ana", "device": "ana-mac", "intent": { "intent": "add", "id": "t-ana", "type": "text", "text": "hello", "at": { "x": 0, "y": 100 } }, "expect": { "ok": true } },
+    { "sync": ["ana-ipad", "ana-mac", "ben-ipad"] },
+
+    { "on": "ana-ipad", "person": "p_ana", "device": "ana-ipad", "intent": { "intent": "undo" }, "expect": { "ok": true } },
+    { "sync": ["ana-ipad", "ana-mac", "ben-ipad"] },
+    { "converged": true },
+    { "on": "ben-ipad", "expect_absent": ["t-ana"] },
+    { "on": "ben-ipad", "expect_present": ["s-ana-1", "s-ben-1"] },
+
+    { "on": "ana-ipad", "person": "p_ana", "device": "ana-ipad", "intent": { "intent": "undo" }, "expect": { "ok": true } },
+    { "on": "ben-ipad", "person": "p_ben", "device": "ben-ipad", "intent": { "intent": "erase", "ids": ["s-ana-1"] }, "expect": { "ok": false, "code": "not_yours" } },
+    { "sync": ["ana-ipad", "ana-mac", "ben-ipad"] },
+    { "converged": true },
+    { "on": "ben-ipad", "expect_absent": ["s-ana-1", "t-ana"] },
+    { "on": "ben-ipad", "expect_present": ["s-ben-1"] },
+
+    { "on": "ana-mac", "person": "p_ana", "device": "ana-mac", "intent": { "intent": "redo" }, "expect": { "ok": true } },
+    { "sync": ["ana-ipad", "ana-mac", "ben-ipad"] },
+    { "converged": true },
+    { "on": "ben-ipad", "expect_present": ["s-ana-1", "s-ben-1"] },
+    { "on": "ben-ipad", "expect_absent": ["t-ana"] }
+  ]
+}
