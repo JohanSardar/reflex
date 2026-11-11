@@ -309,8 +309,7 @@ export class Link {
     if (this.#opts.prompt && process.stdin.isTTY) this.#terminal();
   }
 
-  /** LAN, and Apple peer-to-peer Wi-Fi where it can run; each wrapped for fault injection if asked. */
-  /** Wraps the transports in fault injection when the Link was started with --fault. */
+  /** Wraps the transports (LAN, peer-to-peer Wi-Fi where it runs, Relay) in fault injection when the Link was started with --fault. */
   #faulty(list: Transport[]): Transport[] {
     if (this.#opts.fault === undefined) return list;
     const faults = parseFaults(this.#opts.fault);
