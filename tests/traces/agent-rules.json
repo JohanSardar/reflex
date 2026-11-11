@@ -1,0 +1,23 @@
+{
+  "name": "Agents never change a person's Ink; the same request over two paths lands once",
+  "space": "rules",
+  "replicas": ["ipad", "link", "relay"],
+  "steps": [
+    { "on": "ipad", "person": "p_ana", "device": "ipad-1", "intent": { "intent": "add_stroke", "id": "ink-41", "stroke": { "points": [[0, 0], [40, 40]] } }, "expect": { "ok": true } },
+    { "sync": ["ipad", "link", "relay"] },
+    { "on": "link", "agent": "claude", "request": "r1", "batch": { "ops": [ { "op": "remove", "ids": ["ink-41"] } ] }, "expect": { "ok": false, "code": "not_yours" } },
+    { "on": "link", "agent": "claude", "request": "r2", "batch": { "ops": [ { "op": "patch", "id": "ink-41", "set": { "x": 5 } } ] }, "expect": { "ok": false, "code": "not_yours" } },
+
+    { "on": "link", "agent": "claude", "request": "r3", "batch": { "ops": [ { "op": "add", "id": "n1", "type": "note", "text": "Hi", "at": { "near": "ink-41" } } ] }, "expect": { "ok": true } },
+    { "on": "relay", "agent": "claude", "request": "r3", "batch": { "ops": [ { "op": "add", "id": "n1", "type": "note", "text": "Hi", "at": { "near": "ink-41" } } ] }, "expect": { "ok": true } },
+    { "on": "relay", "agent": "codex", "request": "r1", "batch": { "ops": [ { "op": "add", "id": "n1", "type": "note", "text": "Codex here", "at": { "x": 0, "y": 200 } } ] }, "expect": { "ok": true } },
+    { "sync": ["ipad", "link", "relay"] },
+    { "converged": true },
+    { "on": "ipad", "expect_present": ["ink-41", "claude/n1", "codex/n1"] },
+    { "on": "ipad", "expect_count": 3 },
+
+    { "on": "link", "agent": "claude", "request": "r3", "batch": { "ops": [ { "op": "add", "id": "n1", "type": "note", "text": "Hi", "at": { "near": "ink-41" } } ] }, "expect": { "ok": true, "duplicate": true } },
+    { "on": "link", "agent": "claude", "request": "r3", "batch": { "ops": [ { "op": "add", "id": "n2", "type": "note" } ] }, "expect": { "ok": false, "code": "request_reused" } },
+    { "on": "link", "agent": "codex", "request": "r2", "batch": { "ops": [ { "op": "patch", "id": "claude/n1", "set": { "text": "mine now" } } ] }, "expect": { "ok": false, "code": "not_yours" } }
+  ]
+}
