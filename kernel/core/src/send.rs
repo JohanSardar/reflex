@@ -350,7 +350,8 @@ pub fn freeze(
     }
     let text = record.to_string();
     tx.put(&sends, send_id, text.as_str())?;
-    for s in &strokes {
+    // A watch snapshot shows strokes without claiming them; the Region's Send does.
+    for s in strokes.iter().filter(|_| claiming) {
         tx.put(&claims, format!("stroke:{s}"), send_id)?;
     }
     for e in &entries {

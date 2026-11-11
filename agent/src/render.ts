@@ -12,6 +12,8 @@ const FONT_FILES = [
   "/System/Library/Fonts/Helvetica.ttc",
   "/System/Library/Fonts/Supplemental/Arial.ttf",
   "/System/Library/Fonts/Supplemental/Times New Roman Italic.ttf",
+  // Fallback for symbols the faces above lack, such as the ✓ and ✗ of margin marks.
+  "/System/Library/Fonts/ZapfDingbats.ttf",
   "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
   "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Italic.ttf",
 ].filter((f) => existsSync(f));
@@ -186,7 +188,7 @@ function inkSvg(pts: number[][], color: string, width: number): string {
 const SUP: Record<string, string> = { 0: "⁰", 1: "¹", 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶", 7: "⁷", 8: "⁸", 9: "⁹", "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾", n: "ⁿ", i: "ⁱ", x: "ˣ" };
 const SUB: Record<string, string> = { 0: "₀", 1: "₁", 2: "₂", 3: "₃", 4: "₄", 5: "₅", 6: "₆", 7: "₇", 8: "₈", 9: "₉", "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎", a: "ₐ", e: "ₑ", i: "ᵢ", n: "ₙ", x: "ₓ" };
 const SYMBOLS: Record<string, string> = {
-  cdot: "·", times: "×", div: "÷", pm: "±", mp: "∓", le: "≤", leq: "≤", ge: "≥", geq: "≥", ne: "≠", neq: "≠", approx: "≈", equiv: "≡",
+  checkmark: "✓", cross: "✗", cdot: "·", times: "×", div: "÷", pm: "±", mp: "∓", le: "≤", leq: "≤", ge: "≥", geq: "≥", ne: "≠", neq: "≠", approx: "≈", equiv: "≡",
   to: "→", rightarrow: "→", Rightarrow: "⇒", infty: "∞", sum: "∑", prod: "∏", int: "∫", partial: "∂", nabla: "∇", degree: "°", circ: "°",
   alpha: "α", beta: "β", gamma: "γ", delta: "δ", Delta: "Δ", epsilon: "ε", varepsilon: "ε", theta: "θ", lambda: "λ", mu: "μ", pi: "π",
   rho: "ρ", sigma: "σ", Sigma: "Σ", tau: "τ", phi: "φ", varphi: "φ", omega: "ω", Omega: "Ω", ldots: "…", cdots: "⋯", quad: "  ", qquad: "    ",
@@ -203,7 +205,8 @@ export function latexText(src: string): string {
     t = t
       .replace(new RegExp(String.raw`\\[dt]?frac\s*${group}\s*${group}`, "g"), (_, a, b) => `(${/^\w+$/.test(a) ? a : `(${a})`}/${/^\w+$/.test(b) ? b : `(${b})`})`)
       .replace(new RegExp(String.raw`\\sqrt\s*${group}`, "g"), (_, a) => `√${/^\w+$/.test(a) ? a : `(${a})`}`)
-      .replace(new RegExp(String.raw`\\(?:text|mathrm|mathbf|mathit|operatorname)\s*${group}`, "g"), "$1");
+      .replace(new RegExp(String.raw`\\(?:text|mathrm|mathbf|mathit|operatorname)\s*${group}`, "g"), "$1")
+      .replace(new RegExp(String.raw`\\(?:color|textcolor)\s*${group}`, "g"), "");
   }
   const script = (map: Record<string, string>, body: string, mark: string) => ([...body].every((c) => map[c]) ? [...body].map((c) => map[c]).join("") : `${mark}(${body})`);
   t = t
