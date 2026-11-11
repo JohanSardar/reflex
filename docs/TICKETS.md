@@ -424,6 +424,33 @@ Prove it with a real Claude Code session: the person sends while Claude is idle,
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
 
+```md
+# Deploy the Relay to relay.eilmer.si
+
+## Goal
+Run the official Relay on Cloudflare at `relay.eilmer.si`, so cloud Agents and devices away from home can reach a Space. When this is done:
+- The T9 Worker, its Durable Objects and its R2 bucket are deployed to the user's Cloudflare account, served at `https://relay.eilmer.si` (the `eilmer.si` zone is already active on that account).
+- Remote MCP over OAuth works at that address: a real cloud Agent signs in, a device issues a grant for one Space, and the Agent reads and answers a Send.
+- The Link and the iPad sync through the deployed Relay, and the Relay URL they use by default is `relay.eilmer.si` (a self-hosted URL still works).
+- Secrets live in Cloudflare (`wrangler secret`), never in the repo; a short deploy guide in `relay/README.md` says how to redeploy and how to self-host instead.
+
+Prove it from outside the LAN: an iPad Simulator or Link reaching a cloud Claude Code session through `relay.eilmer.si`, with the same steps T9 ran locally.
+
+## Context
+- Read docs/adr/0004 and 0008; docs/SPEC.md §3 and §13; docs/ARCHITECTURE.md §2 (the `relay` unit), §6 and §8.4; `relay/README.md` and the T9 PR (#10) description.
+- What exists on main: everything through T9, T8 and T10. T9 ran only on `wrangler dev` and the Node Relay.
+- `wrangler` on this Mac is already logged in to the user's account with an OAuth token; use it. Don't create new Cloudflare accounts or change billing. If a Cloudflare product needs a paid plan or a dashboard toggle you can't make from wrangler, stop and report exactly what's needed.
+- Carried over (docs/TICKETS.md, "Follow-ups"): a Space above about 2,000 strokes doesn't fit in a Worker's 128 MB and gets a 507 pointing to a self-hosted Relay (T9). Keep that behavior; check it on the deployed Worker.
+- T7, T13 and T15 run at the same time. You own `relay/` and the Relay URL default; keep other changes small.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+- Leave the deployment running when you're done; remove any test grants and test Spaces you created on it.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
@@ -439,5 +466,5 @@ Found while building earlier tickets. Each goes into the named ticket's brief.
 - **T16:** Embed state changes don't sync yet (T10). **T20:** Library entries can't be renamed or deleted yet; `read_me(<type>)` returns `unknown_topic` for Element types listed in the index; example values for a number with maximum below 1 come out as 1; the web viewer says "Offline, retrying" after a 401 (T10).
 - **T15:** tap actions on a revoked Agent's Elements still run its `set` and `apply_recipe`, because the runner doesn't check approval; `wait_for_user(element:)` misses taps whose action is `send`; `request_attention` never reports that the person is already viewing that Space (T8). **T13:** nothing caps how many Elements one Mark lists, and Marks re-fork the Space once per Mark (T8).
 - **Codex:** its usage limit ran out until 2026-11-12 13:06, so T8's scenario 1 was proven in Claude Code only; recheck in Codex in a later ticket.
-- **T9:** check the kernel WASM (3.77 MB) against Workers' 128 MB with a real Space.
+- **T9 (done):** a Space above about 2,000 strokes doesn't fit in a Worker's 128 MB (the kernel loads the whole document, peaking near 3x its size). The Worker answers 507 and points to a self-hosted Relay. Moving cloud execution to a separate service (ADR-0004) or loading less in the kernel is open.
 - **Real iPad pass:** three-finger redo, Pencil double-tap and squeeze. Native WWDC26 stroke IDs need Xcode 27 (the app targets iPadOS 26 for now).
