@@ -29,8 +29,9 @@ const MIN_GAP_MS = env("REFLEX_WATCH_MIN_S", 8) * 1000;
 const PER_HOUR = env("REFLEX_WATCH_PER_HOUR", 60);
 
 type State = {
-  /** The person's strokes in the Region at the last snapshot, and when the Space last changed. */
+  /** The person's strokes in the Region at the last snapshot. */
   shown: string;
+  /** The Region's Ink at the last change: only a difference here restarts the timer. */
   seen: string;
   /** When the person last changed the Region's Ink, and when the first change not yet shown was. */
   lastChange: number;
