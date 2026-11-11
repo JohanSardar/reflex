@@ -11,8 +11,9 @@ v0 is a draft. It becomes v1 when it is published with conformance profiles (T21
 | `schema/` | JSON Schema 2020-12, the source of truth. One `<tool>.input` and `<tool>.output` per tool, plus the shared shapes below. |
 | `examples/` | One correct example per message, written by hand. `<schema>.json` or `<schema>.<variant>.json`. |
 | `tool-text/` | `instructions.md` (the server instructions, always loaded, under about 400 tokens) and one description per tool. Hand-written, never generated from the schemas. |
-| `generated/` | Self-contained copies of the tool, error, Element and Send Bundle schemas with every `$ref` inlined, for surfaces that need one document per schema (an MCP tool's `inputSchema`). Don't edit; run `pnpm build`. |
+| `generated/` | Self-contained copies of the tool, error, Element and Send Bundle schemas with every `$ref` inlined, for surfaces that need one document per schema (an MCP tool's `inputSchema`), and `rust/protocol.rs`, the kernel's serde types. Don't edit; run `npm run build -w @reflex/protocol`. |
 | `scripts/check.mjs` | Compiles every schema, enforces the rules below, validates the examples, and checks `generated/`. |
+| `scripts/gen-rust.mjs` | Generates `generated/rust/protocol.rs` from the schemas: one struct or enum per object, enum and `oneOf`, with each union's variant picked by its `const` fields. |
 
 Shared schemas:
 
@@ -29,12 +30,13 @@ The eleven tools are fixed (SPEC §11): `list_spaces`, `open_space`, `read`, `lo
 
 ## Check
 
+`protocol/` is part of the root npm workspace.
+
 ```sh
-cd protocol
-pnpm install
-pnpm check       # schemas compile, rules hold, examples validate, generated/ is current
-pnpm build       # rewrite generated/ after a schema change
-pnpm typecheck
+npm install                              # at the repo root
+npm run check -w @reflex/protocol        # schemas compile, rules hold, examples validate, generated/ is current
+npm run build -w @reflex/protocol        # rewrite generated/ (including the kernel's Rust types) after a schema change
+npm run typecheck -w @reflex/protocol
 ```
 
 ## Schema rules (ARCHITECTURE §9)
@@ -65,6 +67,6 @@ Semver (ARCHITECTURE §11). A minor version adds optional fields, enum values or
 
 ## For the tickets building on this
 
-- **Kernel (T2):** generate the serde types from `schema/`. `element` is a union tagged by `type` (`#[serde(tag = "type")]`), with `extension` as the fallback for any other type name. Unknown extension `props` are kept as raw JSON.
+- **Kernel (T2):** the serde types are generated from `schema/` (`scripts/gen-rust.mjs`). `element` is a union tagged by `type` (`#[serde(tag = "type")]`), with `extension` as the fallback for any other type name. Unknown extension `props` are kept as raw JSON.
 - **iPad canvas (T3):** `examples/read.output.full.json` is a scene with every built-in type to draw from.
 - **Agent layer (T4):** register each tool with `tool-text/<tool>.md` as its description and `generated/tools/<tool>.input.json` as its `inputSchema`; send `tool-text/instructions.md` as the server instructions.

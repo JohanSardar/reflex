@@ -221,7 +221,7 @@ for (const [path, text] of generated) {
     mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, text);
   } else if (!existsSync(full) || readFileSync(full, "utf8") !== text) {
-    fail(`generated/${path} is stale; run: pnpm build`);
+    fail(`generated/${path} is stale; run: npm run build -w @reflex/protocol`);
   }
 }
 

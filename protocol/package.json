@@ -5,13 +5,14 @@
   "description": "Reflex Protocol v0: JSON Schemas, examples and hand-written tool text.",
   "type": "module",
   "scripts": {
-    "check": "node scripts/check.mjs",
-    "build": "node scripts/check.mjs --write",
-    "typecheck": "tsc -p ."
+    "check": "node scripts/check.mjs && node scripts/gen-rust.mjs",
+    "build": "node scripts/check.mjs --write && node scripts/gen-rust.mjs --write",
+    "typecheck": "tsc -p .",
+    "gen:rust": "node scripts/gen-rust.mjs"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "ajv": "^8.17.1",
-    "typescript": "^5.9.2"
+    "@types/node": "26.6.5",
+    "ajv": "8.17.1",
+    "typescript": "7.0.2"
   }
 }

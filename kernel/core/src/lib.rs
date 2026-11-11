@@ -14,6 +14,8 @@ mod apply;
 mod doc;
 pub mod model;
 mod ops;
+#[allow(dead_code, clippy::large_enum_variant, clippy::enum_variant_names)]
+pub mod protocol;
 mod scene;
 mod send;
 
@@ -21,6 +23,7 @@ use crate::apply::{Ctx, Edit};
 use crate::doc::sha_hex;
 use crate::model::Principal;
 use crate::ops::OpError;
+use crate::protocol::Code;
 use automerge::sync::{self, SyncDoc};
 use automerge::transaction::{CommitOptions, Transactable};
 use automerge::{ActorId, Automerge, ChangeHash, ObjType, ReadDoc};
@@ -164,7 +167,7 @@ impl Space {
             None => {
                 return Ok(reject(vec![OpError::new(
                     0,
-                    "bad_batch",
+                    Code::InvalidInput,
                     "The batch has no ops list.",
                     "Pass {\"ops\": [ ... ]}.",
                 )]))
@@ -189,7 +192,7 @@ impl Space {
             }
             return Ok(reject(vec![OpError::new(
                 0,
-                "request_reused",
+                Code::RequestReused,
                 format!("Request '{request_id}' was already applied with different ops."),
                 "Use a new request ID for a new batch.",
             )]));
@@ -231,7 +234,7 @@ impl Space {
                     tx.put(&b, "result", result.to_string())?;
                     Ok(())
                 };
-                wr(tx).map_err(|e| vec![OpError::new(0, "internal", e.to_string(), "Retry.")])?;
+                wr(tx).map_err(|e| vec![OpError::new(0, Code::Internal, e.to_string(), "Retry.")])?;
                 Ok::<_, Vec<OpError>>(result)
             },
         );
@@ -298,7 +301,7 @@ impl Space {
                 history_push(
                     tx, person, device, &entry_id, &kind_name, &out.edits, now_ms,
                 )
-                .map_err(|e| vec![OpError::new(0, "internal", e.to_string(), "Retry.")])?;
+                .map_err(|e| vec![OpError::new(0, Code::Internal, e.to_string(), "Retry.")])?;
                 Ok::<_, Vec<OpError>>(
                     json!({ "ok": true, "entry": entry_id, "ids": ids, "repaired": out.repaired }),
                 )
@@ -383,7 +386,8 @@ impl Space {
         }
     }
 
-    /// Projects the scene. `query_json`: `{detail?: "full"|"outline", viewer?: {agent}|{person}, ids?: [..]}`.
+    /// Projects the scene. `query_json`: `{detail?: "full"|"outline"|"strokes",
+    /// viewer?: {agent}|{person}, ids?: [..], names?: {<principal id>: <display name>}}`.
     pub fn scene(&self, query_json: &str) -> Result<String> {
         let q = if query_json.trim().is_empty() {
             json!({})
@@ -484,8 +488,13 @@ impl Space {
     }
 }
 
+/// A rejected batch, in `error.schema.json`'s shape.
 fn reject(errors: Vec<OpError>) -> String {
-    json!({ "ok": false, "applied": 0, "errors": errors }).to_string()
+    let reason = match errors.as_slice() {
+        [one] => one.code,
+        _ => Code::BatchRejected,
+    };
+    json!({ "ok": false, "reason": reason, "applied": 0, "errors": errors }).to_string()
 }
 
 #[derive(Clone, Debug)]
