@@ -27,5 +27,6 @@ points at, frozen when they sent it:
 - several bars or points: every row, with the x and y range they cover
 - an axis tick: `{"kind": "data", "rows": [...the rows at that tick], "label": "x-axis tick 2024-Q3"}`
 - a series in the legend: all its rows, `"label": "series Revenue"`
+- a line drawn across the plot: `points`, the line as `[x, y]` pairs in data coordinates in the order drawn (x is a category's index from 0 on a bar or line chart), with its `x` and `y` range and the `rows` it passes over: `{"kind": "data", "points": [[0, 3], [1.5, 3.6], [3, 4.5]], "x": [0, 3], "y": [3, 4.5], "rows": ["2024-Q2"], "label": "a line from 2024-Q1, 3 M€ to 2024-Q4, 4.5 M€, over 1 point"}`
 
 Answer about the rows the Mark names, next to the Mark.

@@ -61,6 +61,8 @@ export type Projection = {
 export function project(opts: {
   frozen: FrozenSend;
   entry: SpaceEntry;
+  /** Fields the person's Behaviors (a tap, say) set since their last Send, by kernel key. */
+  behaviors?: { key: string; on?: string; set: Record<string, unknown> }[];
   /** The full scene for the reading Agent (its own IDs, its coordinates). */
   elements: SceneElement[];
   /** The outline scene for the reading Agent. */
@@ -148,6 +150,16 @@ export function project(opts: {
     const id = opts.displayId(frozen.element);
     if (!changes.some((c) => c.kind === "panel" && c.id === id && (!frozen.panel || c.panel === frozen.panel))) changes.push({ kind: "panel", id, ...(frozen.panel ? { panel: frozen.panel } : {}), values: frozen.values });
   }
+  // What the person's taps (and other Behaviors) set since their last Send, on Elements this Agent
+  // can see, and for a Region's Send only inside that Region.
+  const tapped = new Set<string>();
+  for (const b of opts.behaviors ?? []) {
+    const id = opts.displayId(b.key);
+    const el = byId.get(id);
+    if (!el || (region && !overlaps(region.bounds, el.bounds))) continue;
+    changes.push({ kind: "behavior", id, ...(b.on ? { on: b.on } : {}), set: b.set });
+    tapped.add(id);
+  }
   // A photo or PDF page the person added comes as an image: the image Element with anything drawn on it.
   for (const c of changes.filter((c) => c.kind === "added_file")) {
     const el = byId.get(c.id);
@@ -160,7 +172,7 @@ export function project(opts: {
   // The nearby scene: what is near the Marks, or on screen when there are none.
   const viewport = frozen.viewport ?? opts.entry.viewport;
   const focus = refs.length ? refs.map((r) => pad(r.bounds, 300)) : [viewport];
-  const near = outline.filter((e) => e.type !== "ink" && focus.some((f) => overlaps(f, e.bounds))).slice(0, 200);
+  const near = outline.filter((e) => e.type !== "ink" && (tapped.has(e.id) || focus.some((f) => overlaps(f, e.bounds)))).slice(0, 200);
   const nearIds = new Set(near.map((e) => e.id));
   const rest = outline.filter((e) => e.type !== "ink" && !nearIds.has(e.id));
   const onScreen = rest.filter((e) => overlaps(viewport, e.bounds)).length;

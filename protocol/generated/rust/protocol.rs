@@ -701,7 +701,7 @@ pub struct OpAddImage {
     /// A width, height or gap in the same units as coord.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub h: Option<i64>,
-    /// An https URL, or an asset reference 'asset:<sha256>'.
+    /// An https URL, or a file path on the Link's computer: a picture (PNG, JPEG, HEIC, WebP, GIF) or a PDF, whose first page is shown. Reflex reads a file once and stores it as 'asset:<sha256>', which is what you read back; without w and h the image takes the picture's shape.
     pub src: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alt: Option<String>,
@@ -936,7 +936,7 @@ pub struct OpPatchSet {
     pub points: Option<Vec<[i64; 2]>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arrow: Option<Arrow>,
-    /// An https URL, or an asset reference 'asset:<sha256>'.
+    /// An https URL, or a file path on the Link's computer: a picture (PNG, JPEG, HEIC, WebP, GIF) or a PDF, whose first page is shown. Reflex reads a file once and stores it as 'asset:<sha256>', which is what you read back; without w and h the image takes the picture's shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1737,7 +1737,7 @@ impl AnchorKind {
     }
 }
 
-/// Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x and y; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description.
+/// Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x, y and points; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Anchor {
@@ -1754,6 +1754,9 @@ pub struct Anchor {
     /// data: [min, max] in the chart's data coordinates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub y: Option<[f64; 2]>,
+    /// data: a line the person drew, as [x, y] points in the chart's data coordinates, in the order drawn. On an axis of categories, x is the category's index from 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points: Option<Vec<[f64; 2]>>,
     /// dom: a CSS selector for the DOM node inside the Embed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selector: Option<String>,
@@ -2032,7 +2035,7 @@ pub struct ElementImage {
     pub owner: Principal,
     /// [x, y, width, height] in the reading Agent's coordinates. x and y are the top-left corner.
     pub bounds: [i64; 4],
-    /// An https URL, or an asset reference 'asset:<sha256>'.
+    /// An https URL, or a file path on the Link's computer: a picture (PNG, JPEG, HEIC, WebP, GIF) or a PDF, whose first page is shown. Reflex reads a file once and stores it as 'asset:<sha256>', which is what you read back; without w and h the image takes the picture's shape.
     pub src: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alt: Option<String>,
@@ -2822,7 +2825,7 @@ pub struct RawSendEmbedAnchorsItem {
     /// A short ID the Agent chose, such as 'n-auth'. IDs are scoped to the Agent that made them, so two Agents never collide. Reflex-made IDs (Ink, user imports, generated) use the same alphabet.
     pub element: String,
     pub strokes: Vec<String>,
-    /// Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x and y; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description.
+    /// Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x, y and points; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description.
     pub anchor: Anchor,
 }
 
@@ -3299,10 +3302,12 @@ pub enum ChangeKind {
     EmbedState,
     #[serde(rename = "added_file")]
     AddedFile,
+    #[serde(rename = "behavior")]
+    Behavior,
 }
 
 impl ChangeKind {
-    pub const ALL: &'static [&'static str] = &["added", "moved", "resized", "edited", "removed", "panel", "embed_state", "added_file"];
+    pub const ALL: &'static [&'static str] = &["added", "moved", "resized", "edited", "removed", "panel", "embed_state", "added_file", "behavior"];
     pub fn as_str(&self) -> &'static str {
         match self {
             ChangeKind::Added => "added",
@@ -3313,11 +3318,43 @@ impl ChangeKind {
             ChangeKind::Panel => "panel",
             ChangeKind::EmbedState => "embed_state",
             ChangeKind::AddedFile => "added_file",
+            ChangeKind::Behavior => "behavior",
         }
     }
 }
 
-/// One thing the person changed since their last Send. kind picks which other fields apply: moved uses by; resized uses was_bounds; edited uses text; removed uses was; panel uses panel and values; embed_state uses state; added_file uses file, mime and image or pages. A photo or PDF page comes as an image; any other file is read with read(ids: [id], detail: 'full').
+/// behavior: the trigger the person fired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ChangeOn {
+    #[serde(rename = "tap")]
+    Tap,
+    #[serde(rename = "long_press")]
+    LongPress,
+    #[serde(rename = "drag_end")]
+    DragEnd,
+    #[serde(rename = "ink_inside")]
+    InkInside,
+    #[serde(rename = "panel_change")]
+    PanelChange,
+    #[serde(rename = "embed_event")]
+    EmbedEvent,
+}
+
+impl ChangeOn {
+    pub const ALL: &'static [&'static str] = &["tap", "long_press", "drag_end", "ink_inside", "panel_change", "embed_event"];
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ChangeOn::Tap => "tap",
+            ChangeOn::LongPress => "long_press",
+            ChangeOn::DragEnd => "drag_end",
+            ChangeOn::InkInside => "ink_inside",
+            ChangeOn::PanelChange => "panel_change",
+            ChangeOn::EmbedEvent => "embed_event",
+        }
+    }
+}
+
+/// One thing the person changed since their last Send. kind picks which other fields apply: moved uses by; resized uses was_bounds; edited uses text; removed uses was; panel uses panel and values; embed_state uses state; added_file uses file, mime and image or pages; behavior uses on and set (a Behavior the person fired, such as a tap, set these fields on the Element as its owner). A photo or PDF page comes as an image; any other file is read with read(ids: [id], detail: 'full').
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Change {
@@ -3353,6 +3390,12 @@ pub struct Change {
     pub pages: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<i64>,
+    /// behavior: the trigger the person fired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<ChangeOn>,
+    /// behavior: the fields it set, as in patch.set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set: Option<Map<String, Value>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

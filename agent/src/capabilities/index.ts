@@ -11,6 +11,7 @@ import * as library from "../library.ts";
 import { RECIPES, checkParams, expand, fromLibrary, typeGuide, type Recipe } from "../extensions.ts";
 import { runExec } from "../exec.ts";
 import { ModelError, importModel, modelParts, type Part } from "../model.ts";
+import { importPicture } from "../picture.ts";
 
 export type Identity = { agent: string; name: string; color: string };
 export type Person = { person: string; name: string };
@@ -371,7 +372,7 @@ export class Core {
     const agent = ctx.who.agent;
     if (a.in_reply_to && !this.inbox.recipients(a.in_reply_to).includes(agent))
       throw fail("unknown_send", `No Send '${a.in_reply_to}' in your Inbox.`, "Pass the send ID from a Send Bundle, or leave in_reply_to out.", ["wait_for_user(timeout_s: 0)"]);
-    const imported = await this.#importModels(a.ops);
+    const imported = [...(await this.#importModels(a.ops)), ...(await this.#importPictures(a.ops))];
     const norm = normalizeOps(a.ops);
     norm.repaired.unshift(...imported);
     if (norm.errors.length) throw new ReflexError(norm.errors.length === 1 ? norm.errors[0].code : "batch_rejected", norm.errors, [`read(space: '${a.space}')`]);
@@ -595,6 +596,7 @@ export class Core {
     const { bundle, images, marks } = project({
       frozen,
       entry,
+      behaviors: this.#behaviorsSince(entry, frozen),
       elements,
       outline: this.scene(entry, viewer, "outline"),
       strokes,
@@ -612,6 +614,37 @@ export class Core {
     byAgent.set(frozen.send, marks);
     this.#marks.set(agent, byAgent);
     return { bundle, images, marks };
+  }
+
+  /**
+   * The set actions of Behaviors the person fired since their last Send (a tap that accepts a
+   * proposed mark, say), up to and including this one: the Link ran them as the Element's owner,
+   * so they are no change of the person's, but the person did them. Merged per Element, the
+   * latest value of each field winning. Only a full Send carries them.
+   */
+  #behaviorsSince(entry: SpaceEntry, frozen: FrozenSend): { key: string; on?: string; set: Record<string, unknown> }[] {
+    if ((frozen.kind ?? "send") !== "send" || frozen.trigger === "watch") return [];
+    const rows: { kind: string; id: string; at: number; by?: { person?: string } }[] =
+      JSON.parse(entry.space.timeline(JSON.stringify({ limit: 2000 }))).entries ?? [];
+    const mine = rows.filter((r) => r.kind === "send" && r.by?.person === frozen.from.person && r.at <= frozen.at && r.id !== frozen.send).reverse();
+    const fired: FrozenSend[] = [frozen];
+    for (const r of mine) {
+      const s: FrozenSend | null = JSON.parse(entry.space.send(r.id));
+      if (!s) continue;
+      if ((s.kind ?? "send") === "send" && s.trigger !== "watch") break; // the person's previous Send
+      fired.push(s);
+    }
+    const out = new Map<string, { key: string; on?: string; set: Record<string, unknown> }>();
+    for (const s of fired.reverse()) {
+      const owner = s.owner?.agent;
+      for (const b of s.actions ?? []) {
+        if (b.do !== "set" || !b.set || typeof b.set !== "object" || !s.element) continue;
+        const key = typeof b.target === "string" && owner ? `${owner}/${b.target}` : s.element;
+        const prev = out.get(key);
+        out.set(key, { key, on: s.on, set: { ...(prev?.set ?? {}), ...b.set } });
+      }
+    }
+    return [...out.values()];
   }
 
   // ---------- files ----------
@@ -641,6 +674,41 @@ export class Core {
       } catch (e) {
         const me = e instanceof ModelError ? e : new ModelError(`Couldn't read the model: ${(e as Error).message}.`, "Check the file, or export it again as .glb.");
         errors.push({ op: i, field: op.op === "patch" ? "/set/model" : "/model", code: "invalid_input", msg: `ops[${i}]: ${me.message}`, fix: me.fix });
+      }
+    }
+    if (errors.length) throw new ReflexError(errors.length === 1 ? "invalid_input" : "batch_rejected", errors);
+    return done;
+  }
+
+  /**
+   * Pictures given as a file path (an image's src) are read once and stored as an asset, like
+   * models. Without w and h, the image gets the picture's shape, at most 900 wide.
+   */
+  async #importPictures(ops: unknown): Promise<string[]> {
+    if (!Array.isArray(ops)) return [];
+    const done: string[] = [];
+    const errors: ProtocolError[] = [];
+    for (const [i, op] of ops.entries()) {
+      if (!op || typeof op !== "object") continue;
+      const add = (op.op === "add" || op.op === undefined) && op.type === "image";
+      const holder = add ? op : op.op === "patch" && op.set && typeof op.set === "object" ? op.set : undefined;
+      const ref = holder?.src;
+      if (typeof ref !== "string" || !/^(file:\/\/\/|\/|~\/)/.test(ref)) continue;
+      try {
+        if (!this.localFiles) throw new ModelError(`'${ref}' is a file path, which only a Link on this computer can read.`, "Give an https URL instead.");
+        if (!this.assets?.put) throw new ModelError("This Link can't store pictures.", "Run it with its asset store.");
+        const pic = await importPicture(ref);
+        const hash = this.assets.put(pic.bytes);
+        holder.src = `asset:${hash}`;
+        if (add && op.w === undefined && op.h === undefined) {
+          op.w = Math.min(900, pic.w);
+          op.h = Math.max(1, Math.round((op.w * pic.h) / pic.w));
+        } else if (add && op.h === undefined) op.h = Math.max(1, Math.round((op.w * pic.h) / pic.w));
+        else if (add && op.w === undefined) op.w = Math.max(1, Math.round((op.h * pic.w) / pic.h));
+        done.push(`ops[${i}]: picture ${pic.name} stored as asset:${hash.slice(0, 12)}… (${pic.w}×${pic.h} px${add ? `, placed ${op.w}×${op.h}` : ""})`);
+      } catch (e) {
+        const me = e instanceof ModelError ? e : new ModelError(`Couldn't read the picture: ${(e as Error).message}.`, "Check the file.");
+        errors.push({ op: i, field: op.op === "patch" ? "/set/src" : "/src", code: "invalid_input", msg: `ops[${i}]: ${me.message}`, fix: me.fix });
       }
     }
     if (errors.length) throw new ReflexError(errors.length === 1 ? "invalid_input" : "batch_rejected", errors);

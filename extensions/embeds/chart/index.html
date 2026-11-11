@@ -32,6 +32,8 @@
   const svg = document.getElementById("chart");
   /** Every part a Mark can name, with its box in this Embed's pixels. */
   let parts = [];
+  /** The plot area and the way back from pixels to data: x is a value, or a category's index. */
+  let plot = null;
 
   const el = (tag, attrs, text) => {
     const n = document.createElementNS(SVG, tag);
@@ -52,6 +54,7 @@
   function draw() {
     svg.replaceChildren();
     parts = [];
+    plot = null;
     const W = innerWidth, H = innerHeight;
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
     const legend = series.length > 1;
@@ -77,6 +80,7 @@
       const xs = all.map((r) => r.x).filter((x) => typeof x === "number");
       const xr = nice(Math.min(...xs), Math.max(...xs));
       const X = (v) => left + ((v - xr.lo) / (xr.hi - xr.lo)) * pw;
+      plot = { box: [left, top, pw, ph], x: (px) => xr.lo + ((px - left) / pw) * (xr.hi - xr.lo), y: (py) => yr.lo + ((top + ph - py) / ph) * (yr.hi - yr.lo), labels: null };
       for (let v = xr.lo; v <= xr.hi + xr.step / 2; v += xr.step) {
         el("text", { x: X(v), y: top + ph + 18, class: "tick", "text-anchor": "middle" }, fmt(v));
       }
@@ -92,6 +96,7 @@
       const labels = [...new Set(all.map((r) => String(r.label ?? r.id ?? r.x)))];
       const band = pw / Math.max(1, labels.length);
       const at = (l) => left + band * labels.indexOf(l);
+      plot = { box: [left, top, pw, ph], x: (px) => (px - left) / band - 0.5, y: (py) => yr.lo + ((top + ph - py) / ph) * (yr.hi - yr.lo), labels };
       labels.forEach((l) => {
         const cx = at(l) + band / 2;
         const t = el("text", { x: cx, y: top + ph + 18, class: "tick", "text-anchor": "middle" }, l);
@@ -152,6 +157,30 @@
       const [bx, by, bw, bh] = region.bounds;
       const first = pts[0], last = pts[pts.length - 1];
       const closed = pts.length > 8 && Math.hypot(first[0] - last[0], first[1] - last[1]) < 0.35 * Math.hypot(bw, bh);
+      const round = (v) => +v.toPrecision(12);
+      // An open line across the plot (a trend they expect, or a line through the chart): its
+      // points in data coordinates, with what it passes over.
+      if (!closed && plot && pts.length >= 2) {
+        const [px, py, pw, ph] = plot.box;
+        const inPlot = pts.filter(([x, y]) => x >= px - 6 && x <= px + pw + 6 && y >= py - 6 && y <= py + ph + 6);
+        const span = inPlot.length ? Math.max(...inPlot.map((q) => q[0])) - Math.min(...inPlot.map((q) => q[0])) : 0;
+        if (span >= 0.2 * pw) {
+          const step = Math.max(1, Math.ceil(inPlot.length / 24));
+          const picked = inPlot.filter((_, i) => i % step === 0);
+          if (picked.at(-1) !== inPlot.at(-1)) picked.push(inPlot.at(-1));
+          const sig = (v) => +v.toPrecision(4);
+          const points = picked.map(([x, y]) => [sig(plot.x(x)), sig(plot.y(y))]);
+          const xs = points.map((q) => q[0]), ys = points.map((q) => q[1]);
+          const over = [...new Set(parts.filter((q) => q.data && hits(q.box, pts)).flatMap((q) => q.rows))].slice(0, 1000);
+          const name = (x) => (plot.labels ? plot.labels[Math.max(0, Math.min(plot.labels.length - 1, Math.round(x)))] : fmt(x));
+          const a = points[0], b = points.at(-1);
+          return {
+            kind: "data", rows: over, points,
+            x: [round(Math.min(...xs)), round(Math.max(...xs))], y: [round(Math.min(...ys)), round(Math.max(...ys))],
+            label: `a line from ${name(a[0])}, ${fmt(a[1])}${unit} to ${name(b[0])}, ${fmt(b[1])}${unit}${over.length ? `, over ${over.length} point${over.length === 1 ? "" : "s"}` : ""}`.slice(0, 200),
+          };
+        }
+      }
       let found = closed ? parts.filter((q) => inside(center(q.box), pts)) : [];
       if (!found.length) found = parts.filter((q) => hits(q.box, pts));
       if (!found.length) return { kind: "local", bounds: region.bounds.map(Math.round), label: "the chart, away from its data" };
@@ -160,7 +189,6 @@
       const rows = [...new Set(chosen.flatMap((q) => q.rows))].slice(0, 1000);
       const out = { kind: "data", rows };
       const yv = chosen.filter((q) => typeof q.y === "number").map((q) => q.y);
-      const round = (v) => +v.toPrecision(12);
       if (yv.length) out.y = [round(Math.min(...yv)), round(Math.max(...yv))];
       const xv = chosen.filter((q) => typeof q.x === "number").map((q) => q.x);
       if (xv.length) out.x = [round(Math.min(...xv)), round(Math.max(...xv))];
