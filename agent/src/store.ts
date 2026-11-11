@@ -46,11 +46,20 @@ export type FrozenSend = {
   /** What the device rendered when the person pressed Send: assets with the bounds they show. */
   crops?: { asset: string; bounds: Bounds; strokes?: string[] }[];
   at: number;
-  /** Not from the kernel: set for taps and watch snapshots. */
-  kind?: "send" | "tap" | "watch";
+  /** send, or tap for a notify Behavior; action for a Behavior nobody receives. */
+  kind?: "send" | "tap" | "watch" | "action";
   element?: string;
   region?: string;
   payload?: Record<string, unknown>;
+  /** The device's word timings, ms since the epoch. */
+  words?: { text: string; start_ms: number; end_ms?: number }[];
+  /** A Behavior trigger: what fired, and the Behaviors it ran. */
+  on?: string;
+  actions?: Record<string, any>[];
+  /** Who owns the Element or Region the Send is about. */
+  owner?: { agent?: string; person?: string };
+  panel?: string;
+  values?: Record<string, unknown>;
 };
 
 export type Delivery = { send: FrozenSend; redelivered: boolean };
@@ -71,4 +80,6 @@ export interface Inbox {
 /** Content-addressed assets (crops, photos), by SHA-256 hex. */
 export interface Assets {
   get(hash: string): Buffer | undefined;
+  /** Stores bytes durably and returns their hash. */
+  put?(bytes: Buffer): string;
 }
