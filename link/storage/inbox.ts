@@ -29,8 +29,8 @@ export interface InboxEntry {
 export class Inbox {
   #db: DatabaseSync;
   #waiters = new Set<() => void>();
-  /** Who a new Send in this Space goes to. */
-  recipientsFor: (space: string) => string[] = () => [];
+  /** Who a new Send goes to, or null when it is delivered to nobody (link/routing.ts). */
+  recipientsFor: (space: string, send: string) => string[] | null = () => [];
 
   constructor(db: DatabaseSync) {
     this.#db = db;
@@ -44,8 +44,11 @@ export class Inbox {
     const to = this.#db.prepare("INSERT INTO inbox_to (space, send, recipient) VALUES (?, ?, ?) ON CONFLICT DO NOTHING");
     let added = 0;
     for (const s of sends) {
+      if (this.#has(space, s)) continue;
+      const recipients = this.recipientsFor(space, s);
+      if (recipients === null) continue;
       const n = Number(ins.run(space, s, now, via).changes);
-      if (n) for (const r of this.recipientsFor(space)) to.run(space, s, r);
+      if (n) for (const r of recipients) to.run(space, s, r);
       added += n;
     }
     if (added > 0) queueMicrotask(() => this.#wake());

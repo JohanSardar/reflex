@@ -17,7 +17,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Inbox } from "./storage/inbox.ts";
 import type { SpaceStore } from "./storage/journal.ts";
 
-const recipient = (agent: string) => `agent:${agent}`;
+import { recipient, route } from "./routing.ts";
 
 /** The Agent layer's view of the Link's Spaces. */
 class LinkSpaces implements AgentSpaces {
@@ -135,6 +135,9 @@ class LinkAssets implements Assets {
   constructor(assets: AssetStore) {
     this.#assets = assets;
   }
+  put(bytes: Buffer) {
+    return this.#assets.put(bytes);
+  }
   get(hash: string) {
     try {
       return this.#assets.has(hash) ? this.#assets.get(hash) : undefined;
@@ -154,6 +157,8 @@ export interface AgentHostOptions {
   socket: string;
   token: string;
   devPerson: boolean;
+  /** How many of the person's devices are connected (not other Links). */
+  presence?: () => { devices: number };
   /** Asks the person to approve a new Agent (on the Link's terminal and on paired iPads). */
   announce: (a: AgentRecord) => void;
   /** Resolves once the person decides about this Agent, or after `ms`. */
@@ -163,10 +168,12 @@ export interface AgentHostOptions {
 
 /** How long a first call waits for the person to approve the Agent before it returns `not_approved`. */
 const APPROVAL_WAIT_MS = 120_000;
+/** After the person turns an Agent away, how long before it may ask them again. */
+const REASK_MS = Number(process.env.REFLEX_REASK_S ?? 600) * 1000;
 
 export async function startAgentHost(o: AgentHostOptions) {
   const spaces = new LinkSpaces(o.store, o.db, o.inbox);
-  o.inbox.recipientsFor = (space) => spaces.agents(space).map(recipient);
+  o.inbox.recipientsFor = (space, send) => route(o.db, o.store, space, send);
   const names = Object.fromEntries(o.catalog.agents().map((a) => [a.id, a.name]));
   const core = new Core({
     spaces,
@@ -177,7 +184,22 @@ export async function startAgentHost(o: AgentHostOptions) {
     names,
     progressEvery: Number(process.env.REFLEX_PROGRESS_S ?? 15),
     log: o.log,
+    presence: o.presence,
   });
+
+  // Behavior actions the Link runs (set, apply_recipe) as the Element's owner, for Sends that come
+  // from a device or the dev person, and once at start for any that arrived while it was down.
+  const behaviors = (space: string) => {
+    const sends: string[] = o.store.read(space, (s) => JSON.parse(s.scene(JSON.stringify({ detail: "full", ids: [] }))).sends ?? []);
+    for (const send of sends) {
+      const has = o.store.read(space, (s) => JSON.parse(s.send(send))?.actions?.some((b: any) => b.do === "set" || b.do === "apply_recipe"));
+      if (has) void core.runBehaviors(space, send).catch((e) => o.log("behavior_failed", { send, error: String(e) }));
+    }
+  };
+  o.store.onChange((space, origin) => {
+    if (origin === "send" || origin.startsWith("sync:")) behaviors(space);
+  });
+  for (const space of o.store.ids()) behaviors(space);
 
   const notApproved = (a: AgentRecord, msg: string, fix: string) =>
     new ReflexError("not_approved", [{ code: "not_approved", msg, fix }]);
@@ -192,7 +214,19 @@ export async function startAgentHost(o: AgentHostOptions) {
       o.log("agent_requested", { agent: a.id, name });
       o.announce(a);
     } else if (a.status === "denied" || a.status === "revoked") {
-      // Only the person can let an Agent in, so the way back for one they turned away is to ask them again.
+      // Only the person can let an Agent in, so the way back for one they turned away is to ask them again,
+      // but not on every call: once per REASK_MS, so an Agent that keeps calling can't keep asking.
+      const since = Date.now() - (a.decided_at ?? 0);
+      if (since < REASK_MS) {
+        const wait = Math.ceil((REASK_MS - since) / 60_000);
+        throw new ReflexError("rate_limited", [
+          {
+            code: "rate_limited",
+            msg: `The person ${a.status} ${a.name} ${since < 60_000 ? "just now" : `${Math.round(since / 60_000)} min ago`}.`,
+            fix: `Stop calling Reflex for now. You can ask them again in about ${wait} min; tell them to expect the question.`,
+          },
+        ]);
+      }
       a = o.catalog.askAgain(a.id);
       o.log("agent_requested", { agent: a.id, name, again: true });
       o.announce(a);
