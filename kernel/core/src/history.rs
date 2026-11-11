@@ -6,7 +6,8 @@
 //! and replayed newest first, and it only takes effect when the Element still
 //! holds what that batch left there. When a person changed it afterwards, the
 //! edit is skipped and reported as kept, so a revert never overwrites a
-//! person's later work. Reverting is itself a new batch (an Agent's) or a new
+//! person's later change to a field. An Element the batch created is removed
+//! even if someone edited it since. Reverting is itself a new batch (an Agent's) or a new
 //! history entry (a person's, which that person can undo).
 
 use crate::apply::{self, display_id, Ctx, Edit};
