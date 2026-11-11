@@ -370,6 +370,60 @@ Add a second real transport between the iPad and the Link: Apple peer-to-peer Wi
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
 
+## Step 5 tickets (core side)
+
+```md
+# Math tutor core: Regions, line-level grading and watch mode
+
+## Goal
+Make scenario 2 (the math and physics tutor in SPEC §16) work for Agents. When this is done:
+- Regions have their own rules: whether Ink is allowed, whether Agents may write there, whether watch mode is on, and a Send button scoped to that Region ("Check my work") whose Send carries only that Region's work.
+- A LaTeX problem can sit next to a writable Region.
+- When the person writes a solution by hand, the Send gives the Agent line-level evidence: the handwritten lines in order, each with its strokes, bounds and recognized text, so the Agent can put a margin mark at the exact line and tell a sign error from a gap in understanding.
+- The `check-my-work` Recipe places a problem, a writing Region and its Send button in one call, and a math-tutoring Guide teaches Agents to grade step by step with hints next to the Ink.
+- An Agent can turn on watch mode for one Region: debounced snapshots of only that Region, with rate and size limits, marked `user_still_writing` while the person is mid-stroke.
+
+Prove it with a real Claude Code session tutoring a scripted person through one problem with a deliberate sign error, using both the Send button and watch mode.
+
+## Context
+- Read docs/SPEC.md §5 (Regions), §9 (watch mode) and §16 (scenario 2); docs/ARCHITECTURE.md §4.2–§4.3 and §7 (Region policy at the writer's frontier, retention and watch-mode budgets); docs/adr/0006 and 0007.
+- What exists on main: `protocol/`, `kernel/`, `apps/ipad/`, `agent/` and `link/`, with the round trip (T6), scenario 1's core (T8: Marks, the interleaved transcript, revert, headless `look`, all eleven tools on MCP and the CLI, Behavior actions, added files) and the web viewer, author kit and Library (T10). Read the READMEs in each folder and docs/harness-notes.md. T8 used scripted "person" commands on a `reflex link --dev`; reuse them.
+- Carried over (docs/TICKETS.md, "Follow-ups"): nothing caps how many Elements one Mark lists, and Marks re-fork the Space once per Mark (T8).
+- T12 does the iPad side later (drawing LaTeX, the Region and its Send button on the iPad). T15 (Claude Code channel push) runs at the same time and changes Send delivery in `agent/` and `link/`; keep your changes to Regions, Marks, Recipes and Guides, and whoever merges second rebases.
+- Codex's usage limit is exhausted until 2026-11-12 13:06; prove in Claude Code and say so.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
+```md
+# Claude Code channel: push a Send straight into the session
+
+## Goal
+Deliver Sends to Claude Code by push, so the person's Send reaches a running Claude Code session without the Agent sitting in `wait_for_user`. When this is done:
+- Reflex speaks Claude Code's channel mechanism (`notifications/claude/channel`, a research preview over stdio): when a Send for that Agent arrives, the session receives it as a new turn with the Send Bundle.
+- The push adapter contract is pulled out of this first adapter: its config, secrets, callback endpoint, and delivery attempts recorded durably outside the adapter. T17 builds the webhook and MCP App adapters on it.
+- A push that fails or isn't supported falls back to the Inbox, so `wait_for_user` still gets the Send and nothing is lost or delivered twice.
+
+Prove it with a real Claude Code session: the person sends while Claude is idle, and Claude answers without having called `wait_for_user`. Also kill the session mid-push once and show the Send waiting in the Inbox afterwards.
+
+## Context
+- Read docs/adr/0002; docs/SPEC.md §9 (delivery) and §11; docs/ARCHITECTURE.md §4.3, §6 (Send delivery) and §7.4 (the Send state machine); docs/harness-notes.md.
+- What exists on main: `protocol/`, `kernel/`, `apps/ipad/`, `agent/` and `link/`, with the round trip (T6), scenario 1's core (T8: Marks, the interleaved transcript, revert, headless `look`, all eleven tools on MCP and the CLI, Behavior actions, added files) and the web viewer, author kit and Library (T10). Read the READMEs in each folder and docs/harness-notes.md. T8 used scripted "person" commands on a `reflex link --dev`; reuse them.
+- Claude Code channels are a research preview and work over stdio only. Check the installed Claude Code's own docs and flags for how to enable them.
+- Carried over (docs/TICKETS.md, "Follow-ups"): tap actions on a revoked Agent's Elements still run its `set` and `apply_recipe` (the runner doesn't check approval); `wait_for_user(element:)` misses taps whose action is `send`; `request_attention` never reports that the person is already viewing that Space (T8).
+- T13 (math tutor core) runs at the same time in `agent/` and `link/`; keep your changes to delivery and adapters, and whoever merges second rebases.
+
+## Constraints
+- Don't edit SPEC, ARCHITECTURE or the ADRs. If the work shows one needs to change, say so in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
