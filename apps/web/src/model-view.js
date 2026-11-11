@@ -30,8 +30,9 @@ box.append(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xffffff);
 scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
-scene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 1.2));
-const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+scene.environmentIntensity = 0.45;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 0.5));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 scene.add(sun);
 const camera = new THREE.PerspectiveCamera(FOV, 1, 0.001, 1000);
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -226,3 +227,5 @@ addEventListener("message", (e) => {
 });
 addEventListener("resize", size);
 size();
+// Listening now: ask the host for the model's bytes.
+parent.postMessage({ __reflex: 1, t: "model_ready" }, "*");

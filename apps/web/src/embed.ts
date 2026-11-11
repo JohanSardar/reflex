@@ -103,6 +103,9 @@ export class Embeds {
         case "beat":
           return;
         case "ready":
+          return;
+        case "model_ready":
+          // A 3D Embed's viewer loaded three.js and listens: hand it the model.
           if (f.model) void this.#sendModel(f, f.model);
           return;
         case "setState":
