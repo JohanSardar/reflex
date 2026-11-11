@@ -63,6 +63,10 @@ export class Coordinator {
   pendingAgents: () => { id: string; name: string; color: string }[] = () => [];
   /** The person's answer about an Agent, from a paired iPad. */
   onAgentDecision: (device: string, id: string, status: "approved" | "denied") => void = () => {};
+  /** Called each time a peer is bound, after the coordinator's own opening messages. */
+  onBound: (p: Peer) => void = () => {};
+  /** Messages the coordinator itself doesn't handle (the Relay's `relay_keys`, link/relay/sync.ts). */
+  onMessage: (p: Peer, h: Record<string, unknown>, body: Uint8Array) => void = () => {};
 
   constructor(opts: {
     me: Me;
@@ -153,7 +157,9 @@ export class Coordinator {
       const c: Candidate = { transport: "lan", device: offer.device, host, port: offer.port };
       let path: Path;
       try {
-        path = await this.#transports[0].dial(c);
+        const lan = this.#transports.find((t) => t.name === "lan");
+        if (!lan) throw new Error("pairing needs the LAN transport");
+        path = await lan.dial(c);
       } catch (e) {
         errors.push(`${host}: ${(e as Error).message}`);
         continue;
@@ -191,20 +197,24 @@ export class Coordinator {
     if (!known) return;
     const list = [...(this.#candidates.get(device) ?? [])];
     if (known.last_seen) list.push({ transport: "lan", device, host: known.last_seen.host, port: known.last_seen.port });
+    // The LAN first; the Relay is the path for when the LAN can't reach the device.
+    list.sort((a, b) => Number(a.transport === "relay") - Number(b.transport === "relay"));
     if (list.length === 0) return;
     this.#dialing.add(device);
     try {
       for (const c of list) {
         let path: Path;
         try {
-          path = await this.#transports.find((t) => t.name === c.transport)!.dial(c);
+          const t = this.#transports.find((x) => x.name === c.transport);
+          if (!t) continue;
+          path = await t.dial(c);
         } catch {
           continue;
         }
         try {
           const r = await handshake(path, this.#me, this.#trust());
           if (r.peer.device !== device) throw new Error(`expected ${device}, reached ${r.peer.device}`);
-          this.#catalog.seen(device, c.host, c.port);
+          if (c.transport === "lan") this.#catalog.seen(device, c.host, c.port);
           this.#bind(r.session, device, r.peer.name, this.#me.key.device);
           return;
         } catch (e) {
@@ -239,6 +249,7 @@ export class Coordinator {
     void peer.session.send({ t: "assets_have", hashes: this.#assets.list() }, undefined, "control").catch(() => {});
     for (const id of this.#store.ids()) this.#pump(id, peer);
     for (const a of this.pendingAgents()) void peer.session.send({ t: "agent_request", ...a }, undefined, "control").catch(() => {});
+    this.onBound(peer);
   }
 
   /** Asks every connected iPad about an Agent waiting for approval. */
@@ -369,7 +380,7 @@ export class Coordinator {
         p.session.path.recordRtt(Date.now() - Number(h.at));
         return;
       default:
-        return; // unknown message types from newer peers are ignored
+        return this.onMessage(p, h, body); // unknown message types from newer peers are ignored there
     }
   }
 }

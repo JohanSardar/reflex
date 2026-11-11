@@ -33,6 +33,9 @@ import { startAgentHost } from "./agent-host.ts";
 import { socketPath as agentSocketPath } from "../agent/src/host/rpc.ts";
 import { LanTransport } from "./transports/lan.ts";
 import { startWebViewer } from "./web.ts";
+import { RelayTransport, roomFor } from "./transports/relay.ts";
+import type { Transport } from "./transports/transport.ts";
+import { RelaySync } from "./relay/sync.ts";
 
 export class LinkError extends Error {
   reason: string;
@@ -59,6 +62,10 @@ export interface LinkOptions {
   dev?: boolean;
   /** The web viewer's loopback port (default 7421; any free one if taken). null turns it off. */
   webPort?: number | null;
+  /** A Reflex Relay to sync through and keep the encrypted log on (ws:// or wss://). */
+  relay?: string;
+  /** Listen and discover on the local network (default true). */
+  lan?: boolean;
   log?: (msg: string) => void;
 }
 
@@ -87,6 +94,10 @@ export class Link {
   #keys!: { rpc: string; admin: string };
   #decisions = new Map<string, (() => void)[]>();
   #log: (msg: string) => void;
+  #relay: RelaySync | null = null;
+  #relayT: RelayTransport | null = null;
+  /** A sign-in the person is approving in this terminal, step by step. */
+  #signIn: ((line: string) => Promise<void>) | null = null;
 
   constructor(opts: LinkOptions) {
     this.#opts = opts;
@@ -114,15 +125,50 @@ export class Link {
     const devices = this.#catalog.devices();
     if (this.#catalog.rejected > 0) this.#log(`ignored ${this.#catalog.rejected} catalog records with bad signatures`);
 
+    const transports: Transport[] = [];
+    if (this.#opts.lan !== false) transports.push(new LanTransport({ device: this.#id.key.device, port: this.#opts.port ?? 7420 }));
+    if (this.#opts.relay) {
+      this.#relayT = new RelayTransport({
+        url: this.#opts.relay,
+        key: this.#id.key,
+        room: () => roomFor(this.#id.person.id),
+        watch: () => this.#catalog.devices().map((d) => d.device),
+        log: this.#log,
+      });
+      transports.push(this.#relayT);
+      this.#relay = new RelaySync({
+        db,
+        store: this.#store,
+        assets: this.#assets,
+        catalog: this.#catalog,
+        transport: this.#relayT,
+        key: this.#id.key,
+        person: () => this.#id.person,
+        log: this.#log,
+      });
+    }
     this.#coord = new Coordinator({
       me: this.#me,
       store: this.#store,
       assets: this.#assets,
       catalog: this.#catalog,
       offers: this.#offers,
-      transports: [new LanTransport({ device: this.#id.key.device, port: this.#opts.port ?? 7420 })],
+      transports,
       log: this.#log,
     });
+    // Tell each device where this person's devices meet when the LAN can't reach them.
+    this.#coord.onBound = (p) => {
+      if (!this.#relayT) return;
+      void p.session.send({ t: "relay", url: this.#relayT.url, room: roomFor(this.#id.person.id) }, undefined, "control").catch(() => {});
+      // Another Link of this person keeps the same log: it gets the Space keys, end to end.
+      const d = this.#catalog.device(p.device);
+      if (d?.kind === "link" && d.person.id === this.#id.person.id)
+        void p.session.send({ t: "relay_keys", keys: this.#relay!.exportKeys() }, undefined, "control").catch(() => {});
+    };
+    this.#coord.onMessage = (p, h) => {
+      const d = this.#catalog.device(p.device);
+      if (h.t === "relay_keys" && this.#relay && d?.kind === "link" && d.person.id === this.#id.person.id) this.#relay.importKeys(h.keys as { space: string; key: string }[], p.name);
+    };
     this.#coord.onPaired((d) => process.stdout.write(`\nPaired with ${d.name} (${d.device}).\n`));
     this.#coord.pendingAgents = () => this.#catalog.agents().filter((a) => a.status === "pending").map(({ id, name, color }) => ({ id, name, color }));
     this.#coord.onAgentDecision = (device, id, status) => {
@@ -156,7 +202,8 @@ export class Link {
     this.#log(
       `${this.#id.name} (${this.#id.key.device}) for ${this.#id.person.name} · ${rec.spaces} Spaces, ` +
         `${rec.replayed} journal entries replayed, ${this.#inbox.all().length} Sends in the Inbox, ` +
-        `${devices.length} paired devices · LAN :${this.#ports.lan} · ${this.home.socket}`,
+        `${devices.length} paired devices · ${this.#ports.lan !== undefined ? `LAN :${this.#ports.lan}` : "no LAN"}` +
+        `${this.#relayT ? ` · Relay ${this.#relayT.url}` : ""} · ${this.home.socket}`,
     );
     // Like a pairing code, the viewer's address carries its key and is shown only here.
     if (this.#web) this.#log(`web viewer: ${this.#web.url}`);
@@ -167,15 +214,60 @@ export class Link {
   #terminal(): void {
     this.#rl = createInterface({ input: process.stdin, output: process.stdout });
     this.#rl.on("line", (line) => {
+      if (this.#signIn) return void this.#signIn(line);
+      if (this.#relay && /^\s*[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}\s*$/.test(line)) return void this.#approveSignIn(line.trim().toUpperCase());
       const a = this.#questions[0];
       if (a && this.#catalog.agent(a.id)?.status === "pending" && /^(y(es)?|n(o)?)$/i.test(line.trim())) {
         this.#questions.shift();
         this.#decide(a.id, /^y/i.test(line.trim()) ? "approved" : "denied", "terminal");
         return this.#ask();
       }
+      if (this.#ports.lan === undefined) return void process.stdout.write("Pairing needs the LAN; this Link was started without it.\n");
       void this.showPairingCode();
     });
-    void this.showPairingCode();
+    if (this.#ports.lan !== undefined) void this.showPairingCode();
+    if (this.#relay) process.stdout.write("\nTo let a cloud Agent in through the Relay, type the code its sign-in page shows.\n");
+  }
+
+  /**
+   * A cloud Agent signing in through the Relay: the person typed the code its
+   * sign-in page shows. They pick one Space and how long, here and only here.
+   */
+  async #approveSignIn(code: string): Promise<void> {
+    const relay = this.#relay!;
+    const say = (m: string): void => void process.stdout.write(m);
+    let who: { client: string };
+    try {
+      who = await relay.lookup(code);
+    } catch (e) {
+      return say(`\n${(e as Error).message}\n`);
+    }
+    const spaces = this.#store.ids().filter((id) => this.#store.kind(id) === "space");
+    if (!spaces.length) return say(`\n"${who.client}" wants a Space, but this Link has none yet.\n`);
+    say(`\n"${who.client}" is signing in through the Relay and asks for one Space.\nWhich Space? (${spaces.join(", ")}) Press Enter alone to refuse.\n`);
+    let space = "";
+    this.#signIn = async (line) => {
+      const v = line.trim();
+      if (!space) {
+        if (!v) {
+          this.#signIn = null;
+          return say("Refused. Nothing was shared.\n");
+        }
+        if (!spaces.includes(v)) return say(`No Space '${v}'. Which Space? (${spaces.join(", ")})\n`);
+        space = v;
+        return say(`For how long may "${who.client}" use '${space}'? [1h] (e.g. 30m, 8h, 7d)\n`);
+      }
+      const m = /^(\d+)\s*([mhd])$/.exec(v || "1h");
+      const ms = m ? Number(m[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as "m" | "h" | "d"] : NaN;
+      if (!ms || ms > 30 * 86_400_000) return say("Give a time like 30m, 8h or 7d (at most 30d).\n");
+      this.#signIn = null;
+      try {
+        const g = await relay.issue(code, space, ms, who.client);
+        say(`Granted "${g.name}" '${g.space}' until ${new Date(g.expires).toLocaleString()} (${g.gid}). Its page continues now.\nTake it back any time: reflex link relay revoke ${g.gid}\n`);
+      } catch (e) {
+        say(`Could not grant it: ${(e as Error).message}\n`);
+      }
+    };
   }
 
   /** Prints a new single-use pairing code: a QR to scan, and the same code as text to type. */
@@ -211,6 +303,7 @@ export class Link {
   async stop(): Promise<void> {
     this.#rl?.close();
     await this.#web?.close();
+    this.#signIn = null;
     await new Promise<void>((r) => (this.#agentServer ? this.#agentServer.close(() => r()) : r()));
     await this.#coord.stop();
     await new Promise<void>((r) => (this.#server ? this.#server.close(() => r()) : r()));
@@ -442,6 +535,13 @@ export class Link {
       }
       case "inbox.all":
         return this.#inbox.all().map((e) => ({ ...e, receipts: this.#inbox.receipts(e.space, e.send) }));
+      case "relay.grants":
+        return this.#needRelay().grants();
+      case "relay.revoke":
+        // Taking access away is always allowed; giving it needs the person at the terminal.
+        return this.#needRelay().revoke(String(p.grant ?? ""));
+      case "relay.issue":
+        throw new LinkError("needs_person", "A cloud Agent gets a Space only when you type its sign-in code into the Link's terminal.", "Type the code its sign-in page shows into the terminal running `reflex link`.");
       default:
         return undefined;
     }
@@ -469,6 +569,11 @@ export class Link {
     }
   }
 
+  #needRelay(): RelaySync {
+    if (!this.#relay) throw new LinkError("no_relay", "This Link isn't using a Relay.", "Start it with `reflex link --relay <url>`.");
+    return this.#relay;
+  }
+
   status(): unknown {
     return {
       device: this.#id.key.device,
@@ -483,6 +588,7 @@ export class Link {
       paired: this.#catalog.devices().map((d) => ({ device: d.device, name: d.name, person: d.person, connected: this.#coord.peers().some((p) => p.device === d.device) })),
       peers: this.#coord.peers().map((p) => ({ device: p.device, name: p.name, since: p.since, transport: p.session.path.transport, remote: p.session.path.remote, ...p.session.measurements() })),
       agents: this.#catalog.agents().map((a) => ({ id: a.id, name: a.name, status: a.status, color: a.color })),
+      relay: this.#relay ? { ...this.#relay.status(), grants: this.#relay.grants() } : null,
     };
   }
 }
