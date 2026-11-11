@@ -343,11 +343,13 @@ const COMMANDS: Record<string, Cmd> = {
     },
   },
   mcp: {
-    usage: "reflex mcp",
-    summary: "Run the MCP server on stdio, for a harness's MCP config",
-    run: async () => {
+    usage: "reflex mcp [--channel]",
+    summary:
+      "Run the MCP server on stdio, for a harness's MCP config. --channel also pushes Sends into a Claude Code session as new turns (a Claude Code channel; start claude with --dangerously-load-development-channels server:<this server's name>)",
+    flags: ["channel"],
+    run: async (_p, f) => {
       const { runMcp } = await import("./mcp.ts");
-      await runMcp();
+      await runMcp({ channel: Boolean(f.channel) || process.env.REFLEX_CHANNEL === "1" });
       return -1; // keep running
     },
   },
@@ -466,7 +468,7 @@ function parse(argv: string[]) {
     else if (a.startsWith("--")) {
       const [k, v] = a.slice(2).split(/=(.*)/s, 2);
       if (v !== undefined) f[k] = v;
-      else if (["json", "help", "create", "look", "version", "no-open"].includes(k)) f[k] = true;
+      else if (["json", "help", "create", "look", "version", "no-open", "channel"].includes(k)) f[k] = true;
       else if (i + 1 < argv.length) f[k] = argv[++i];
       else f[k] = true;
     } else pos.push(a);

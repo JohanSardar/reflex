@@ -95,6 +95,44 @@ the tool schemas are not in every request.
 Codex followed the server instructions and called `read_me` first. It got
 "not yet available" and went on, because the error's `fix` says to.
 
+## Claude Code channels (push), 2.1.322
+
+Measured on 2026-11-11 with T15's `reflex mcp --channel`, from the binary and
+one interactive session in tmux against `reflex link --dev`.
+
+- **Turning it on.** The server declares `capabilities.experimental["claude/channel"] = {}`.
+  The session must also name it: `--channels <entries>` for approved channel
+  plugins, or `--dangerously-load-development-channels server:<name>` for a
+  server from the MCP config, which shows a confirmation dialog at startup.
+  Claude Code skips the channel without telling the server when: the server is
+  not in that list ("not in --channels list for this session"), the provider is
+  Bedrock, Vertex or Foundry, an org policy lacks `channelsEnabled: true`
+  (claude.ai Teams and Enterprise default off), or the connection negotiated a
+  "modern" protocol revision with no unsolicited-notification path. With
+  `2025-11-25` it registered: the debug log says
+  `MCP server "reflex": Channel notifications registered`.
+- **The message.** `notifications/claude/channel` with
+  `{ content: string, meta?: Record<string, string> }`. Meta keys must match
+  `^[a-zA-Z_][a-zA-Z0-9_]*$`; others are dropped. Claude Code queues it as a
+  prompt with priority "next", shown as
+  `<channel source="reflex" space="plan" send="s_…" kind="send" from="…">…</channel>`.
+  Content is text only, so the surface writes the Bundle's crops to PNG files and
+  puts their paths in `images[].file`.
+- **No receipt.** Claude Code doesn't answer a channel notification. The surface
+  counts a push as done once it is written to the pipe; the Agent acknowledges
+  it the usual way (`in_reply_to`, `after`).
+- **The run.** Claude drew a diagram and ended its turn, having called only
+  `open_space` and `apply`. The person circled "Auth service" and pressed Send
+  48 s later. The push was written 22 ms after the Send, Claude Code started a
+  turn with it, and Claude answered beside the circle with
+  `apply(in_reply_to)` (receipt `acknowledged`). It never called
+  `wait_for_user`. Two more Sends went the same way.
+- **Killed mid-push.** `claude` was killed with SIGKILL 5 ms after a push was
+  written to it. The MCP process exited, the Link logged `channel_closed` and
+  marked the target offline, and the Send stayed `delivered` but unacknowledged.
+  A new `claude -p` session read it with `wait_for_user(timeout_s: 0)`, flagged
+  `redelivered: true`.
+
 ## What this decides
 
 **Timeout policy.**
@@ -118,6 +156,12 @@ Codex followed the server instructions and called `read_me` first. It got
 2025-06-18, and the SDK serves both. Neither harness needs anything newer.
 Claude Code's `server/discover` probe falls back cleanly when the server
 doesn't implement it.
+
+**Push.** Sends reach a Claude Code session by channel when it was started
+with channels on and `reflex mcp --channel`; `wait_for_user` and the Inbox stay
+the guarantee for everything else (ADR-0002). Because Claude Code drops a
+channel it skipped without telling the server, the surface opens no push
+target unless the session's command line has a channels flag.
 
 **The 26 KB `apply` schema.** Neither harness puts it in every request: Claude
 Code defers it behind ToolSearch, and Codex reaches tools through code mode.

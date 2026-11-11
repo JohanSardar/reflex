@@ -71,6 +71,8 @@ export function project(opts: {
   personName: string;
   alsoSentTo: string[];
   redelivered: boolean;
+  /** Pushed by a Send Adapter while the Agent wasn't waiting: it acknowledges, then ends its turn. */
+  pushed?: boolean;
   pendingAfter: number;
   renderer: Renderer;
   /** The bytes of an asset the device stored, if this Link has it. */
@@ -186,7 +188,9 @@ export function project(opts: {
     pending_after: opts.pendingAfter,
     next:
       kind === "watch"
-        ? `A snapshot of ${opts.personName === "You" ? "the person's" : `${opts.personName}'s`} work in progress${frozen.user_still_writing ? "; they are still writing" : ""}. Step in only when a line is wrong and they have moved past it, with a short hint beside it; never answer in full. Then wait_for_user(after: '${s}').`
+        ? `A snapshot of ${opts.personName === "You" ? "the person's" : `${opts.personName}'s`} work in progress${frozen.user_still_writing ? "; they are still writing" : ""}. Step in only when a line is wrong and they have moved past it, with a short hint beside it; never answer in full. ${opts.pushed ? `Then end your turn: the next snapshot or Send is pushed to you the same way.` : `Then wait_for_user(after: '${s}').`}`
+        : opts.pushed
+        ? `${kind === "send" ? `Reply with apply(in_reply_to: '${s}')${refs.length ? `; what you add without at goes next to ${refs[0].id}` : ""}` : `${opts.personName}'s turn is not over. Answer with apply(in_reply_to: '${s}') if useful`}. With nothing to add, acknowledge it with wait_for_user(after: '${s}', timeout_s: 0). Then end your turn: the next Send is pushed to you the same way.`
         : kind === "send"
         ? `Reply with apply(in_reply_to: '${s}')${refs.length ? `; what you add without at goes next to ${refs[0].id}` : ""}, then wait_for_user(after: '${s}').`
         : `${opts.personName}'s turn is not over. Answer if useful, then wait_for_user(after: '${s}').`,
