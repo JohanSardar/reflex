@@ -8,25 +8,35 @@
 
 /* Begin PBXBuildFile section */
 		48B74E2F9FCF99E932A54C57 /* PairSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F279A47D5602D40DAD49D3C0 /* PairSheet.swift */; };
+		66AF564D327AA5A9C5F1E5E7 /* AgentsBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3BCA2CC1A4BA7515DC71FEE /* AgentsBar.swift */; };
+		676C66BEF7B6ECA161429D00 /* PanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 803A0225FA2DEB283EABC793 /* PanelView.swift */; };
 		7C37C7A2E18BA1A692A242FA /* ReflexInput in Frameworks */ = {isa = PBXBuildFile; productRef = 3295D9657C1EB818EAFA23C5 /* ReflexInput */; };
 		839B6323F4EE7B1F75BC6E44 /* ReflexLink in Frameworks */ = {isa = PBXBuildFile; productRef = 178AADCDAE1C63DA1DF91BB1 /* ReflexLink */; };
+		8868AF65494D12C1D2B6332E /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67AC7BE637ACC8B15C35B1AA /* Voice.swift */; };
 		AC64987EDEADC85E30C0038D /* ReflexApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B19B50FE40FAAAA58F039ED6 /* ReflexApp.swift */; };
 		AE2F3D20A7171C1DD7C74CA5 /* CanvasScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 025EBD84B13E2749FADC298A /* CanvasScreen.swift */; };
+		BD97EAB62B0CB7F90CE2C912 /* Handwriting.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC31D4E7E035B1B92EF4CAE /* Handwriting.swift */; };
 		C3B697D9E6F31BA838D82B55 /* InkToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A77E94A0089D3C99A6A8901 /* InkToolbar.swift */; };
 		D88096101CA9432FA07938C6 /* SpaceSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69BAF4E1D80231F143C1C8E1 /* SpaceSession.swift */; };
+		DDF8E32BCC4E6088DBB7ED0C /* Imports.swift in Sources */ = {isa = PBXBuildFile; fileRef = C665F2EF43A920AEFF8EB9CD /* Imports.swift */; };
 		FCCDCDA94BE70ED2342CED8B /* ReflexRender in Frameworks */ = {isa = PBXBuildFile; productRef = 7A1451747DB4DC866B3F0C75 /* ReflexRender */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		025EBD84B13E2749FADC298A /* CanvasScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasScreen.swift; sourceTree = "<group>"; };
 		3EAE784E8E35762E81C8317F /* Reflex.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Reflex.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		67AC7BE637ACC8B15C35B1AA /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 		69BAF4E1D80231F143C1C8E1 /* SpaceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceSession.swift; sourceTree = "<group>"; };
 		6D4550F287B1A53DCAEC12B8 /* ReflexLink */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ReflexLink; path = Packages/ReflexLink; sourceTree = SOURCE_ROOT; };
 		6F99831FE1DCFCD587A60690 /* ReflexInput */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ReflexInput; path = Packages/ReflexInput; sourceTree = SOURCE_ROOT; };
 		7A77E94A0089D3C99A6A8901 /* InkToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkToolbar.swift; sourceTree = "<group>"; };
+		803A0225FA2DEB283EABC793 /* PanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelView.swift; sourceTree = "<group>"; };
 		AE1289844C38D7FE7CAF6CDF /* ReflexRender */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ReflexRender; path = Packages/ReflexRender; sourceTree = SOURCE_ROOT; };
 		B19B50FE40FAAAA58F039ED6 /* ReflexApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReflexApp.swift; sourceTree = "<group>"; };
 		BC8E8B6AC631BCC380336539 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		C3BCA2CC1A4BA7515DC71FEE /* AgentsBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsBar.swift; sourceTree = "<group>"; };
+		C665F2EF43A920AEFF8EB9CD /* Imports.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Imports.swift; sourceTree = "<group>"; };
+		CDC31D4E7E035B1B92EF4CAE /* Handwriting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Handwriting.swift; sourceTree = "<group>"; };
 		F279A47D5602D40DAD49D3C0 /* PairSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -74,12 +84,17 @@
 		B4C9D59B29766C3CA0232DF3 /* Reflex */ = {
 			isa = PBXGroup;
 			children = (
+				C3BCA2CC1A4BA7515DC71FEE /* AgentsBar.swift */,
 				025EBD84B13E2749FADC298A /* CanvasScreen.swift */,
+				CDC31D4E7E035B1B92EF4CAE /* Handwriting.swift */,
+				C665F2EF43A920AEFF8EB9CD /* Imports.swift */,
 				BC8E8B6AC631BCC380336539 /* Info.plist */,
 				7A77E94A0089D3C99A6A8901 /* InkToolbar.swift */,
 				F279A47D5602D40DAD49D3C0 /* PairSheet.swift */,
+				803A0225FA2DEB283EABC793 /* PanelView.swift */,
 				B19B50FE40FAAAA58F039ED6 /* ReflexApp.swift */,
 				69BAF4E1D80231F143C1C8E1 /* SpaceSession.swift */,
+				67AC7BE637ACC8B15C35B1AA /* Voice.swift */,
 			);
 			path = Reflex;
 			sourceTree = "<group>";
@@ -151,11 +166,16 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				66AF564D327AA5A9C5F1E5E7 /* AgentsBar.swift in Sources */,
 				AE2F3D20A7171C1DD7C74CA5 /* CanvasScreen.swift in Sources */,
+				BD97EAB62B0CB7F90CE2C912 /* Handwriting.swift in Sources */,
+				DDF8E32BCC4E6088DBB7ED0C /* Imports.swift in Sources */,
 				C3B697D9E6F31BA838D82B55 /* InkToolbar.swift in Sources */,
 				48B74E2F9FCF99E932A54C57 /* PairSheet.swift in Sources */,
+				676C66BEF7B6ECA161429D00 /* PanelView.swift in Sources */,
 				AC64987EDEADC85E30C0038D /* ReflexApp.swift in Sources */,
 				D88096101CA9432FA07938C6 /* SpaceSession.swift in Sources */,
+				8868AF65494D12C1D2B6332E /* Voice.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

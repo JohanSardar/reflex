@@ -239,11 +239,23 @@ export class Coordinator {
     void peer.session.send({ t: "assets_have", hashes: this.#assets.list() }, undefined, "control").catch(() => {});
     for (const id of this.#store.ids()) this.#pump(id, peer);
     for (const a of this.pendingAgents()) void peer.session.send({ t: "agent_request", ...a }, undefined, "control").catch(() => {});
+    this.#sendAgents(peer);
+  }
+
+  /** Every Agent's name and color, so iPads can label Agent changes (their chips and history). */
+  announceAgents(): void {
+    for (const p of this.#peers.values()) this.#sendAgents(p);
+  }
+
+  #sendAgents(p: Peer): void {
+    const agents = this.#catalog.agents().map(({ id, name, color, status }) => ({ id, name, color, status }));
+    void p.session.send({ t: "agents", agents }, undefined, "control").catch(() => {});
   }
 
   /** Asks every connected iPad about an Agent waiting for approval. */
   askAboutAgent(a: { id: string; name: string; color: string }): void {
     for (const p of this.#peers.values()) void p.session.send({ t: "agent_request", ...a }, undefined, "control").catch(() => {});
+    this.announceAgents();
   }
 
   /** Who a peer's changes may be written for, from its pairing record. */
