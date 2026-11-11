@@ -80,7 +80,8 @@
       },
       "maxItems": 200
     },
-    "region": { "description": "trigger region: the Region whose Send button was pressed. The Send goes to the Region's owner.", "$ref": "common.schema.json#/$defs/element_id" },
+    "region": { "description": "trigger region: the Region whose Send button was pressed; the Send claims only the strokes and changes inside it. trigger watch: the watched Region the snapshot shows. The Send goes to the Region's owner.", "$ref": "common.schema.json#/$defs/element_id" },
+    "user_still_writing": { "description": "trigger watch: true when the person was still writing when the snapshot was taken.", "type": "boolean" },
     "element": {
       "description": "trigger behavior: the Element that was interacted with. The kernel runs that Element's Behaviors for on (and event): a send action makes a full Send, a notify makes a tap (nothing is claimed and the person's turn goes on), and set and apply_recipe are run by the Link as the Element's owner.",
       "$ref": "common.schema.json#/$defs/element_id"

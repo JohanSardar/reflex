@@ -82,7 +82,8 @@ export function serveHost(o: HostOptions): Promise<Server> {
           else if (f.action === "revert") json = core.personRevert(a.space, a.agent);
           else if (f.action === "history") json = core.timeline(a.space);
           else if (f.action === "stroke") json = core.personStroke(a.space, a.points);
-          else if (f.action === "send") json = core.personSend(a.space, { said: a.said, trigger: a.trigger });
+          else if (f.action === "write-line") json = core.personWriteLine(a.space, a.target, a.text, { confidence: a.confidence });
+          else if (f.action === "send") json = core.personSend(a.space, { said: a.said, trigger: a.trigger, region: a.region });
           else throw new Error(`unknown person action ${f.action}`);
           send({ t: "result", id: f.id, json, images: [], isError: false });
         }

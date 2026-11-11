@@ -17,6 +17,7 @@ Every group of strokes the person drew since their last Send is one Mark in `mar
 | `writing` | `text_guess`, `confidence`, `near` | Handwriting, read on the iPad. `near` is the Element or Mark it sits beside. |
 | `ink` | `near`, `note` | Not recognized. Look at its image, or read its raw strokes. |
 
+- In a Send from a Region (`trigger: "region"`, or a `watch` snapshot), handwriting comes as one `writing` Mark per line, top to bottom, with `line` and `stroke_count`; lines an earlier Send from that Region carried come again with `earlier: true`. read_me("math-tutoring") shows how to grade them.
 - `bounds` is where the Mark is, in your coordinates. `image` names the image that shows it.
 - When a target moved after the Mark was drawn, the Mark has `moved_since_marked: true` and `marked_at` (where it was).
 - `target` says where inside an Embed the Mark points, when the Embed could tell.

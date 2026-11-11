@@ -27,6 +27,7 @@ The Link runs in its terminal. Enter shows a new pairing code; when an Agent ask
 | `relay/` | the Relay's encrypted log from this side: Space keys, pushing and pulling entries, crops, grants for cloud Agents |
 | `pairing/` | device keys and the handshake, QR pairing offers, the signed control catalog |
 | `rpc/client.ts` | the client for the local RPC |
+| `watch.ts` | watch mode: debounced, budgeted snapshots of watched Regions as the person writes, a newer one replacing one not yet taken |
 | `web.ts` | the person's web viewer on 127.0.0.1 (`apps/web`); its address and key are printed in this terminal at start |
 | `bin/reflex-link.ts` | the command |
 
@@ -42,6 +43,7 @@ The Link runs in its terminal. Enter shows a new pairing code; when an Agent ask
 - **Agent approval.** Agents reach the Link on `agent.sock` with `rpc.key` and a credential they keep (`agents/*.cred`, 0600). The first time, the Link asks the person: Allow on an iPad that paired by scanning this Link's code, or `y` in the Link's terminal. Nothing else can approve: the admin RPC (`admin.key`) can deny or revoke but never approve, and another Link can't decide either. The Agent sees no Space content until it is approved. The decision is kept in the signed control catalog against the credential's hash, and records whose signature doesn't verify are ignored.
 - **The web viewer reads and never writes.** Its key is new at every start, held in memory and shown only on the Link's terminal; what a browser sends goes through `receive_sync_message_checked` with no writers, so a change from it is refused and logged. `--web-port <n>` moves it, `--no-web` turns it off.
 - **Routing.** A Send goes to the Agent that owns the Element or Region it came from, else to the Agents that own what its Marks point at, else to every Agent on the Space ([routing.ts](routing.ts)). A Behavior trigger with only `set`, `apply_recipe` or `open_panel` reaches no Agent: the Link runs `set` and `apply_recipe` itself, as the Element's owner, once (each action has a fixed request ID).
+- **Regions.** A Region's Send button claims only the strokes and changes inside it, and shows the work earlier Sends from it carried as context; its handwriting reaches the Agent line by line. Ink is refused where a Region has `ink: false`, checked where the stroke is written. With `watch` on, the Link freezes snapshots of the Region (`kind: "watch"`, claiming nothing) when the person pauses, or every `REFLEX_WATCH_MAX_S` while they keep writing, within `REFLEX_WATCH_MIN_S` and `REFLEX_WATCH_PER_HOUR`.
 - **Re-asking is throttled.** After the person denies or revokes an Agent, its calls answer `rate_limited` for 10 minutes (`REFLEX_REASK_S`) before it may ask again.
 - **Received changes are checked.** The kernel tries a peer's changes on a fork first and applies them only if that peer may make them: an iPad writes only as its person (its own Ink, its Sends, its removals), a paired Link also on behalf of Agents. A rejected message is logged and the session is closed. The Agent layer writes as each Agent through the kernel's own checks.
 

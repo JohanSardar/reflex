@@ -345,6 +345,20 @@
         "marked_at": {
           "$ref": "#/$defs/bounds"
         },
+        "line": {
+          "description": "In a Send from a Region (its Send button, or watch): which handwritten line this is, 1 at the top. Each line is one Mark, in reading order, so you can answer at the exact line with at: {right_of: <mark id>}.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "earlier": {
+          "description": "true for a line an earlier Send from this Region already carried, shown again so the lines read in order. Only lines without it are new.",
+          "type": "boolean"
+        },
+        "stroke_count": {
+          "description": "How many strokes it has. Read them with read(ids: [mark id], detail: 'strokes').",
+          "$ref": "#/$defs/count"
+        },
         "image": {
           "description": "The image (its n) that shows this Mark.",
           "type": "integer",

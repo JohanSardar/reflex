@@ -18,6 +18,7 @@ import type { Inbox } from "./storage/inbox.ts";
 import type { SpaceStore } from "./storage/journal.ts";
 
 import { recipient, route } from "./routing.ts";
+import { Watcher } from "./watch.ts";
 
 /** The Agent layer's view of the Link's Spaces. */
 class LinkSpaces implements AgentSpaces {
@@ -202,6 +203,13 @@ export async function startAgentHost(o: AgentHostOptions) {
     if (origin === "send" || origin.startsWith("sync:")) behaviors(space);
   });
   for (const space of o.store.ids()) behaviors(space);
+
+  // Watch mode: snapshots of watched Regions as the person writes in them (watch.ts).
+  const watcher = new Watcher({ core, store: o.store, inbox: o.inbox, log: o.log });
+  o.store.onChange((space, origin) => {
+    if (origin !== "send") watcher.changed(space);
+  });
+  for (const space of o.store.ids()) watcher.changed(space);
 
   const notApproved = (a: AgentRecord, msg: string, fix: string) =>
     new ReflexError("not_approved", [{ code: "not_approved", msg, fix }]);

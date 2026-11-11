@@ -69,6 +69,28 @@ fn summarize(e: &Edit) -> Option<Value> {
     })
 }
 
+/// The most strokes one watch snapshot carries (ARCHITECTURE §7.6, watch-mode size budget).
+pub const MAX_WATCH_STROKES: usize = 1500;
+
+/// Whether `b` lies in the Region `r`: its center is inside.
+pub fn inside(r: [i64; 4], b: [i64; 4]) -> bool {
+    let (cx, cy) = (b[0] + b[2] / 2, b[1] + b[3] / 2);
+    cx >= r[0] && cx <= r[0] + r[2] && cy >= r[1] && cy <= r[1] + r[3]
+}
+
+/// Where the Element an edit touched is (or was).
+fn edit_bounds(tx: &Transaction, e: &Edit) -> Option<[i64; 4]> {
+    match e {
+        Edit::Create { snapshot } | Edit::Delete { snapshot } => {
+            Record::from_snapshot(snapshot).map(|r| r.bounds)
+        }
+        Edit::Field { field, new, .. } if field == "bounds" => {
+            serde_json::from_str(new.as_deref()?).ok()
+        }
+        _ => doc::live_record(tx, &e.key()).map(|r| r.bounds),
+    }
+}
+
 pub fn freeze(
     tx: &mut Transaction,
     person: &str,
@@ -150,29 +172,95 @@ pub fn freeze(
             extra.insert("actions".into(), Value::Array(fired));
         }
     }
+    let trigger = raw
+        .get("trigger")
+        .and_then(Value::as_str)
+        .unwrap_or("button");
+    // A Region's Send button, or a watch snapshot, carries only that Region's work.
+    let mut scope: Option<[i64; 4]> = None;
     if let Some(r) = raw.get("region").and_then(Value::as_str) {
-        if let Some(rec) = crate::apply::resolve(tx, &me, r).and_then(|k| doc::live_record(tx, &k))
-        {
-            extra.insert("region".into(), json!(rec.key));
-            extra.insert("owner".into(), rec.owner.to_json());
+        let rec = crate::apply::resolve(tx, &me, r).and_then(|k| doc::live_record(tx, &k));
+        match rec {
+            Some(rec) if rec.typ == "region" => {
+                if matches!(trigger, "region" | "watch") {
+                    scope = Some(rec.bounds);
+                }
+                if trigger == "watch" && rec.field_json("watch") != Some(Value::Bool(true)) {
+                    return Err(FreezeError::Rejected(vec![OpError::new(
+                        0,
+                        Code::InvalidInput,
+                        format!("Region '{r}' is not watched."),
+                        "Send watch snapshots only for a Region whose watch is on.",
+                    )]));
+                }
+                extra.insert("region".into(), json!(rec.key));
+                extra.insert("owner".into(), rec.owner.to_json());
+            }
+            _ if matches!(trigger, "region" | "watch") => {
+                return Err(FreezeError::Rejected(vec![OpError::new(
+                    0,
+                    Code::UnknownId,
+                    format!("No Region '{r}'."),
+                    "Pass the ID of the Region whose Send button was pressed.",
+                )]))
+            }
+            _ => {}
         }
+    } else if matches!(trigger, "region" | "watch") {
+        return Err(FreezeError::Rejected(vec![OpError::new(
+            0,
+            Code::InvalidInput,
+            format!("A {trigger} Send needs its region."),
+            "Pass the Region's ID as \"region\".",
+        )]));
     }
+    if trigger == "watch" {
+        kind = "watch";
+    }
+    let within = |b: [i64; 4]| scope.is_none_or(|r| inside(r, b));
     let claims = doc::root(tx, "claims");
     let claimed = |tx: &Transaction, k: &str| doc::get_str(tx, &claims, k).is_some();
 
-    // Unsent strokes: this person's live Ink no earlier Send has claimed.
+    // Unsent strokes: this person's live Ink no earlier Send has claimed. A watch
+    // snapshot claims nothing; it shows all of the person's Ink in the Region, so the
+    // Region's own Send later still carries the work.
     let claiming = kind == "send";
+    let watching = kind == "watch";
     let mut strokes: Vec<String> = doc::live_records(tx)
         .into_iter()
-        .filter(|r| {
-            claiming
-                && r.typ == "ink"
-                && r.owner == me
-                && !claimed(tx, &format!("stroke:{}", r.key))
-        })
+        .filter(|r| r.typ == "ink" && r.owner == me && within(r.bounds))
+        .filter(|r| watching || (claiming && !claimed(tx, &format!("stroke:{}", r.key))))
         .map(|r| r.key)
         .collect();
-    if let Some(extra) = raw.get("strokes").and_then(|v| v.as_array()) {
+    if watching && strokes.len() > MAX_WATCH_STROKES {
+        // The newest strokes: the person's latest work matters most.
+        let times = crate::marks::stroke_times(tx, person);
+        strokes.sort_by_key(|k| times.get(k).copied().unwrap_or(0));
+        strokes.drain(..strokes.len() - MAX_WATCH_STROKES);
+    }
+    // A Region's Send also shows the work already sent from it, so its lines are
+    // numbered from the top of the Region and a correction reads in place. Those
+    // strokes are context: claimed before, not claimed again.
+    let mut context: Vec<String> = if scope.is_some() && claiming {
+        doc::live_records(tx)
+            .into_iter()
+            .filter(|r| r.typ == "ink" && r.owner == me && within(r.bounds))
+            .filter(|r| claimed(tx, &format!("stroke:{}", r.key)))
+            .map(|r| r.key)
+            .collect()
+    } else {
+        vec![]
+    };
+    if context.len() + strokes.len() > MAX_WATCH_STROKES {
+        let times = crate::marks::stroke_times(tx, person);
+        context.sort_by_key(|k| times.get(k).copied().unwrap_or(0));
+        context.drain(..(context.len() + strokes.len() - MAX_WATCH_STROKES).min(context.len()));
+    }
+    if let Some(extra) = raw
+        .get("strokes")
+        .and_then(|v| v.as_array())
+        .filter(|_| !watching)
+    {
         let mut errs = vec![];
         for s in extra.iter().filter_map(|v| v.as_str()) {
             match doc::live_record(tx, s) {
@@ -198,6 +286,13 @@ pub fn freeze(
     let entries: Vec<_> = crate::history_entries(tx, person)
         .into_iter()
         .filter(|e| claiming && e.state == "done" && !claimed(tx, &format!("entry:{}", e.id)))
+        // A Region's Send claims only the actions on what lies inside it.
+        .filter(|e| {
+            scope.is_none()
+                || e.edits
+                    .iter()
+                    .all(|ed| edit_bounds(tx, ed).is_some_and(within))
+        })
         .collect();
     let changes: Vec<Value> = entries
         .iter()
@@ -230,6 +325,9 @@ pub fn freeze(
     for (k, v) in extra {
         record[k] = v;
     }
+    if !context.is_empty() {
+        record["context"] = json!(context);
+    }
     for k in [
         "said",
         "viewport",
@@ -241,6 +339,7 @@ pub fn freeze(
         "event",
         "values",
         "panel",
+        "user_still_writing",
     ] {
         if let Some(v) = raw.get(k) {
             record[k] = v.clone();
@@ -251,7 +350,8 @@ pub fn freeze(
     }
     let text = record.to_string();
     tx.put(&sends, send_id, text.as_str())?;
-    for s in &strokes {
+    // A watch snapshot shows strokes without claiming them; the Region's Send does.
+    for s in strokes.iter().filter(|_| claiming) {
         tx.put(&claims, format!("stroke:{s}"), send_id)?;
     }
     for e in &entries {

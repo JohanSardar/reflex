@@ -81,6 +81,7 @@
         "invalid_placement",
         "not_yours",
         "region_read_only",
+        "region_no_ink",
         "too_large",
         "unknown_space",
         "unknown_send",
