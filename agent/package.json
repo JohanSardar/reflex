@@ -1,0 +1,24 @@
+{
+  "name": "@reflex/agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Reflex Agent layer: the capability table behind the MCP server and the reflex CLI.",
+  "type": "module",
+  "bin": {
+    "reflex": "./bin/reflex.mjs"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@reflex/kernel": "0.1.0",
+    "@reflex/protocol": "0.0.0",
+    "@resvg/resvg-js": "2.6.2",
+    "ajv": "8.17.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "typescript": "7.0.2"
+  }
+}
