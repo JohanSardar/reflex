@@ -24,28 +24,38 @@
 // (met through an invite) syncs only the Spaces it shares with this one, and
 // gets only the assets those Spaces refer to.
 //
-// Sync state is restartable: on every new binding it is reset, so the two
-// sides run anti-entropy from scratch and repair anything a dropped
-// connection lost. Duplicate deliveries are harmless.
+// A peer can be connected over several transports at once (LAN, Apple
+// peer-to-peer). Every path stays open and whatever arrives on any of them is
+// taken; this side sends over the fastest, chosen with hysteresis
+// (./paths.ts). A path that closes or goes silent is dropped; if it was the
+// one being sent on, the next best takes over at once.
+//
+// Sync state is restartable: on every new binding, and whenever the path
+// being sent on is lost, it is reset, so the two sides run anti-entropy from
+// scratch and repair anything a dropped connection lost. Duplicate
+// deliveries are harmless: the same change arriving twice, over one path or
+// two, changes nothing the second time (`everyPath` sends every change over
+// every live path, to show it).
 import type { Catalog, PairedDevice } from "../pairing/catalog.ts";
 import type { Shares } from "../sharing.ts";
-import { handshake, type Me, type PeerInfo, type ScannedOffer, type Session } from "../pairing/handshake.ts";
+import { handshake, type Me, type Message, type PeerInfo, type ScannedOffer, type Session } from "../pairing/handshake.ts";
 import type { Offers, ParsedOffer } from "../pairing/offer.ts";
 import type { AssetStore } from "../storage/assets.ts";
 import type { SpaceStore } from "../storage/journal.ts";
-import type { Candidate, Path, Transport } from "../transports/transport.ts";
+import type { Candidate, Path, Priority, Transport } from "../transports/transport.ts";
+import { PathSet, SILENT_MS } from "./paths.ts";
 
 const ASSET_PART = 1024 * 1024;
 
 export interface Peer {
-  /** Assets arriving from this peer, part by part. */
+  /** Assets arriving from this peer, part by part, per path. */
   incoming: Map<string, { size: number; parts: Buffer[]; got: number }>;
   /** Asset parts go out one at a time, each after the Path drains; control and sync frames don't wait behind them. */
   assetOut: Promise<void>;
   device: string;
   name: string;
-  session: Session;
-  initiator: string; // the device that dialed
+  /** Every live path to this peer; changes go out on `paths.active()`. */
+  paths: PathSet;
   since: number;
   /** Spaces whose changes from this peer were refused: not synced with it again until it reconnects. */
   refused: Set<string>;
@@ -70,6 +80,7 @@ export class Coordinator {
   #timer: NodeJS.Timeout | null = null;
   #onPaired: ((d: PairedDevice) => void)[] = [];
   #pings = 0;
+  #everyPath: boolean;
   /** Agents waiting for approval, shown on every iPad that connects. */
   pendingAgents: () => { id: string; name: string; color: string }[] = () => [];
   /** The person's answer about an Agent, from a paired iPad. */
@@ -96,6 +107,8 @@ export class Coordinator {
     shares: Shares;
     transports: Transport[];
     log: Log;
+    /** Send every change over every live path, not just the fastest (duplicates are harmless). */
+    everyPath?: boolean;
   }) {
     this.#shares = opts.shares;
     this.#me = opts.me;
@@ -105,6 +118,7 @@ export class Coordinator {
     this.#offers = opts.offers;
     this.#transports = opts.transports;
     this.#log = opts.log;
+    this.#everyPath = opts.everyPath ?? false;
     this.#store.onChange((space, origin) => {
       if (origin === "create") this.#announceSpaces();
       for (const p of this.#peers.values()) this.#pump(space, p);
@@ -130,7 +144,7 @@ export class Coordinator {
     for (const p of [...this.#peers.values()]) {
       const d = this.#catalog.device(p.device);
       if (!d || (d.person.id !== this.#me.person.id && !this.#store.ids().some((id) => this.#shares.allowed(d, id)))) {
-        p.session.close("no longer shares a Space with this Link");
+        for (const e of p.paths.all()) e.session.close("no longer shares a Space with this Link");
         continue;
       }
       this.#sendSpaces(p);
@@ -160,7 +174,7 @@ export class Coordinator {
 
   async stop(): Promise<void> {
     if (this.#timer) clearInterval(this.#timer);
-    for (const p of this.#peers.values()) p.session.close("link stopping");
+    for (const p of this.#peers.values()) for (const e of p.paths.all()) e.session.close("link stopping");
     await Promise.all(this.#transports.map((t) => t.close()));
   }
 
@@ -212,7 +226,7 @@ export class Coordinator {
     if (!d || d.via !== "invite") return;
     this.#catalog.forget("device", device);
     this.#candidates.delete(device);
-    this.#peers.get(device)?.session.close("removed from every shared Space");
+    for (const e of this.#peers.get(device)?.paths.all() ?? []) e.session.close("removed from every shared Space");
     this.#log(`forgot ${d.name} (${device}): it shares no Space with this Link any more`);
   }
 
@@ -284,45 +298,84 @@ export class Coordinator {
   #candidate(c: Candidate): void {
     if (!c.device || c.device === this.#me.key.device) return;
     const list = this.#candidates.get(c.device) ?? [];
-    if (!list.some((x) => x.host === c.host && x.port === c.port)) list.unshift(c);
-    this.#candidates.set(c.device, list.slice(0, 6));
-    if (this.#catalog.device(c.device) && !this.#peers.has(c.device)) void this.#dial(c.device);
+    if (!list.some((x) => x.transport === c.transport && x.host === c.host && x.port === c.port)) list.unshift(c);
+    // The latest few per transport: a device with many LAN addresses must not push its Relay or
+    // peer-to-peer candidate out.
+    const per = new Map<string, number>();
+    const kept = list.filter((x) => {
+      const n = (per.get(x.transport) ?? 0) + 1;
+      per.set(x.transport, n);
+      return n <= 6;
+    });
+    this.#candidates.set(c.device, kept);
+    if (this.#catalog.device(c.device) && !this.#peers.get(c.device)?.paths.on(c.transport)) void this.#dial(c.device);
   }
 
   #redial(): void {
-    for (const d of this.#catalog.devices()) if (!this.#peers.has(d.device)) void this.#dial(d.device);
-    // Keep RTT fresh on live paths.
-    for (const p of this.#peers.values()) void p.session.send({ t: "ping", n: ++this.#pings, at: Date.now() }, undefined, "control").catch(() => {});
+    for (const d of this.#catalog.devices()) void this.#dial(d.device);
+    // Keep RTT fresh on every live path, and drop paths that went silent (a network can vanish
+    // without closing the socket).
+    const now = Date.now();
+    for (const p of this.#peers.values())
+      for (const e of p.paths.all()) {
+        if (now - e.lastHeard > SILENT_MS) {
+          e.session.close(`heard nothing for ${Math.round((now - e.lastHeard) / 1000)} s`);
+          continue;
+        }
+        void e.session.send({ t: "ping", n: ++this.#pings, at: now }, undefined, "control").catch(() => {});
+      }
   }
 
+  /** Dials a paired device on every transport it can be dialed on and has no path over yet. */
   async #dial(device: string): Promise<void> {
-    if (this.#dialing.has(device) || this.#peers.has(device)) return;
+    if (this.#dialing.has(device)) return;
     const known = this.#catalog.device(device);
     // An iPad always dials its Link (it listens on no path); dialing it back
     // through the Relay would only cut into its own session.
     if (!known || known.kind === "ipad") return;
+    const have = (t: string): boolean => Boolean(this.#peers.get(device)?.paths.on(t));
+    // Where it was last reached goes first: it is the likeliest to work, and every miss costs a timeout.
     const list = [...(this.#candidates.get(device) ?? [])];
-    if (known.last_seen) list.push({ transport: "lan", device, host: known.last_seen.host, port: known.last_seen.port });
-    // The LAN first; the Relay is the path for when the LAN can't reach the device.
-    list.sort((a, b) => Number(a.transport !== "lan") - Number(b.transport !== "lan"));
-    if (list.length === 0) return;
+    if (known.last_seen) list.unshift({ transport: "lan", device, host: known.last_seen.host, port: known.last_seen.port });
+    // The Relay is the path for when nothing closer reaches the device: it isn't dialed next to a live one.
+    const reached = this.#peers.has(device);
+    const todo = list.filter(
+      (c, i) =>
+        !have(c.transport) &&
+        !(reached && c.transport === "relay") &&
+        list.findIndex((x) => x.transport === c.transport && x.host === c.host && x.port === c.port) === i,
+    );
+    todo.sort((a, b) => Number(a.transport === "relay") - Number(b.transport === "relay"));
+    if (todo.length === 0) return;
     this.#dialing.add(device);
     try {
-      for (const c of list) {
-        let path: Path;
-        try {
-          const t = this.#transports.find((x) => x.name === c.transport);
-          if (!t) continue;
-          path = await t.dial(c);
-        } catch {
-          continue;
-        }
+      for (const name of new Set(todo.map((c) => c.transport))) {
+        if (have(name) || (name === "relay" && this.#peers.has(device))) continue;
+        const t = this.#transports.find((x) => x.name === name);
+        if (!t) continue;
+        // Every address at once: the first to connect is used, so dead addresses cost no time.
+        let won = false;
+        const first = await Promise.any(
+          todo
+            .filter((c) => c.transport === name)
+            .map((c) =>
+              t.dial(c).then((path) => {
+                if (won) {
+                  path.close("another address answered first");
+                  throw new Error("late");
+                }
+                won = true;
+                return { path, c };
+              }),
+            ),
+        ).catch(() => null);
+        if (!first) continue;
+        const { path, c } = first;
         try {
           const r = await handshake(path, this.#me, this.#trust());
           if (r.peer.device !== device) throw new Error(`expected ${device}, reached ${r.peer.device}`);
           if (c.transport === "lan") this.#catalog.seen(device, c.host, c.port);
           this.#bind(r.session, device, r.peer.name, this.#me.key.device);
-          return;
         } catch (e) {
           path.close("handshake failed");
           this.#log(`could not connect to ${device} at ${c.host}:${c.port}: ${(e as Error).message}`);
@@ -334,29 +387,44 @@ export class Coordinator {
   }
 
   /**
-   * One live session per peer. If two exist (both sides dialed at once), both
-   * sides keep the one dialed by the lower device ID, so they agree.
+   * One live session per peer per transport. If two exist on one transport (both sides dialed
+   * at once), both sides keep the one dialed by the lower device ID, so they agree. A session on
+   * another transport is another path to the same peer.
    */
   #bind(session: Session, device: string, name: string, initiator: string): void {
-    const old = this.#peers.get(device);
-    if (old) {
-      if (old.initiator <= initiator) {
-        session.close("duplicate path");
-        return;
+    const transport = session.path.transport;
+    const known = this.#peers.get(device);
+    if (known) {
+      const same = known.paths.on(transport);
+      if (same) {
+        if (same.initiator <= initiator) {
+          session.close("duplicate path");
+          return;
+        }
+        same.session.close("replaced by a preferred path");
       }
-      old.session.close("replaced by a preferred path");
+      known.paths.add(session, initiator);
+      this.#log(`added a ${transport} path to ${name} (${session.path.remote}); ${known.paths.size} paths`);
+      void this.#loop(known, session);
+      return;
     }
-    const peer: Peer = { incoming: new Map(), assetOut: Promise.resolve(), device, name, session, initiator, since: Date.now(), refused: new Set() };
+    const peer: Peer = { incoming: new Map(), assetOut: Promise.resolve(), device, name, paths: new PathSet(), since: Date.now(), refused: new Set() };
+    peer.paths.add(session, initiator);
     this.#peers.set(device, peer);
-    this.#log(`connected to ${name} (${device}) over ${session.path.transport} ${session.path.remote}`);
-    for (const id of this.#store.ids()) this.#store.read(id, (s) => s.resetSync(device));
-    void this.#loop(peer);
+    this.#log(`connected to ${name} (${device}) over ${transport} ${session.path.remote}`);
+    void this.#loop(peer, session);
+    this.#fresh(peer);
+  }
+
+  /** Starts over with a peer on its active path: anti-entropy for every Space, assets, open questions. */
+  #fresh(peer: Peer): void {
+    for (const id of this.#store.ids()) this.#store.read(id, (s) => s.resetSync(peer.device));
     this.onBound(peer);
     this.#sendSpaces(peer);
-    void peer.session.send({ t: "assets_have", hashes: this.#assets.list().filter((h) => this.#assetOk(peer, h)) }, undefined, "control").catch(() => {});
+    this.#send(peer, { t: "assets_have", hashes: this.#assets.list().filter((h) => this.#assetOk(peer, h)) });
     for (const id of this.#store.ids()) this.#pump(id, peer);
     if (!this.#own(peer)) return this.#nameAgents(peer); // another person's Link: the shared Spaces, and who its Agents are
-    for (const a of this.pendingAgents()) void peer.session.send({ t: "agent_request", ...a }, undefined, "control").catch(() => {});
+    for (const a of this.pendingAgents()) this.#send(peer, { t: "agent_request", ...a });
     this.#sendAgents(peer);
   }
 
@@ -390,7 +458,22 @@ export class Coordinator {
   #sendAgents(p: Peer): void {
     const agents = this.#catalog.agents().map(({ id, name, color, status }) => ({ id, name, color, status }));
     for (const a of this.#theirAgents.values()) if (!agents.some((x) => x.id === a.id)) agents.push({ id: a.id, name: a.name, color: a.color, status: "approved" });
-    void p.session.send({ t: "agents", agents }, undefined, "control").catch(() => {});
+    this.#send(p, { t: "agents", agents });
+  }
+
+  /** Sends a control message to a peer on its active path (for link.ts's and shared.ts's own messages). */
+  send(p: Peer, h: Message["h"]): void {
+    this.#send(p, h);
+  }
+
+  /**
+   * Sends on the peer's active path. With `everyPath`, sync messages go over every live path, so
+   * the same change arrives more than once.
+   */
+  #send(p: Peer, h: Message["h"], body?: Uint8Array, priority: Priority = "control"): void {
+    const active = p.paths.active();
+    const to = this.#everyPath && h.t === "sync" ? p.paths.all().map((e) => e.session) : active ? [active] : [];
+    for (const s of to) void s.send(h, body, priority).catch((e: Error) => this.#log(`could not send ${h.t} to ${p.name} over ${s.path.transport}: ${e.message}`));
   }
 
   /** The names of this person's approved Agents, for the Links of people a Space is shared with: their iPads label those Agents' changes. */
@@ -399,12 +482,12 @@ export class Coordinator {
       .agents()
       .filter((a) => a.status === "approved")
       .map(({ id, name, color }) => ({ id, name, color }));
-    void p.session.send({ t: "agent_names", agents }, undefined, "control").catch(() => {});
+    this.#send(p, { t: "agent_names", agents });
   }
 
   /** Asks every connected iPad about an Agent waiting for approval. */
   askAboutAgent(a: { id: string; name: string; color: string }): void {
-    for (const p of this.#peers.values()) if (this.#own(p)) void p.session.send({ t: "agent_request", ...a }, undefined, "control").catch(() => {});
+    for (const p of this.#peers.values()) if (this.#own(p)) this.#send(p, { t: "agent_request", ...a });
     this.announceAgents();
   }
 
@@ -419,7 +502,7 @@ export class Coordinator {
 
   #sendSpaces(p: Peer): void {
     const spaces = this.#store.ids().filter((id) => this.#allowed(p, id)).map((id) => ({ id, kind: this.#store.kind(id) }));
-    void p.session.send({ t: "spaces", spaces }, undefined, "control").catch(() => {});
+    this.#send(p, { t: "spaces", spaces });
   }
 
   #announceSpaces(): void {
@@ -428,35 +511,48 @@ export class Coordinator {
 
   /** Tells peers about a newly stored asset. */
   announceAsset(hash: string): void {
-    for (const p of this.#peers.values()) if (this.#assetOk(p, hash)) void p.session.send({ t: "assets_have", hashes: [hash] }, undefined, "control").catch(() => {});
+    for (const p of this.#peers.values()) if (this.#assetOk(p, hash)) this.#send(p, { t: "assets_have", hashes: [hash] });
   }
 
   #pump(space: string, p: Peer): void {
     if (this.#peers.get(p.device) !== p || !this.#allowed(p, space)) return;
     const msg = this.#store.read(space, (s) => s.syncMessage(p.device));
-    if (msg) void p.session.send({ t: "sync", space }, msg, "change").catch((e: Error) => this.#log(`could not send ${space} to ${p.name}: ${e.message}`));
+    if (msg) this.#send(p, { t: "sync", space }, msg, "change");
   }
 
-  async #loop(p: Peer): Promise<void> {
+  async #loop(p: Peer, s: Session): Promise<void> {
+    const transport = s.path.transport;
     try {
       for (;;) {
-        const m = await p.session.next();
+        const m = await s.next();
         if (!m) break;
-        this.#handle(p, m.h, m.body);
+        const e = p.paths.entry(s);
+        if (e) e.lastHeard = Date.now();
+        this.#handle(p, s, m.h, m.body);
       }
     } catch (e) {
-      this.#log(`dropping ${p.name} (${p.device}): ${(e as Error).message}`);
-      p.session.close("bad frame");
+      this.#log(`dropping the ${transport} path to ${p.name} (${p.device}): ${(e as Error).message}`);
+      s.close("bad frame");
     }
-    if (this.#peers.get(p.device) === p) {
+    for (const k of p.incoming.keys()) if (k.startsWith(`${s.path.id}:`)) p.incoming.delete(k);
+    if (this.#peers.get(p.device) !== p) return;
+    const r = p.paths.remove(s);
+    if (p.paths.size === 0) {
       this.#peers.delete(p.device);
-      for (const id of this.#store.ids()) this.#store.read(id, (s) => s.resetSync(p.device));
+      for (const id of this.#store.ids()) this.#store.read(id, (x) => x.resetSync(p.device));
       this.#log(`disconnected from ${p.name} (${p.device})`);
       this.onUnbound(p);
+      return;
+    }
+    this.#log(`lost the ${transport} path to ${p.name}; ${p.paths.size} left`);
+    if (r.wasActive && r.active) {
+      // What was in flight on the lost path may be gone: start over on the one that is left.
+      this.#log(`now sending to ${p.name} over ${r.active.path.transport} ${r.active.path.remote}`);
+      this.#fresh(p);
     }
   }
 
-  #handle(p: Peer, h: Record<string, unknown>, body: Uint8Array): void {
+  #handle(p: Peer, s: Session, h: Record<string, unknown>, body: Uint8Array): void {
     switch (h.t) {
       case "spaces": {
         for (const s of (h.spaces as { id: string; kind: string }[]) ?? []) {
@@ -480,7 +576,7 @@ export class Coordinator {
           // That Space stops syncing with it until it reconnects; its other Spaces carry on.
           p.refused.add(space);
           this.#store.read(space, (s) => s.resetSync(p.device));
-          void p.session.send({ t: "refused", space, reason }, undefined, "control").catch(() => {});
+          this.#send(p, { t: "refused", space, reason });
           return;
         }
         this.#pump(space, p); // the sync protocol needs a reply even when nothing changed
@@ -488,18 +584,23 @@ export class Coordinator {
       }
       case "assets_have": {
         const want = ((h.hashes as string[]) ?? []).filter((x) => !this.#assets.has(x));
-        if (want.length) void p.session.send({ t: "asset_want", hashes: want }, undefined, "control").catch(() => {});
+        if (want.length) this.#send(p, { t: "asset_want", hashes: want });
         return;
       }
       case "asset_want": {
         for (const x of (h.hashes as string[]) ?? []) {
           if (!this.#assets.has(x) || !this.#assetOk(p, x)) continue;
           const bytes = this.#assets.get(x);
+          // All parts of one asset go over the path that was active for its first part; the
+          // other side puts parts together per path.
+          let via: Session | null = null;
           for (let off = 0; off === 0 || off < bytes.length; off += ASSET_PART)
             p.assetOut = p.assetOut
               .then(() => {
                 if (this.#peers.get(p.device) !== p) return;
-                return p.session.send({ t: "asset", hash: x, off, size: bytes.length }, bytes.subarray(off, off + ASSET_PART), "asset");
+                if (off === 0) via = p.paths.active();
+                if (!via || !p.paths.entry(via)) return; // that path is gone; the peer asks again on the next one
+                return via.send({ t: "asset", hash: x, off, size: bytes.length }, bytes.subarray(off, off + ASSET_PART), "asset");
               })
               .catch((e: Error) => this.#log(`could not send asset ${x} to ${p.name}: ${e.message}`));
         }
@@ -510,16 +611,17 @@ export class Coordinator {
         const off = Number(h.off);
         const size = Number(h.size);
         if (this.#assets.has(hash)) return;
-        let inc = p.incoming.get(hash);
-        if (off === 0) p.incoming.set(hash, (inc = { size, parts: [], got: 0 }));
+        const key = `${s.path.id}:${hash}`;
+        let inc = p.incoming.get(key);
+        if (off === 0) p.incoming.set(key, (inc = { size, parts: [], got: 0 }));
         if (!inc || inc.got !== off || inc.size !== size || off + body.length > size) {
-          p.incoming.delete(hash);
+          p.incoming.delete(key);
           return this.#log(`dropped a malformed part of asset ${hash} from ${p.name}`);
         }
         inc.parts.push(Buffer.from(body));
         inc.got += body.length;
         if (inc.got < size) return;
-        p.incoming.delete(hash);
+        p.incoming.delete(key);
         if (this.#assets.putVerified(hash, Buffer.concat(inc.parts))) this.announceAsset(hash);
         else this.#log(`rejected asset ${hash} from ${p.name}: bytes do not match the hash`);
         return;
@@ -551,7 +653,7 @@ export class Coordinator {
         this.#log(`${p.name} refused this Link's changes to '${space}' (${String(h.reason ?? "")}); starting it over from ${p.name}`);
         this.#store.reset(space);
         for (const x of this.#peers.values()) this.#store.read(space, (s) => s.resetSync(x.device));
-        void p.session.send({ t: "reset", space }, undefined, "control").catch(() => {});
+        this.#send(p, { t: "reset", space });
         return;
       }
       case "reset": {
@@ -563,11 +665,19 @@ export class Coordinator {
         return;
       }
       case "ping":
-        void p.session.send({ t: "pong", n: h.n, at: h.at }, undefined, "control").catch(() => {});
+        // Answered on the path it came on, so each path's RTT is its own.
+        void s.send({ t: "pong", n: h.n, at: h.at }, undefined, "control").catch(() => {});
         return;
-      case "pong":
-        p.session.path.recordRtt(Date.now() - Number(h.at));
+      case "pong": {
+        s.path.recordRtt(Date.now() - Number(h.at));
+        const from = p.paths.active();
+        const to = p.paths.evaluate();
+        if (to && from)
+          this.#log(
+            `now sending to ${p.name} over ${to.path.transport} (${to.measurements().rttMs} ms) instead of ${from.path.transport} (${from.measurements().rttMs} ms)`,
+          );
         return;
+      }
       default:
         return this.onMessage(p, h, body); // unknown message types from newer peers are ignored there
     }
