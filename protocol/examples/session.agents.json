@@ -1,1 +1,1 @@
-{ "t": "agents", "agents": [ { "id": "a_7Kq2", "name": "Claude Code · reflex repo", "color": "violet", "status": "approved" }, { "id": "a_9Fz1", "name": "Codex", "color": "teal", "status": "pending" } ] }
+{"t": "agents", "agents": [{"id": "a_7Kq2", "name": "Claude Code · reflex repo", "color": "violet", "status": "approved", "requested_at": 1794500000000}, {"id": "a_9Fz1", "name": "Codex", "color": "teal", "status": "pending", "requested_at": 1794510312256}], "approver": true}

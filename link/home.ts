@@ -16,6 +16,8 @@ import { loadDeviceKey, newDeviceKey, type DeviceKey } from "./pairing/crypto.ts
 import type { Person } from "./pairing/catalog.ts";
 
 export interface Identity {
+  /** When this profile was made (ms); profiles from before this field use identity.json's birth time. */
+  created_at?: number;
   key: DeviceKey;
   person: Person;
   name: string; // this device's display name
@@ -63,11 +65,12 @@ export function identity(dir: string, opts: { name?: string; person?: string } =
       person: { id: "p_" + randomBytes(6).toString("hex"), name: personName },
       name: opts.name ?? hostname().replace(/\.local$/, ""),
       actor: randomBytes(16).toString("hex"),
+      created_at: Date.now(),
     };
     writeSecret(path, JSON.stringify(body, null, 2));
   }
   const j = JSON.parse(readFileSync(path, "utf8"));
-  return { key: loadDeviceKey(j.key), person: j.person, name: opts.name ?? j.name, actor: j.actor };
+  return { key: loadDeviceKey(j.key), person: j.person, name: opts.name ?? j.name, actor: j.actor, ...(j.created_at ? { created_at: j.created_at } : {}) };
 }
 
 /** A per-profile local RPC credential: `rpc.key` for Agents, `admin.key` for the user's commands. */

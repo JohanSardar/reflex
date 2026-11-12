@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased (1.1.0)
+
+Additions only; a 1.0 device ignores what it doesn't know (spec/versioning.md).
+
+- **`session`: approving iPads.** `agents` carries `approver` (whether that device's answers count) and each Agent's `requested_at`; `agent_request` and `agent_decision` carry `requested_at`, and a Link ignores an answer to an earlier request. New messages: `agent_decision_refused`, `device_paired`, `approver_requests` and `approver_decision` (spec/identity.md §4).
+
 ## 1.0.0
 
 The first published version. Compared with the v0 draft:

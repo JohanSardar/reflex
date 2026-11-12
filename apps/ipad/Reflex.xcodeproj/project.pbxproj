@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		2479EB30C25B94EBE85498A4 /* RegionButtons.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC3D50E4BDE6A7D43E9EDAB6 /* RegionButtons.swift */; };
+		35DE8E4648D3E18C401BAD10 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 98481F3EB392CF01B8D39CED /* Assets.xcassets */; };
 		38DE8536458E2FDE4A5D07AB /* ReflexModel in Frameworks */ = {isa = PBXBuildFile; productRef = 072B3808F8D0A9D3136E83B0 /* ReflexModel */; };
 		3D0FBA11EE5FC8730D66FD91 /* ReflexEmbed in Frameworks */ = {isa = PBXBuildFile; productRef = 2B811EE745172282BE1206BF /* ReflexEmbed */; };
 		48B74E2F9FCF99E932A54C57 /* PairSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F279A47D5602D40DAD49D3C0 /* PairSheet.swift */; };
@@ -38,6 +39,7 @@
 		6F99831FE1DCFCD587A60690 /* ReflexInput */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ReflexInput; path = Packages/ReflexInput; sourceTree = SOURCE_ROOT; };
 		7A77E94A0089D3C99A6A8901 /* InkToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkToolbar.swift; sourceTree = "<group>"; };
 		803A0225FA2DEB283EABC793 /* PanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelView.swift; sourceTree = "<group>"; };
+		98481F3EB392CF01B8D39CED /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AE1289844C38D7FE7CAF6CDF /* ReflexRender */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ReflexRender; path = Packages/ReflexRender; sourceTree = SOURCE_ROOT; };
 		B19B50FE40FAAAA58F039ED6 /* ReflexApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReflexApp.swift; sourceTree = "<group>"; };
 		BC8E8B6AC631BCC380336539 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -99,6 +101,7 @@
 			isa = PBXGroup;
 			children = (
 				C3BCA2CC1A4BA7515DC71FEE /* AgentsBar.swift */,
+				98481F3EB392CF01B8D39CED /* Assets.xcassets */,
 				025EBD84B13E2749FADC298A /* CanvasScreen.swift */,
 				CC3643A511F5C7769E09F894 /* DebugHand.swift */,
 				CDC31D4E7E035B1B92EF4CAE /* Handwriting.swift */,
@@ -124,6 +127,7 @@
 			buildConfigurationList = 81F883967F078412E13B11E1 /* Build configuration list for PBXNativeTarget "Reflex" */;
 			buildPhases = (
 				AF9F35EEC27A0B6F8171FE0E /* Sources */,
+				530691614D8107F20A59997B /* Resources */,
 				1D6678E9FED2977D766BCB9B /* Frameworks */,
 			);
 			buildRules = (
@@ -182,6 +186,17 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		530691614D8107F20A59997B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				35DE8E4648D3E18C401BAD10 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		AF9F35EEC27A0B6F8171FE0E /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -214,6 +229,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = Reflex/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Reflex;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -363,6 +379,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = Reflex/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Reflex;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

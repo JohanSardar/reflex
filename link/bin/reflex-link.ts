@@ -11,14 +11,19 @@ import { LinkClient, RpcError } from "../rpc/client.ts";
 
 const HELP = `Reflex Link keeps every Space durable on this computer, in sync with your iPad, and open to your Agents.
 
+First time? Run \`reflex setup\`: it starts the Link in the background and shows the code to scan.
+
 Usage
   reflex link                         Start the Link in this terminal and show a pairing code
                                       (Enter shows a new code; y/n answers an Agent asking to connect)
   reflex link status                  Show Spaces, peers, Agents and the Inbox
+  reflex link stop                    Stop the Link running from this profile (in the background or a terminal)
   reflex link pair <code>             Pair with another Link showing <code> (reflex://pair?...)
+                                      (to pair an iPad: reflex pair)
   reflex link agents                  List Agents and their approval
   reflex link deny <agent>            Deny an Agent waiting to connect
   reflex link revoke <agent>          Take an approved Agent's access away
+  reflex link forget <device>         Forget a paired device that is gone (a reinstalled or lost iPad), by name or ID
   reflex link relay                   The Relay: connection and the grants you gave cloud Agents
   reflex link relay revoke <grant>    End a cloud Agent's grant now
   reflex link shares                  Shared Spaces: who is in each, with which role, and live invites
@@ -39,7 +44,7 @@ Space is kept there as an encrypted log the Relay can't read. A cloud Agent sign
 Relay's page, which shows a code: type it into this Link's terminal to pick one Space and how
 long it may use it. Nothing else can grant one.
 
-Agents are approved by you: tap Allow on your iPad, or answer y in the Link's terminal.
+Agents are approved by you: tap Allow on your iPad. Until an iPad approves, y in the Link's terminal does too.
 
 Acting as the person without an iPad (a Link started with --dev)
   reflex link dev space <space>                     Create a Space
@@ -134,13 +139,14 @@ async function start(): Promise<void> {
     p2p: !flags["no-p2p"],
     fault: flags.fault,
     everyPath: flags["every-path"],
+    onShutdown: () => void stop("`reflex link stop`"),
   });
-  await link.start();
   const stop = async (sig: string): Promise<void> => {
     console.log(`link: ${sig}, stopping`);
     await link.stop();
     process.exit(0);
   };
+  await link.start();
   process.on("SIGINT", () => void stop("SIGINT"));
   process.on("SIGTERM", () => void stop("SIGTERM"));
 }
@@ -268,9 +274,38 @@ async function main(): Promise<void> {
       return out(showStatus(s), s);
     }
     case "pair": {
-      if (!args[1]) throw new LinkError("usage", "A new pairing code is shown only in the Link's own terminal.", "Press Enter there. To pair with another Link, run: reflex link pair '<its code>'");
+      if (!args[1]) throw new LinkError("usage", "To pair an iPad, run `reflex pair`: it shows a fresh code to scan.", "To pair this Link with another Link, run: reflex link pair '<its code>'");
       const d = await admin<{ device: string; name: string }>("pair.join", { uri: args[1] });
       return out(`Paired with ${d.name} (${d.device}).`, d);
+    }
+    case "stop": {
+      // The Link answering on this profile's socket, in the background or in another terminal: asked to stop
+      // over its admin socket, so a pid that now belongs to another program is never signalled.
+      let c: LinkClient;
+      try {
+        c = await LinkClient.connect(dir, "admin");
+      } catch {
+        return out(`No Link is running from ${dir}.`, { stopped: false });
+      }
+      let pid: number;
+      try {
+        pid = (await c.call<{ pid: number }>("shutdown")).pid;
+      } finally {
+        c.close();
+      }
+      for (let i = 0; i < 100 && existsSync(join(dir, "link.json")); i++) await new Promise((r) => setTimeout(r, 100));
+      return out(`Stopped the Link (pid ${pid}). \`reflex mcp\` and the CLI start it again when they need it.`, { stopped: true, pid });
+    }
+    case "forget": {
+      if (!args[1]) throw new LinkError("usage", "Which device? reflex link forget <device>", "Run reflex link status to see them.");
+      const d = await admin<{ device: string; name: string; window_until?: number }>("forget", { device: args[1] });
+      return out(
+        `Forgot ${d.name} (${d.device}).` +
+          (d.window_until
+            ? ` No iPad approves Agents now: until ${new Date(d.window_until).toLocaleTimeString()}, \`reflex pair\` pairs one that does. Run it and scan the code on your iPad.`
+            : ""),
+        d,
+      );
     }
     case "agents": {
       const list = await admin<{ id: string; name: string; status: string; color: string }[]>("agents.list");

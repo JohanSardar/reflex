@@ -66,10 +66,13 @@ public enum LinkError: LocalizedError {
     case protocolError(String)
     case refused(String)
     case unreachable(String)
+    /// The computer at the paired address answered with another key: its Link was reset or reinstalled.
+    case linkChanged(String)
 
     public var errorDescription: String? {
         switch self {
         case .badCode(let m), .protocolError(let m), .refused(let m), .unreachable(let m): m
+        case .linkChanged: "This Mac's Link changed. Scan its code again."
         }
     }
 }

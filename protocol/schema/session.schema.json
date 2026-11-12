@@ -218,7 +218,7 @@
     },
     {
       "title": "agents",
-      "description": "Link to the person's own devices: every Agent the Link knows, so devices label Agent changes and show who asks to connect.",
+      "description": "Link to the person's own devices: every Agent the Link knows, so devices label Agent changes and show who asks to connect, and whether this device's answers count (approver).",
       "type": "object",
       "properties": {
         "t": {
@@ -247,6 +247,10 @@
                   "denied",
                   "revoked"
                 ]
+              },
+              "requested_at": {
+                "description": "When the Link asked about this Agent, in milliseconds since the Unix epoch. An Agent asked again later (after a deny) is a new request with a new time; an answer carries the time of the request it answers, and a Link ignores an answer to an earlier one.",
+                "$ref": "common.schema.json#/$defs/count"
               }
             },
             "required": [
@@ -257,6 +261,10 @@
             "additionalProperties": false
           },
           "maxItems": 1000
+        },
+        "approver": {
+          "description": "Whether the Link takes this device's agent_decision: it is an iPad of the person's that approves (identity.md §4). A device that isn't doesn't ask the person.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -267,7 +275,7 @@
     },
     {
       "title": "agent_request",
-      "description": "Link to the person's own iPads: an Agent asks to connect. The iPad answers with agent_decision.",
+      "description": "Link to the person's approving iPads: an Agent asks to connect. The iPad answers with agent_decision.",
       "type": "object",
       "properties": {
         "t": {
@@ -283,6 +291,10 @@
         "color": {
           "type": "string",
           "maxLength": 20
+        },
+        "requested_at": {
+          "description": "When the Link asked about this Agent, in milliseconds since the Unix epoch. An Agent asked again later (after a deny) is a new request with a new time; an answer carries the time of the request it answers, and a Link ignores an answer to an earlier one.",
+          "$ref": "common.schema.json#/$defs/count"
         }
       },
       "required": [
@@ -294,7 +306,7 @@
     },
     {
       "title": "agent_decision",
-      "description": "iPad to its Link: the person allowed or denied an Agent. A Link takes it only from an iPad of its own person that paired by scanning that Link's own code.",
+      "description": "iPad to its Link: the person allowed or denied an Agent. A Link takes it only from an iPad of its own person that approves (identity.md §4), and only for the request it answers (requested_at); otherwise it answers agent_decision_refused or ignores it, and always answers with agents.",
       "type": "object",
       "properties": {
         "t": {
@@ -308,12 +320,130 @@
             "approved",
             "denied"
           ]
+        },
+        "requested_at": {
+          "description": "When the Link asked about this Agent, in milliseconds since the Unix epoch. An Agent asked again later (after a deny) is a new request with a new time; an answer carries the time of the request it answers, and a Link ignores an answer to an earlier one.",
+          "$ref": "common.schema.json#/$defs/count"
         }
       },
       "required": [
         "t",
         "id",
         "status"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "agent_decision_refused",
+      "description": "Link to an iPad of its person's: that iPad's agent_decision doesn't count, because it doesn't approve. The iPad drops the answer, stops asking, and shows the reason.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "agent_decision_refused"
+        },
+        "id": {
+          "$ref": "common.schema.json#/$defs/agent_id"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      },
+      "required": [
+        "t",
+        "id",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "device_paired",
+      "description": "Link to the person's iPads: another device of the person's paired with the Link, so one nobody meant to pair shows. Each iPad is told once, on its next binding if it wasn't connected.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "device_paired"
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "approves": {
+          "description": "Whether its answers about Agents count.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "t",
+        "device",
+        "name",
+        "approves"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "approver_requests",
+      "description": "Link to the person's approving iPads: every iPad of the person's waiting for \"Let … approve Agents?\", the whole list, on every binding and whenever it changes. Once an iPad approves, only an approving iPad makes another one approve.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "approver_requests"
+        },
+        "requests": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "properties": {
+              "device": {
+                "$ref": "#/$defs/device"
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "asked_at": {
+                "description": "Milliseconds since the Unix epoch.",
+                "$ref": "common.schema.json#/$defs/count"
+              }
+            },
+            "required": [
+              "device",
+              "name",
+              "asked_at"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "t",
+        "requests"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "approver_decision",
+      "description": "Approving iPad to its Link: the person's answer to \"Let … approve Agents?\" for another of their iPads. A Link takes it only from an iPad that approves.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "approver_decision"
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        },
+        "allow": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "t",
+        "device",
+        "allow"
       ],
       "additionalProperties": false
     },

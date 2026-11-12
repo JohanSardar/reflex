@@ -1,9 +1,10 @@
 // The surfaces' side of the local RPC to the Link.
 import { connect, type Socket } from "node:net";
+import { ensureLink } from "./start.ts";
 import { frames, home, NoLink, socketPath, token, type ClientFrame, type HostFrame, type WireFile, type Who } from "./rpc.ts";
 
 export type CallResult = { json: Record<string, any>; images: string[]; files?: WireFile[]; isError: boolean };
-type Progress = (f: { elapsed_s: number; timeout_s: number }) => void;
+type Progress = (f: { elapsed_s: number; timeout_s: number; message?: string }) => void;
 /** A pushed Send Bundle; resolve with whether it reached the harness. */
 export type OnPush = (p: { json: Record<string, any>; images: string[]; deadline: number }) => Promise<{ ok: boolean; reason?: string }>;
 
@@ -56,15 +57,20 @@ export class Client {
     this.#send({ t: "hello", token: key, client });
   }
 
-  /** Connects to the running Link. */
+  /** Connects to the running Link, starting one in the background if none is running (start.ts). */
   static async open(client: string): Promise<Client> {
-    const key = token();
     let sock: Socket;
     try {
       sock = await dial(socketPath());
     } catch {
-      throw new NoLink(`The Reflex Link is not running (profile ${home()}). Start it with \`reflex link\`.`);
+      try {
+        await ensureLink();
+        sock = await dial(socketPath());
+      } catch (e) {
+        throw new NoLink((e as Error).message || `The Reflex Link is not running (profile ${home()}). Start it with \`reflex link\`.`);
+      }
     }
+    const key = token();
     const c = new Client(sock, client, key);
     await c.#ready;
     return c;

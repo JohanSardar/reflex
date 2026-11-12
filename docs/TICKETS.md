@@ -32,6 +32,7 @@ There are 55 work items (H1–H55), and each one is in exactly one ticket.
 | T20 Scenarios 6–13 | H41 the remaining Recipes and Guides | After T18 |
 | T22 Shared Spaces | H53 invites, roles and membership checks · H54 Space key sharing and rotation on removal · H55 live presence, and each person's Sends carrying only their Marks | After T17 and T12 |
 | T21 Protocol v1 | H42 publish the protocol and conformance profiles | Last |
+| T23 Setup | first-time setup in one command, one scan and one tap; approval that can't get lost; quiet logs; re-pairing with old data | After T21 |
 
 Tickets for later steps are written when their step is next, so they can build on what earlier tickets found.
 
@@ -675,6 +676,32 @@ Turn Protocol v0 into Protocol v1 that someone outside the project could build a
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
 
+## Step 10 ticket (setup)
+
+```md
+# T23: Setup that just works
+
+## Goal
+Someone tried to connect a real iPad (TestFlight "Reflex Canvas", bundle si.eilmer.reflex) to a Claude Code session. It took over an hour and never worked. Make first-time setup one command, one scan and one tap, and make every failure along the way say in plain words what to do. When this is done:
+1. **One setup command**, from the repo and with no npx: `node agent/bin/reflex.mjs setup`. It puts a `reflex` shim on the PATH (~/.local/bin/reflex). It registers the Reflex MCP server in Claude Code (`claude mcp add`, user scope, with `--channel` push when the session is started with channels) and in Codex (~/.codex/config.toml), when each is installed, without duplicating an existing entry. It makes sure a Link is running: it starts one in the background if none is, so no terminal has to stay open, and `reflex mcp` and the CLI also start one when they need it. Then it prints the pairing QR code and one line saying what to do on the iPad. `reflex pair` shows a fresh QR code at any time, from any terminal, for the running Link. It never uses launchctl for system items, sfltool, keychain writes, or anything that asks for a password.
+2. **Approval can't get lost.** The iPad keeps a decision until the Link confirms it (the `agents` list comes back with that status), and sends it again on every new path. The prompt on the iPad stays up while a request is pending, through reconnects and app relaunches. An Agent call waiting for approval keeps waiting, or returns a clear "waiting for you to tap Allow on the iPad" that the CLI and MCP surfaces show to the model and that tells it to call again rather than give up. The `y/N` question in the Link's terminal is shown again when logs bury it. An Agent with the user's shell still can't approve itself.
+3. **Quiet, honest logs.** When the Mac at the iPad's paired address answers with a different key, the iPad stops redialing it and shows "This Mac's Link changed. Scan its code again." with the scan button. The pairing code leaves out loopback. Repeated identical refusals are logged once, with a count. A log line always gives the likely cause and the fix. Dialing several addresses no longer closes the losers before the winner's handshake succeeds (T11).
+4. **Re-pairing into a fresh Link works with old data on the iPad.** Old Spaces from another person stay on the iPad only and aren't offered to the new Link. The iPad says so once, and offers to delete them. No log spam.
+5. **Docs.** In README and apps/ipad/README, "Use it" becomes: run the setup command, scan, tap Allow, done. Add "If it doesn't connect" with the three likeliest causes and their fixes.
+
+## Context
+- Read README.md, docs/ARCHITECTURE.md §1 and §6, link/README.md, agent/README.md, apps/ipad/README.md and protocol/spec/transports.md.
+- What happened: Agent requests timed out after about 2 min with `not_approved`. Allow was tapped three times and the Link still showed both Agents as pending, because `decide()` in apps/ipad/Packages/ReflexLink/Sources/ReflexLink/LinkSync.swift drops the request and sends `agent_decision` on whatever path is active. The Link logged dozens of "refused a connection … closed the connection during the handshake": the iPad still held a pairing with an older Link identity on the same Mac and redialed it every 2 s, and the pairing code lists 127.0.0.1 and VPN addresses. Old Space `p2p-proof` was refused with "The peer created Element … for someone else".
+- The forge is GitLab (`glab`).
+
+## Constraints
+- Never delete or move the person's ~/.reflex: a running Link uses it. Prove with a temporary --home.
+- No secrets in commits. Don't touch relay.eilmer.si DNS. Don't redeploy the Relay unless the change needs it. Don't publish anything. Don't turn off the Mac's network. No TestFlight build.
+
+## Evidence of done
+From a fresh Link home and a fresh iPad app in the Simulator: run setup, pair, approve, and have a real Claude Code session open a Space and draw a box. Report the time and the steps. Also show that an Allow tapped while the Link connection is dropped (`reflex link fault "lan:drop=1"`, then clear) still lands, and that an iPad paired with an older Link identity shows "scan again" while the Link's log stays quiet.
+```
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
@@ -715,3 +742,4 @@ Found while building earlier tickets. Each goes into the named ticket's brief.
 - **Open (T20, review round 2):** a snap target owned by someone other than the block's owner gets the wrong ID prefix; `reflex test` has no saved anchor examples, so it can't catch a template returning a field the schema lacks; `npm run typecheck -w @reflex/agent` fails on a Buffer type at `agent/src/model.ts:199` (also on main). The document template's `line` field is now `gesture`, so devices with an old Library copy keep sending `line` until it is deleted. Declined: a Region Send asks every Embed on the canvas, not just those inside it; renaming a Library entry to its own name errors.
 - **Moved to GitLab (2026-11-12):** GitHub suspended the account, so the project now lives at https://gitlab.com/johansardar/reflex (public), with merge requests in place of pull requests (`glab mr`). Old GitHub PR links in this file are historical.
 - **T21 (done):** Protocol v1 (1.0.0) is in `protocol/` with a written spec (`protocol/spec/`), six new schemas, an example for every message, a CHANGELOG and `protocol/RELEASE.md`. The conformance suite is in `tests/conformance/`: five profiles, a JSON-lines driver for any language, and the 13 scenarios as fixtures. Reflex's own kernel, web viewer, Link, webhook adapter and both Relays pass every profile. Fixed on the way: a `[` on a document read as a self-arrow; guide-box handwriting split across lines in Region Sends; the Workers Relay never sent offline presence. **Nothing is published:** the npm package, the tag, the GitLab release and the Relay deploy that makes the `$id`s resolve wait on the person's decisions in RELEASE.md (license, the `@reflex` npm scope, whether the kernel ships compiled). **Open (T21):** the kernel accepts any Agent ID though the schema requires `a_…`; frozen Sends name Elements `claude/block-gym` while scenes use `claude:block-gym`; the Send Bundle lists a `bracket` Mark kind the kernel never produces; the Link never runs the author kit's Send Adapter extension modules; a request ID reused in another Space can still hit `request_reused` through the Library; the web viewer drew nothing after about 13 page loads in one tab; the iPad's kernel xcframework needs rebuilding for the two kernel fixes; run one scenario from Codex once its limit resets (2026-11-12 13:06); the round 2 review fixes weren't re-reviewed. **Doc decisions:** ARCHITECTURE §4.3 (`behavior` change kind, anchor `points`), §7.2 (role check as `link/sharing.ts` does it), §10 (conformance layout), §11 (versioning, and why wire strings keep `v0`); SPEC's CDN sentence (T16) and a note in §14.
+- **T23 follow-up:** iPad builds from before T23 don't send `requested_at` with `agent_decision`, so the Link can't tell their answers from answers to a later request and takes them as they are (link/sync/coordinator.ts). Once every iPad in use runs a T23 build, require `requested_at` and drop answers without it.
