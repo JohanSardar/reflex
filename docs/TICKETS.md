@@ -649,6 +649,32 @@ Prove each scenario with a real Claude Code session on the iPad Simulator, from 
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
 ```
 
+## Step 9 ticket (protocol)
+
+```md
+# Protocol v1: the protocol and its conformance profiles, ready to publish
+
+## Goal
+Turn Protocol v0 into Protocol v1 that someone outside the project could build a client or Send Adapter from (SPEC §8.3, ARCHITECTURE §12 step 9). When this is done:
+- `protocol/` holds a versioned v1: schemas, generated types, one hand-written example per message type, and a written spec covering Elements, operations, Send Bundles, people and Agent identity, shared Space membership, and transports.
+- A conformance suite in `tests/conformance/` with named profiles (for example: viewer client, drawing client, Send Adapter, Relay), each a set of fixtures and traces a third-party implementation runs to prove it conforms. The SPEC §16 scenarios supply the fixtures; Reflex's own Link, web viewer and kernel pass every profile.
+- Schema `$id`s resolve, or are changed to something that will.
+- A release checklist (what to tag, what to publish, where) is written down but not executed.
+
+## Context
+- Read docs/SPEC.md §8.3, §16; docs/ARCHITECTURE.md §4, §8, §11, §12; protocol/README.md.
+- What exists on main: every ticket T1–T20 and T22. Every scenario (1–13) works end to end; the Send Bundle schema was widened by T19 (`behavior` change kind, anchor `points`) and T20 (the new templates' anchor fields).
+- Carried over (docs/TICKETS.md, "Follow-ups"): the schemas' `$id`s point at `https://reflex.eilmer.si/protocol/v0/…`, which now serves the Relay and returns 404 (T14). ARCHITECTURE §4.3 doesn't yet list the `behavior` change kind and the anchor `points` field (T19); §7.2's role check differs from what T22 built; SPEC's CDN sentence differs from T16. `reflex test` has no saved anchor examples, so it can't catch a template returning a field the schema lacks (T20). `npm run typecheck -w @reflex/agent` fails on a Buffer type at `agent/src/model.ts:199`. Codex's usage limit resets at 2026-11-12 13:06; after that, run one scenario from a Codex session.
+
+## Constraints
+- **Stop before anything public.** Do not make the repo public, publish to npm or any registry, push tags, create a GitHub release, or deploy anything to reflex.eilmer.si or any other host. Prepare everything, then list exactly what would be published and stop, so the person can decide.
+- Never touch the relay.eilmer.si DNS record.
+- Don't edit SPEC, ARCHITECTURE or the ADRs. List the doc changes v1 needs in your report.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output.
+```
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
@@ -686,3 +712,4 @@ Found while building earlier tickets. Each goes into the named ticket's brief.
 - **Real iPad pass (still open):** native PencilKit stroke IDs, three-finger redo, Pencil double-tap and squeeze, mic, camera, drag-and-drop, the pen-down signal and real handwriting. They need a person at the iPad. Debug builds now keep the screen awake while Reflex is in front.
 - **T19 (done):** scenarios 3–5 (CAD review, chart markup, teacher grading) work end to end with a real Agent from an empty Space using only Guides, Recipes and Embed Templates. The fixes on main: the Link offers new assets to connected devices right away, a line from an Element onto one inside it strikes the inner one, the iPad draws Markdown headings and bullets, and the chart and grading Guides are corrected. **Open (T19):** dragging a 3D part moves it on a camera-facing plane, so it gains a vertical component; writing on a model targets the model, not the nearby circled part; a vertical line on a chart returns rows but no `points`; a lasso with writing over it comes back as one writing Mark; on the Simulator, two debug strokes more than 1.5 s apart come back as two strikes, not a cross; `read_me("review-legend")` shows its Params and Template headings twice; decide whether untapped grading proposals count as accepted. **Doc decision:** ARCHITECTURE §4.3 should list the new `behavior` change kind and the anchor `points` field.
 - **T20 (done):** scenarios 6–13 run on Guides, Recipes and Embed Templates (prototype, document, table, plate, overlay, guide-box; the built-in `builtin:heart` model), each proven on the iPad Simulator in a real Claude Code session from an empty Space. Fixed on the way: Library rename and delete (`reflex link library`), `read_me(<type>)` for every indexed type, example numbers under a maximum below 1, the web viewer's "Key not accepted" after a 401, Region Sends without Embed anchors, flat ovals not read as circles, strikes across part of an Embed read as ink. (T19 fixed the same asset-offer and iPad Markdown bugs on main; T20 confirmed both.) **Open (T20):** HTML Embeds are still grey boxes in `look` and Send images (Agents say so); snap is iPad only (the web viewer drags freely); a stale Library copy of a built-in template is never refreshed, so an Embed fix reaches a person only after they delete the copy (`reflex link library delete`); the Simulator's speech recognizer hung, so scenario 13's "row C contaminated" was handwritten. **Real iPad pass (T20):** voice for scenario 13, real Pencil handwriting for kanji (9) and labels (11), a finger turning the heart (11, Simulator flings didn't reach it), and dragging blocks by finger (12).
+- **Open (T20, review round 2):** a snap target owned by someone other than the block's owner gets the wrong ID prefix; `reflex test` has no saved anchor examples, so it can't catch a template returning a field the schema lacks; `npm run typecheck -w @reflex/agent` fails on a Buffer type at `agent/src/model.ts:199` (also on main). The document template's `line` field is now `gesture`, so devices with an old Library copy keep sending `line` until it is deleted. Declined: a Region Send asks every Embed on the canvas, not just those inside it; renaming a Library entry to its own name errors.
