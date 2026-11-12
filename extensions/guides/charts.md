@@ -49,8 +49,8 @@ Each Mark on a chart has `on: [<chart>]` and a `target` in data coordinates:
 Reply with `apply(in_reply_to: <send>)`:
 
 - About lassoed rows: name them and what sets them apart, in a note `at: {near: "m1"}`. Look at the
-  rows' other columns in your data, not just x and y. Mark them on the chart only through notes:
-  a chart's params can't be patched; to change one, remove it and add it again with the same `id`.
+  rows' other columns in your data, not just x and y. To mark them on the chart itself,
+  `patch` its `params` with every series (`set.params` replaces them all), the rows in their own series.
 - About a drawn trend: compare it with the data (its slope, where the data leaves it) in a note
   beside the Mark. If they asked for it, add a chart of the residuals.
 - A crossed-out chart: `remove` it and `arrange` the rest, or replace it with the chart they need.

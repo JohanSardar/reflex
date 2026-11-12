@@ -16,7 +16,7 @@ the web viewer. It needs no network. Place it with data in one call (for a grid 
 - `scatter`: points at numeric `x` and `y`.
 
 Give each row an `id` you can look up again; it defaults to the label (or x). To change the data,
-`patch` isn't available for params: remove the chart and add it again with the same `id`.
+`patch` its `params` with all of them (`set.params` replaces the whole set).
 
 ## What a Mark on it says
 
