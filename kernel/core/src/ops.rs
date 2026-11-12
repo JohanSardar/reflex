@@ -633,7 +633,8 @@ fn library_name(n: &str) -> bool {
     !b.is_empty()
         && b.len() <= 63
         && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit())
-        && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
 }
 
 pub fn parse_intent(v: &Value) -> Result<Op, Vec<OpError>> {
