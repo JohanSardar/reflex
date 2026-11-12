@@ -37,7 +37,9 @@ struct ReflexApp: App {
 extension Notification.Name {
     /// reflex://debug/ellipse?cx=&cy=&rx=&ry= draws one closed stroke at those screen points, and
     /// reflex://debug/voice?file=<name in Documents> sends that recording as if spoken, and
-    /// reflex://debug/write?region=<id>&text=<line> writes a line by hand in a Region (Simulator automation only).
+    /// reflex://debug/write?region=<id>&text=<line> writes a line by hand in a Region,
+    /// reflex://debug/write?x=&y=&text=<line>[&size=] writes it with its baseline starting at a screen point, and
+    /// reflex://debug/line?points=x,y;x,y;… draws one pen stroke through screen points (Simulator automation only).
     static let debugInk = Notification.Name("si.eilmer.reflex.debug-ink")
 }
 #endif

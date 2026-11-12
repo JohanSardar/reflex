@@ -452,8 +452,24 @@ fn classify(g: &Group, strokes: &[Stroke], ts: &[Target]) -> Kind {
         let from = target_at(ts, a.0, a.1, 40.0);
         let to = target_at(ts, tip.0, tip.1, 40.0);
         let headed = ss.len() > 1 || main.straightness() < 0.92;
-        if from.is_some() && to.is_some() && from != to {
-            return Kind::Arrow(from, to);
+        // A plain line from an Element to one inside it (from a scanned page to a mark on it) is a
+        // strike that started just outside what it strikes, not an arrow.
+        let holds = |o: B, i: B| {
+            o[0] <= i[0] && o[1] <= i[1] && o[0] + o[2] >= i[0] + i[2] && o[1] + o[3] >= i[1] + i[3]
+        };
+        if let (Some(f), Some(t)) = (from, to) {
+            if f != t {
+                if headed {
+                    return Kind::Arrow(from, to);
+                }
+                if holds(ts[f].bounds, ts[t].bounds) {
+                    return Kind::Strike(t);
+                }
+                if holds(ts[t].bounds, ts[f].bounds) {
+                    return Kind::Strike(f);
+                }
+                return Kind::Arrow(from, to);
+            }
         }
         // A straight line through the middle of one Element: a strikethrough.
         let mid = ((a.0 + tip.0) / 2.0, (a.1 + tip.1) / 2.0);

@@ -151,11 +151,15 @@ class LinkInbox implements AgentInbox {
 
 class LinkAssets implements Assets {
   #assets: AssetStore;
-  constructor(assets: AssetStore) {
+  #added?: (hash: string) => void;
+  constructor(assets: AssetStore, added?: (hash: string) => void) {
     this.#assets = assets;
+    this.#added = added;
   }
   put(bytes: Buffer) {
-    return this.#assets.put(bytes);
+    const hash = this.#assets.put(bytes);
+    this.#added?.(hash);
+    return hash;
   }
   get(hash: string) {
     try {
@@ -173,6 +177,8 @@ export interface AgentHostOptions {
   store: SpaceStore;
   inbox: Inbox;
   assets: AssetStore;
+  /** An Agent stored an asset (a model or picture it placed): offer it to connected devices now. */
+  assetAdded?: (hash: string) => void;
   catalog: Catalog;
   person: { id: string; name: string };
   socket: string;
@@ -206,7 +212,7 @@ export async function startAgentHost(o: AgentHostOptions) {
   const core = new Core({
     spaces,
     inbox,
-    assets: new LinkAssets(o.assets),
+    assets: new LinkAssets(o.assets, o.assetAdded),
     renderer: new SvgRenderer(),
     person: { person: o.person.id, name: o.person.name },
     names,

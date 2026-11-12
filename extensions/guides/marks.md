@@ -29,7 +29,7 @@ Every group of strokes the person drew since their last Send is one Mark in `mar
 
 ## What they changed
 
-`changes` lists what they moved, erased, edited or added since their last Send, values entered in Panels, and files: `added_file` with `file` and `mime`. A photo or a PDF page is an image Element and comes with an image; any other file is read with `read(ids: [id], detail: "full")`, which returns its text.
+`changes` lists what they moved, erased, edited or added since their last Send, values entered in Panels, Behaviors they fired (`behavior` with `on` and the fields it `set`, such as a tap that accepts a proposed mark), and files: `added_file` with `file` and `mime`. A photo or a PDF page is an image Element and comes with an image; any other file is read with `read(ids: [id], detail: "full")`, which returns its text.
 
 ## Kinds of Send
 

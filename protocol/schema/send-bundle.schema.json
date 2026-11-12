@@ -171,12 +171,12 @@
       "additionalProperties": false
     },
     "change": {
-      "description": "One thing the person changed since their last Send. kind picks which other fields apply: moved uses by; resized uses was_bounds; edited uses text; removed uses was; panel uses panel and values; embed_state uses state; added_file uses file, mime and image or pages. A photo or PDF page comes as an image; any other file is read with read(ids: [id], detail: 'full').",
+      "description": "One thing the person changed since their last Send. kind picks which other fields apply: moved uses by; resized uses was_bounds; edited uses text; removed uses was; panel uses panel and values; embed_state uses state; added_file uses file, mime and image or pages; behavior uses on and set (a Behavior the person fired, such as a tap, set these fields on the Element as its owner). A photo or PDF page comes as an image; any other file is read with read(ids: [id], detail: 'full').",
       "type": "object",
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["added", "moved", "resized", "edited", "removed", "panel", "embed_state", "added_file"]
+          "enum": ["added", "moved", "resized", "edited", "removed", "panel", "embed_state", "added_file", "behavior"]
         },
         "id": { "$ref": "common.schema.json#/$defs/element_id" },
         "by": { "$ref": "common.schema.json#/$defs/offset" },
@@ -208,6 +208,15 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 8
+        },
+        "on": {
+          "description": "behavior: the trigger the person fired.",
+          "type": "string",
+          "enum": ["tap", "long_press", "drag_end", "ink_inside", "panel_change", "embed_event"]
+        },
+        "set": {
+          "description": "behavior: the fields it set, as in patch.set.",
+          "type": "object"
         }
       },
       "required": ["kind", "id"],

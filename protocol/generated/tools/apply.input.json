@@ -1729,8 +1729,8 @@
     "src": {
       "type": "string",
       "maxLength": 4096,
-      "description": "An https URL, or an asset reference 'asset:<sha256>'.",
-      "pattern": "^(https://|asset:[0-9a-f]{64}$)"
+      "description": "An https URL, or a file path on the Link's computer: a picture (PNG, JPEG, HEIC, WebP, GIF) or a PDF, whose first page is shown. Reflex reads a file once and stores it as 'asset:<sha256>', which is what you read back; without w and h the image takes the picture's shape.",
+      "pattern": "^(https://|asset:[0-9a-f]{64}$|file:///|/|~/)"
     },
     "stroke": {
       "type": "string",

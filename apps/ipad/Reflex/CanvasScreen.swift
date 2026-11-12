@@ -155,6 +155,21 @@ struct CanvasScreen: View {
                 }
                 return
             }
+            let num = { (k: String) in Double(q.first { $0.name == k }?.value ?? "").map { CGFloat($0) } }
+            if url.path == "/write", q.first(where: { $0.name == "region" }) == nil, let x = num("x"), let y = num("y") {
+                let text = q.first { $0.name == "text" }?.value ?? ""
+                let pause = Double(q.first { $0.name == "pause" }?.value ?? "") ?? 0.05
+                Task { await open.debugWrite(screen: CGPoint(x: x, y: y), text: text, size: num("size") ?? 24, pause: pause) }
+                return
+            }
+            if url.path == "/line", let raw = q.first(where: { $0.name == "points" })?.value {
+                let corners = raw.split(separator: ";").compactMap { pair -> CGPoint? in
+                    let xy = pair.split(separator: ",").compactMap { Double($0) }
+                    return xy.count == 2 ? CGPoint(x: xy[0], y: xy[1]) : nil
+                }
+                open.debugLine(screen: corners)
+                return
+            }
             if url.path == "/write", let region = q.first(where: { $0.name == "region" })?.value {
                 let text = q.first { $0.name == "text" }?.value ?? ""
                 let pause = Double(q.first { $0.name == "pause" }?.value ?? "") ?? 0.05

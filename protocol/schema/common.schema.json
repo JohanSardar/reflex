@@ -306,7 +306,7 @@
       "minItems": 3
     },
     "anchor": {
-      "description": "Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x and y; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description.",
+      "description": "Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x, y and points; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description.",
       "type": "object",
       "properties": {
         "kind": {
@@ -339,6 +339,17 @@
           "prefixItems": [{ "type": "number" }, { "type": "number" }],
           "items": false,
           "minItems": 2
+        },
+        "points": {
+          "description": "data: a line the person drew, as [x, y] points in the chart's data coordinates, in the order drawn. On an axis of categories, x is the category's index from 0.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [{ "type": "number" }, { "type": "number" }],
+            "items": false,
+            "minItems": 2
+          },
+          "maxItems": 64
         },
         "selector": {
           "description": "dom: a CSS selector for the DOM node inside the Embed.",
