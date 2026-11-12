@@ -59,7 +59,7 @@ export type WireFile = { id: string; name: string; mime: string; data: string };
 export type HostFrame =
   | { t: "ready" }
   | { t: "result"; id: number; json: Record<string, any>; images: string[]; files?: WireFile[]; isError: boolean }
-  | { t: "progress"; id: number; elapsed_s: number; timeout_s: number }
+  | { t: "progress"; id: number; elapsed_s: number; timeout_s: number; message?: string }
   | { t: "failed"; id: number; message: string }
   /** The listen request was accepted: Sends for this Agent are pushed on this connection. */
   | { t: "listening"; id: number; target: string; agent: string }

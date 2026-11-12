@@ -4,8 +4,10 @@ The Agent layer: the MCP server and the `reflex` CLI that Agents use to work in
 a Space (ARCHITECTURE §4, SPEC §11–§12). Both surfaces are thin. They forward
 each call to the running **Reflex Link** (`reflex link`), which hosts the
 capability table on its durable Spaces, Inbox and assets
-([link/agent-host.ts](../link/agent-host.ts)). A surface never starts the Link:
-without it, every call answers `unavailable` and says to run `reflex link`.
+([link/agent-host.ts](../link/agent-host.ts)). When no Link is running, a
+surface starts one in the background (`src/host/start.ts`: `reflex link
+--no-prompt`, detached, its output in `<home>/link.log`); with
+`REFLEX_AUTOSTART=0` it answers `unavailable` instead.
 
 ```
 claude / codex ──MCP stdio──▶ reflex mcp ─┐                                     ┌▶ kernel (WASM): durable Spaces (SQLite journal)
@@ -14,8 +16,10 @@ claude / codex ──shell──────▶ reflex …   ─┴─ agent.soc
 ```
 
 The first time an Agent calls, the Link asks the person: Allow on the iPad, or
-`y` in the Link's terminal. The Agent waits (up to two minutes per call) and
-sees no Space content until it is approved.
+`y` in the Link's terminal. The call waits up to 50 s (MCP progress says
+"Waiting for you to tap Allow on your iPad"), then answers `not_approved` with
+"Still waiting … call this tool again". The Agent sees no Space content until
+it is approved.
 
 - `src/protocol.ts`: the 11 tools, their text from `protocol/tool-text`,
   their schemas from `protocol/generated/tools`, and Ajv validators.
@@ -72,6 +76,11 @@ Run `npm install` at the repo root, and build the kernel's WASM once
 
 ## Connect a harness
 
+`node agent/bin/reflex.mjs setup` does this for you: it adds Reflex to Claude Code (user scope, with
+`--channel`) and Codex once, and points an entry at another checkout at this one, keeping your own
+env, extra args and, in Codex's config.toml, every other key and comment. Setup with `--home <dir>` (a
+test profile) leaves both alone unless you add `--register`. By hand:
+
 Claude Code:
 
 ```sh
@@ -119,7 +128,7 @@ does with a long `wait_for_user`.
 
 ```sh
 reflex link                              # in its own terminal: the Link, with a pairing code for the iPad
-reflex spaces create demo                # the Link asks you to approve this Agent: answer y
+reflex spaces create demo                # the Link asks you to approve this Agent: tap Allow on your iPad
 
 reflex elements apply demo --ops '[{"op":"add","id":"n-auth","type":"shape","shape":"rect","text":"Auth service"}]'
 reflex look demo                         # writes a PNG under $TMPDIR/reflex/ and prints its path
@@ -177,6 +186,8 @@ same Recipe and Embed checks. Errors reject the batch; warnings come back as lin
 | `REFLEX_WATCH_PER_HOUR` | `60` | Watch mode: snapshots per Region per hour |
 | `REFLEX_CHANNEL` | unset | `1` is the same as `reflex mcp --channel` |
 | `REFLEX_MAX_WAIT_S` | 280 for Codex, none otherwise | The longest `wait_for_user` the MCP surface holds, kept under the harness's hard tool timeout |
+| `REFLEX_AUTOSTART` | `1` | `0`: a surface doesn't start the Link when none is running |
+| `REFLEX_APPROVAL_WAIT_S` | `50` | Read by the Link: how long a call from an Agent waiting for approval holds before it answers "still waiting" |
 
 Without a name, an MCP Agent is called "<harness> · <cwd basename>",
 taken from the client's `clientInfo`. A CLI Agent is called "Codex CLI · …",

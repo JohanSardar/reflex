@@ -36,7 +36,8 @@ Each sealed frame's plain text is `[u32 BE header length][header JSON][body byte
 | Sync | `spaces` (the Spaces the peer may sync, on every binding and change), `sync` (one kernel sync message; each is answered by the receiver's next one until both have nothing to send), `refused`, `reset` (membership.md §4) |
 | Assets | `assets_have`, `asset_want`, `asset` (a part of an asset by its SHA-256 hash; the receiver keeps it only if the hash matches) |
 | Liveness | `ping`, `pong`: a Path that goes silent is dropped |
-| Agents | `agents`, `agent_request`, `agent_decision`, `agent_names` (identity.md §4) |
+| Agents | `agents` (with `approver`: whether this device's answers count), `agent_request`, `agent_decision` (both with the request's `requested_at`), `agent_decision_refused`, `agent_names` (identity.md §4) |
+| Devices | `device_paired` (a new device of the person's, told to each of their iPads once), `approver_requests` and `approver_decision` ("Let … approve Agents?", between the Link and the person's approving iPads; identity.md §4) |
 | Presence | `presence` (iPad to its Link: the Space on screen, pen, cursor), `hints` (handwriting in a watched Region), `here` (who is in a Space now) |
 | Relay | `relay` (where the person's devices meet when nothing closer reaches them), `relay_keys` (Space keys for the Relay's log, between one person's Links) |
 | Sharing | `share`, `shares`, `invite_create`, `invite`, `member_set`, `join_invite`, `joined`, `share_error` (membership.md) |

@@ -117,7 +117,25 @@ export interface HandshakeResult {
   invite?: string;
 }
 
+/** A failed handshake, with what the other side said about itself if its hello arrived (for a log line that names it). */
+export class HandshakeError extends Error {
+  peer?: { device: string; name: string; kind: "ipad" | "link"; paired: boolean; pair?: string };
+}
+
 export async function handshake(path: Path, me: Me, trust: Trust, scanned?: ScannedOffer): Promise<HandshakeResult> {
+  let seen: HandshakeError["peer"];
+  try {
+    return await handshakeInner(path, me, trust, scanned, (h) => {
+      seen = { device: h.device, name: String(h.name ?? ""), kind: h.kind === "ipad" ? "ipad" : "link", paired: trust.pairedKey(h.device) === h.key, ...(typeof h.pair === "string" ? { pair: h.pair } : {}) };
+    });
+  } catch (e) {
+    const err = new HandshakeError((e as Error).message);
+    err.peer = seen;
+    throw err;
+  }
+}
+
+async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: ScannedOffer | undefined, saw: (h: Hello) => void): Promise<HandshakeResult> {
   const role = path.initiator ? "i" : "r";
   const eph = newEphemeral();
   const hello: Hello = {
@@ -140,10 +158,12 @@ export async function handshake(path: Path, me: Me, trust: Trust, scanned?: Scan
     const r = await nextJson(path, 10_000);
     theirsRaw = r.raw;
     theirs = checkHello(r.msg);
+    saw(theirs);
   } else {
     const r = await nextJson(path, 10_000);
     theirsRaw = r.raw;
     theirs = checkHello(r.msg);
+    saw(theirs);
     await path.send(mine, "control");
   }
   const transcript = role === "i" ? sha256(PROTOCOL, mine, theirsRaw) : sha256(PROTOCOL, theirsRaw, mine);

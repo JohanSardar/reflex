@@ -239,7 +239,13 @@ func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?,
     if let offer, offer.device != device || offer.key != key {
         throw LinkError.refused("The device that answered is not the one in the pairing code.")
     }
-    if offer == nil, pairedKey != key { throw LinkError.refused("The Link at that address is not the one this iPad is paired with.") }
+    if offer == nil, pairedKey != key {
+        // Say why before closing, so the Link's log names the cause instead of "closed during the handshake".
+        if let why = try? JSONSerialization.data(withJSONObject: ["t": "refused", "reason": "this iPad is paired with another Link identity at this address (the Link changed); it stops dialing and asks the person to scan this Link's code"]) {
+            conn.send(why)
+        }
+        throw LinkError.linkChanged(theirs["name"] as? String ?? "")
+    }
 
     let transcript = sha256(Data(linkProtocol.utf8), mine, theirsRaw)
     let label = { (s: String) in Data("\(linkProtocol) \(s) ".utf8) + transcript }

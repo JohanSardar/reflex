@@ -28,11 +28,29 @@ export interface PairedDevice {
   kind?: "ipad" | "link";
   /**
    * "offer": it scanned a code this Link showed, so the person was at both. "join": this Link scanned its code.
-   * "invite": another person's Link, met through an invite to a shared Space (link/sharing.ts); it syncs only those Spaces.
+   * "admin-offer": it scanned a code made by an admin call (`reflex pair`, `reflex setup`), which anything with the
+   * person's shell can make. "invite": another person's Link, met through an invite to a shared Space (link/sharing.ts);
+   * it syncs only those Spaces.
    */
-  via?: "offer" | "join" | "invite";
+  via?: "offer" | "admin-offer" | "join" | "invite";
+  /**
+   * Whether this iPad's Allow and Deny count (mayApprove). Set when it pairs: the first approving iPad is the one paired
+   * from the Link's terminal, or with a `reflex pair` code while the first-pairing window is open (link.ts). Once one
+   * approves, only an approving iPad can make another one approve, by answering "Let … approve Agents?". Records from
+   * before this field approve if they paired by scanning the Link's code ("offer").
+   */
+  approves?: boolean;
+  /** When an approving iPad was asked "Let this one approve Agents?" and hasn't answered (ms). */
+  approver_asked?: number;
+  /** The person's iPads already told this device paired (`device_paired`), so each hears of it once. */
+  announced?: string[];
   paired_at: number;
   last_seen?: { host: string; port: number; at: number };
+}
+
+/** Whether this device's Allow and Deny count: an iPad of the person's that paired as the person. */
+export function mayApprove(d: PairedDevice | undefined, person: string): boolean {
+  return d?.kind === "ipad" && d.person.id === person && (d.approves ?? d.via === "offer");
 }
 
 export type AgentStatus = "pending" | "approved" | "denied" | "revoked";

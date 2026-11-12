@@ -487,7 +487,9 @@ function help(): string {
     "",
     "Usage: reflex <group> <action> [<resource>] [flags]",
     "",
-    "  reflex link             Start the Reflex Link and show a pairing code (reflex link --help)",
+    "  reflex setup            First time: add Reflex to Claude Code and Codex, start the Link, pair your iPad",
+    "  reflex pair             Show a new code to scan on your iPad",
+    "  reflex link             Start the Reflex Link in this terminal (reflex link --help)",
     ...rows,
     "",
     "Author kit (offline, no Link needed):",
@@ -558,8 +560,8 @@ export async function main(argv: string[]): Promise<number> {
       errLine("invalid_input", e.message, `See: reflex ${key} --help`, e.next.length ? e.next : [`reflex ${key} --help`]);
       return 2;
     }
-    if (e instanceof NoLink) errLine("unavailable", e.message, "Start the Link with `reflex link`, then run this again.", ["reflex link"]);
-    else errLine("unavailable", (e as Error).message, "Check the Link's terminal for errors.");
+    if (e instanceof NoLink) errLine("unavailable", e.message, "Ask the person to run `reflex setup` (or `reflex link`), then run this again.", ["reflex setup"]);
+    else errLine("unavailable", (e as Error).message, "Check the Link's log (~/.reflex/link/link.log) or its terminal for errors.");
     return 1;
   } finally {
     if (key !== "mcp") client?.close();
