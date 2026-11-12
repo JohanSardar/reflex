@@ -544,7 +544,9 @@ fn classify(g: &Group, strokes: &[Stroke], ts: &[Target]) -> Kind {
             }
         }
         // A headed line that points at something: an arrow, even if it starts in empty space.
-        if headed && (to.is_some() || from.is_some()) && size >= 60.0 {
+        // Not when both ends are on the same Element (a bracket beside a passage, drawn
+        // with its two short ends): that points at nothing else.
+        if headed && (to.is_some() || from.is_some()) && from != to && size >= 60.0 {
             return Kind::Arrow(from, to);
         }
     }
@@ -902,14 +904,23 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
         for g in &groups {
             let k = classify(g, &strokes, &ts);
             let outside = |i: &usize| !is_container(&ts[*i]);
-            let keep = g.hint.is_none()
-                && match &k {
-                    Kind::Circle(on) => on.iter().any(outside),
-                    Kind::Arrow(f, t) => f.iter().chain(t.iter()).any(outside),
-                    Kind::Strike(t) | Kind::Underline(t) => outside(t),
-                    Kind::Check(t) | Kind::Cross(t) => t.iter().any(outside),
-                    Kind::Writing | Kind::Ink => false,
-                };
+            // Strokes on an Embed that is a writing surface (a guide box) stay Marks on that
+            // Embed, in its own terms: the box, not a line of the Region, is what they are on.
+            let on_surface = embed.iter().any(|(ss, _, a)| {
+                a.get("surface").and_then(Value::as_str) == Some("writing")
+                    && g.strokes
+                        .iter()
+                        .any(|&i| ss.iter().any(|s| s == &strokes[i].key))
+            });
+            let keep = on_surface
+                || (g.hint.is_none()
+                    && match &k {
+                        Kind::Circle(on) => on.iter().any(outside),
+                        Kind::Arrow(f, t) => f.iter().chain(t.iter()).any(outside),
+                        Kind::Strike(t) | Kind::Underline(t) => outside(t),
+                        Kind::Check(t) | Kind::Cross(t) => t.iter().any(outside),
+                        Kind::Writing | Kind::Ink => false,
+                    });
             let old = g.strokes.iter().all(|&i| earlier.contains(&strokes[i].key));
             if keep && old {
                 continue; // a gesture from an earlier Send was answered then

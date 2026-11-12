@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 
-/// A Space's scene as the kernel projects it: Protocol v0 Elements
+/// A Space's scene as the kernel projects it: Protocol v1 Elements
 /// (`protocol/schema/element.schema.json`), from `scene({detail: "full"})`.
 /// Built-in types have typed, top-level fields; `bounds` is `[x, y, w, h]` in
 /// Space points. Fields this app doesn't draw yet are ignored, and a type it

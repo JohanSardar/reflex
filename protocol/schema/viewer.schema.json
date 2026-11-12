@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reflex.eilmer.si/protocol/v1/viewer.schema.json",
+  "title": "Viewer event",
+  "description": "One line of the viewer API's event stream, `GET /api/events?peer=<id>` (newline-delimited JSON; protocol/spec/transports.md §7). The viewer answers each sync event with its own next sync message, POSTed as bytes to `/api/sync?peer=<id>&space=<space>`. Every /api call carries the viewer key in `x-reflex-key`.",
+  "oneOf": [
+    {
+      "title": "hello",
+      "description": "First on every stream, and again when the list of Spaces changes. A new stream is a new sync conversation: the viewer resets its sync state for every Space.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "hello"
+        },
+        "person": {
+          "$ref": "#/$defs/person"
+        },
+        "names": {
+          "description": "Display names by principal ID.",
+          "type": "object"
+        },
+        "spaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/space"
+              },
+              "kind": {
+                "type": "string",
+                "maxLength": 40
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "t",
+        "person",
+        "names",
+        "spaces"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "sync",
+      "description": "One Automerge sync message for a Space, base64.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "sync"
+        },
+        "space": {
+          "$ref": "#/$defs/space"
+        },
+        "msg": {
+          "type": "string",
+          "maxLength": 50000000
+        }
+      },
+      "required": [
+        "t",
+        "space",
+        "msg"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "here",
+      "description": "Who is in a Space (the session message here, passed on).",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "here"
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        },
+        "space": {
+          "$ref": "#/$defs/space"
+        },
+        "person": {
+          "$ref": "#/$defs/person"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "cursor": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "items": false,
+          "minItems": 2
+        },
+        "selection": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/element_id"
+          },
+          "maxItems": 50
+        },
+        "at": {
+          "description": "Milliseconds since the Unix epoch.",
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "gone": {
+          "const": true
+        }
+      },
+      "required": [
+        "t",
+        "device"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "ping",
+      "description": "Every 15 s, so proxies keep the stream open.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "ping"
+        }
+      },
+      "required": [
+        "t"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "reload",
+      "description": "The host asks the viewer to reload the page (reflex dev, after an extension changed).",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "reload"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 400
+        }
+      },
+      "required": [
+        "t"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "device": {
+      "description": "A device ID: dev- and the first 8 bytes of SHA-256 of its Ed25519 public key, in hex.",
+      "type": "string",
+      "pattern": "^dev-[0-9a-f]{16}$"
+    },
+    "person": {
+      "description": "A person by ID and display name, as devices exchange them.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/person_id"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "space": {
+      "description": "A Space ID, or `library`.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    }
+  }
+}

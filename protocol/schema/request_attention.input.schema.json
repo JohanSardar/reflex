@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/request_attention.input.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/request_attention.input.schema.json",
   "title": "request_attention input",
   "type": "object",
   "properties": {

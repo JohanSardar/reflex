@@ -1,0 +1,21 @@
+{
+  "scenario": 13,
+  "title": "Lab plate map",
+  "spec": "SPEC §16.13: tap wells, say \"row C contaminated\". The Mark names the wells; the transcript comes with it.",
+  "space": "plate-7",
+  "setup": [ { "ops": [
+    { "op": "add", "id": "plate", "type": "embed", "template": "plate", "params": { "rows": 8, "columns": 12 }, "at": { "x": 0, "y": 0 }, "w": 720, "h": 480 }
+  ] } ],
+  "sends": [ {
+    "draw": [
+      { "id": "ink-1", "ellipse": [360, 200, 340, 28] }
+    ],
+    "raw": { "send": "s_plate1", "trigger": "voice", "said": "row C contaminated",
+      "embed_anchors": [ { "element": "a_claude:plate", "strokes": ["ink-1"], "anchor": { "kind": "wells", "wells": ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12"], "label": "row C" } } ] },
+    "expect": {
+      "frozen": { "said": "row C contaminated" },
+      "marks": [ { "kind": "circle", "on": ["plate"], "target": { "kind": "wells", "wells": ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12"] } } ]
+    }
+  } ],
+  "elements": ["plate"]
+}

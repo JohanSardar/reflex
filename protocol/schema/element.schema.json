@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/element.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/element.schema.json",
   "title": "Element",
   "description": "One Element as read(detail: 'full') returns it and as the scene JSON every renderer draws from. Built-in types have typed, top-level fields; extension types put theirs in props. type is the discriminator. Coordinates are the reading Agent's.",
   "oneOf": [

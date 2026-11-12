@@ -34,7 +34,7 @@ export const inputSchema = (tool: Tool) => json(`generated/tools/${tool}.input.j
 
 const ajv = new Ajv2020({ strict: true, allErrors: true, allowUnionTypes: true });
 for (const f of readdirSync(new URL("schema/", root)).filter((f) => f.endsWith(".schema.json"))) ajv.addSchema(json(`schema/${f}`));
-const BASE = "https://reflex.eilmer.si/protocol/v0/";
+const BASE = "https://reflex.eilmer.si/protocol/v1/";
 const schema = (name: string): ValidateFunction => {
   const v = ajv.getSchema(BASE + name + ".schema.json");
   if (!v) throw new Error(`no schema ${name}`);

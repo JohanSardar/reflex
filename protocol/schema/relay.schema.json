@@ -1,0 +1,659 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reflex.eilmer.si/protocol/v1/relay.schema.json",
+  "title": "Relay control message",
+  "description": "A text WebSocket message on a Relay connection, `GET /v0/connect?room=<room>` (protocol/spec/transports.md §6). Binary messages are frames between devices: [u8 n][n bytes: device ID][u32 BE channel][payload]; the sender writes the receiver's device ID and the Relay rewrites it to the sender's. Requests carry req and get one result with the same req.",
+  "oneOf": [
+    {
+      "title": "challenge",
+      "description": "Relay → device, first: sign this nonce.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "challenge"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "room": {
+          "$ref": "#/$defs/room"
+        }
+      },
+      "required": [
+        "t",
+        "nonce"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "hello",
+      "description": "Device → Relay: sig = Ed25519(\"reflex-relay/v0 hello <room> <nonce>\") by the device key. A second connection by the same device replaces the first (close 4409).",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "hello"
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        },
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "sig": {
+          "$ref": "#/$defs/sig"
+        }
+      },
+      "required": [
+        "t",
+        "device",
+        "key",
+        "sig"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "welcome",
+      "description": "Relay → device: the hello checked out.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "welcome"
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        }
+      },
+      "required": [
+        "t",
+        "device"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "watch",
+      "description": "Device → Relay: the devices it accepts frames from, replacing the list. \"*\" accepts any device in the room; a Link uses it only in an invite's room.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "watch"
+        },
+        "devices": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(dev-[0-9a-f]{16}|\\*)$"
+          },
+          "maxItems": 256
+        }
+      },
+      "required": [
+        "t",
+        "devices"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "presence",
+      "description": "Relay → device: a watched device is online or not, now and on every change. joined: it connected anew, so its old channels are gone.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "presence"
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        },
+        "online": {
+          "type": "boolean"
+        },
+        "joined": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "t",
+        "device",
+        "online"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "close",
+      "description": "Device → Relay → the other device: a channel is closed.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "close"
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        },
+        "ch": {
+          "description": "A channel number. Bit 31 is set by whoever opened the channel.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "t",
+        "device",
+        "ch"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "undeliverable",
+      "description": "Relay → device: a frame could not be delivered (the receiver isn't connected, or doesn't watch the sender).",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "undeliverable"
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        },
+        "ch": {
+          "description": "A channel number. Bit 31 is set by whoever opened the channel.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "t",
+        "device",
+        "ch"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "log.append",
+      "description": "Append sealed entries to a log. The first append to a new log sets its token. snapshot: the one entry holds the whole Space, so replay may start there.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "log.append"
+        },
+        "req": {
+          "description": "The caller's request number, echoed in the result.",
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "log": {
+          "$ref": "#/$defs/log"
+        },
+        "token": {
+          "$ref": "#/$defs/token"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entry"
+          },
+          "maxItems": 1000
+        },
+        "snapshot": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "t",
+        "req",
+        "log",
+        "token",
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "log.read",
+      "description": "Read entries after a sequence number.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "log.read"
+        },
+        "req": {
+          "description": "The caller's request number, echoed in the result.",
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "log": {
+          "$ref": "#/$defs/log"
+        },
+        "token": {
+          "$ref": "#/$defs/token"
+        },
+        "after": {
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      },
+      "required": [
+        "t",
+        "req",
+        "log",
+        "token",
+        "after"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "log.watch",
+      "description": "Hear about new entries in a log on this connection (log.new).",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "log.watch"
+        },
+        "req": {
+          "description": "The caller's request number, echoed in the result.",
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "log": {
+          "$ref": "#/$defs/log"
+        },
+        "token": {
+          "$ref": "#/$defs/token"
+        }
+      },
+      "required": [
+        "t",
+        "req",
+        "log",
+        "token"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "log.new",
+      "description": "Relay → device: a watched log has new entries, up to last.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "log.new"
+        },
+        "log": {
+          "$ref": "#/$defs/log"
+        },
+        "last": {
+          "$ref": "common.schema.json#/$defs/count"
+        }
+      },
+      "required": [
+        "t",
+        "log",
+        "last"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "log.assets",
+      "description": "Which of these sealed assets the Relay holds for a log.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "log.assets"
+        },
+        "req": {
+          "description": "The caller's request number, echoed in the result.",
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "log": {
+          "$ref": "#/$defs/log"
+        },
+        "token": {
+          "$ref": "#/$defs/token"
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "maxItems": 1000
+        }
+      },
+      "required": [
+        "t",
+        "req",
+        "log",
+        "token",
+        "ids"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "auth.lookup",
+      "description": "Which OAuth client a sign-in code belongs to, and the scope it asked for, so the person can approve it.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "auth.lookup"
+        },
+        "req": {
+          "description": "The caller's request number, echoed in the result.",
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "code": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "t",
+        "req",
+        "code"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "grant.issue",
+      "description": "Approve a cloud Agent: the signed grant, the Space key for it, and the sign-in code it answers. The grant's device must be this connection's.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "grant.issue"
+        },
+        "req": {
+          "description": "The caller's request number, echoed in the result.",
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "code": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "log": {
+          "$ref": "#/$defs/log"
+        },
+        "token": {
+          "$ref": "#/$defs/token"
+        },
+        "grant": {
+          "$ref": "#/$defs/grant"
+        },
+        "sig": {
+          "$ref": "#/$defs/sig"
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      },
+      "required": [
+        "t",
+        "req",
+        "code",
+        "log",
+        "token",
+        "grant",
+        "sig",
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "grant.revoke",
+      "description": "End a grant at once.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "grant.revoke"
+        },
+        "req": {
+          "description": "The caller's request number, echoed in the result.",
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "log": {
+          "$ref": "#/$defs/log"
+        },
+        "token": {
+          "$ref": "#/$defs/token"
+        },
+        "grant": {
+          "type": "string",
+          "pattern": "^g_[A-Za-z0-9]{1,40}$"
+        }
+      },
+      "required": [
+        "t",
+        "req",
+        "log",
+        "token",
+        "grant"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "ping",
+      "description": "A request that only measures the round trip.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "ping"
+        },
+        "req": {
+          "description": "The caller's request number, echoed in the result.",
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "at": {
+          "description": "Milliseconds since the Unix epoch.",
+          "$ref": "common.schema.json#/$defs/count"
+        }
+      },
+      "required": [
+        "t",
+        "req"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "result",
+      "description": "Relay → device: the answer to one request. ok false carries error. Other fields depend on the request: seqs (log.append); entries and last (log.read); last (log.watch); have (log.assets); client and scope (auth.lookup); grant (grant.issue); at (ping).",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "result"
+        },
+        "req": {
+          "description": "The caller's request number, echoed in the result.",
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "seqs": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/count"
+          },
+          "maxItems": 1000
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "seq": {
+                "$ref": "common.schema.json#/$defs/count"
+              },
+              "data": {
+                "$ref": "#/$defs/entry"
+              }
+            },
+            "required": [
+              "seq",
+              "data"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 1000
+        },
+        "last": {
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "have": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "maxItems": 1000
+        },
+        "client": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "scope": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "grant": {
+          "type": "string",
+          "pattern": "^g_[A-Za-z0-9]{1,40}$"
+        },
+        "at": {
+          "description": "Milliseconds since the Unix epoch.",
+          "$ref": "common.schema.json#/$defs/count"
+        }
+      },
+      "required": [
+        "t",
+        "req",
+        "ok"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "device": {
+      "description": "A device ID: dev- and the first 8 bytes of SHA-256 of its Ed25519 public key, in hex.",
+      "type": "string",
+      "pattern": "^dev-[0-9a-f]{16}$"
+    },
+    "key": {
+      "description": "A raw 32-byte public key, base64url without padding.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "sig": {
+      "description": "An Ed25519 signature or an HMAC-SHA256, base64url without padding.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43,86}$"
+    },
+    "room": {
+      "description": "A room: hex(SHA-256(\"reflex-relay/v0 room \" + person ID))[0..32], or an invite's room.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "log": {
+      "description": "A log ID: hex(HMAC-SHA256(Space key, \"reflex-relay/v0 log id\")).",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "token": {
+      "description": "The log token: base64url(HMAC-SHA256(Space key, \"reflex-relay/v0 log token\")). It proves its holder knows the Space key; the Relay keeps only its hash, set by the log's first writer.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "entry": {
+      "description": "One sealed log entry, base64: nonce(12) || AES-256-GCM(plain) || tag(16).",
+      "type": "string",
+      "maxLength": 6000000
+    },
+    "grant": {
+      "description": "A grant a device issues so one cloud Agent session may read and write one Space (ADR-0004). The device signs \"reflex-relay/v0 grant \" + JSON of these fields in this order.",
+      "type": "object",
+      "properties": {
+        "grant": {
+          "type": "string",
+          "pattern": "^g_[A-Za-z0-9]{1,40}$"
+        },
+        "log": {
+          "$ref": "#/$defs/log"
+        },
+        "space": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        },
+        "kind": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "epoch": {
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "agent": {
+          "$ref": "common.schema.json#/$defs/agent_id"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "person": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "common.schema.json#/$defs/person_id"
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "additionalProperties": false
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "maxItems": 20
+        },
+        "issued": {
+          "description": "Milliseconds since the Unix epoch.",
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "expires": {
+          "description": "Milliseconds since the Unix epoch.",
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        },
+        "key": {
+          "$ref": "#/$defs/key"
+        }
+      },
+      "required": [
+        "grant",
+        "log",
+        "space",
+        "kind",
+        "epoch",
+        "agent",
+        "name",
+        "person",
+        "scopes",
+        "issued",
+        "expires",
+        "device",
+        "key"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

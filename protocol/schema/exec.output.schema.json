@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/exec.output.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/exec.output.schema.json",
   "title": "exec result",
   "description": "The apply result fields, plus what the code returned and logged. batch is unset when the code wrote nothing.",
   "type": "object",

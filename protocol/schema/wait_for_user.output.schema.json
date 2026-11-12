@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/wait_for_user.output.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/wait_for_user.output.schema.json",
   "title": "wait_for_user result",
   "description": "A Send Bundle, or still_waiting when the timeout passed with nothing to deliver.",
   "oneOf": [

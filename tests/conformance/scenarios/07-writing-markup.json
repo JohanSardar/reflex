@@ -1,0 +1,30 @@
+{
+  "scenario": 7,
+  "title": "Writing / paper markup",
+  "spec": "SPEC §16.7: bracketed passages and margin notes. The Agent changes only what was marked, so each Mark names the sentences it spans.",
+  "space": "essay",
+  "setup": [ { "ops": [
+    { "op": "add", "id": "essay", "type": "embed", "template": "document", "at": { "x": 0, "y": 0 }, "w": 820, "h": 400,
+      "params": { "title": "Methods", "paragraphs": [
+        { "id": "p1", "text": "We trained every model for 40 epochs. Learning rates were tuned on the validation split." },
+        { "id": "p2", "text": "The baseline uses the same data. It differs only in its attention layer." } ] } }
+  ] } ],
+  "sends": [ {
+    "draw": [
+      { "id": "ink-1", "points": [[20, 80], [12, 80], [12, 150], [20, 150]] },
+      { "ids": ["ink-2", "ink-3", "ink-4"], "letters": [640, 100] }
+    ],
+    "raw": { "send": "s_essay1", "trigger": "button",
+      "hints": [ { "strokes": ["ink-2", "ink-3", "ink-4"], "text": "which split?", "confidence": 0.82 } ],
+      "embed_anchors": [
+        { "element": "a_claude:essay", "strokes": ["ink-1"], "anchor": { "kind": "text", "paragraphs": ["p1"], "sentences": ["p1.s2"], "quote": "Learning rates were tuned on the validation split.", "label": "bracket beside p1.s2" } },
+        { "element": "a_claude:essay", "strokes": ["ink-2", "ink-3", "ink-4"], "anchor": { "kind": "text", "paragraphs": ["p1"], "sentences": ["p1.s2"], "label": "margin note beside p1.s2" } } ] },
+    "expect": {
+      "marks": [
+        { "kind": "ink", "on": ["essay"], "target": { "kind": "text", "sentences": ["p1.s2"] } },
+        { "kind": "writing", "text_guess": "which split?", "target": { "kind": "text", "sentences": ["p1.s2"] } }
+      ]
+    }
+  } ],
+  "elements": ["essay"]
+}

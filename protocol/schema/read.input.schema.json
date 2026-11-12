@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/read.input.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/read.input.schema.json",
   "title": "read input",
   "type": "object",
   "properties": {

@@ -20,7 +20,7 @@ const schemaDir = join(root, "schema");
 const exampleDir = join(root, "examples");
 const generatedDir = join(root, "generated");
 const write = process.argv.includes("--write");
-const BASE = "https://reflex.eilmer.si/protocol/v0/";
+const BASE = "https://reflex.eilmer.si/protocol/v1/";
 const SAFE = 9007199254740991;
 
 /** @type {string[]} */
@@ -133,8 +133,23 @@ for (const file of readdirSync(exampleDir).filter((f) => f.endsWith(".json")).so
   const data = JSON.parse(readFileSync(join(exampleDir, file), "utf8"));
   if (validate && !validate(data))
     for (const e of validate.errors ?? []) fail(`examples/${file}: ${e.instancePath || "/"} ${e.message} ${JSON.stringify(e.params)}`);
+  const tag = data?.t ?? data?.intent;
+  if (typeof tag === "string") covered.add(`${name}#${tag}`);
+  // A webhook delivery carries a Send Bundle whose images also hold their bytes.
+  if (name === "webhook") {
+    const bundle = { ...data.bundle, images: (data.bundle?.images ?? []).map((/** @type {any} */ { mime, data, ...img }) => img) };
+    const v = ajv.getSchema(BASE + "send-bundle.schema.json");
+    if (v && !v(bundle)) fail(`examples/${file}: bundle is not a Send Bundle: ${ajv.errorsText(v.errors)}`);
+  }
 }
 for (const name of messageSchemas) if (!covered.has(name)) fail(`schema/${name}.schema.json has no example in examples/`);
+// Wire schemas are a oneOf of messages told apart by `t` (user intents by `intent`): one example per message type.
+for (const [file, schema] of schemas)
+  for (const v of schema.oneOf ?? []) {
+    const t = v.properties?.t?.const ?? v.properties?.intent?.const;
+    const name = file.replace(/\.schema\.json$/, "");
+    if (typeof t === "string" && !covered.has(`${name}#${t}`)) fail(`schema/${file}: message '${t}' has no example (examples/${name}.${t}.json)`);
+  }
 
 // ---------- 4. generated/ ----------
 // Self-contained copies for surfaces that need one document per schema, such as an

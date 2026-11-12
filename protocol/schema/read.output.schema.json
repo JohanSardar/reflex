@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/read.output.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/read.output.schema.json",
   "title": "read result",
   "description": "Exactly one of outline, elements or strokes is set, matching the requested detail. With detail full, files carries the contents of the file Elements read.",
   "type": "object",

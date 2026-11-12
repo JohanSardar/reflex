@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/look.output.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/look.output.schema.json",
   "title": "look result",
   "description": "Over MCP the rendered PNG follows this JSON as an image block. The CLI writes it to file.",
   "type": "object",

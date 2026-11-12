@@ -4,12 +4,25 @@
 //   /.well-known/oauth-*, /oauth/*        OAuth (relay/domain/oauth.ts)
 //   /mcp                                  remote MCP; the bearer token names its log
 //   /v0/log/<log>/assets/<id>, /stats     sealed assets and numbers, with the log token
+//   /protocol/v1/<name>.schema.json       the Reflex Protocol's schemas, at their $id (protocol/schema/)
 import { tokenLog, unauthorized } from "./log.ts";
 import { LOG_ID } from "./wire.ts";
 
 export interface Front {
   auth(req: Request, origin: string): Promise<Response>;
   log(id: string, req: Request, path: string[], origin: string): Promise<Response>;
+  /** The Protocol's schema files by file name (`element.schema.json`), served at their `$id`s. */
+  schemas?: Record<string, string>;
+}
+
+/** Protocol v1's schemas, so every `$id` (`https://<relay>/protocol/v1/<name>.schema.json`) resolves. */
+function schema(req: Request, parts: string[], files: Record<string, string>): Response {
+  const cors = { "access-control-allow-origin": "*", "cache-control": "public, max-age=300" };
+  if (req.method !== "GET" && req.method !== "HEAD") return new Response("method not allowed", { status: 405, headers: cors });
+  if (parts.length === 2) return Response.json({ protocol: "reflex/v1", schemas: Object.keys(files).sort() }, { headers: cors });
+  const text = parts.length === 3 ? files[parts[2]] : undefined;
+  if (text === undefined) return new Response("not found", { status: 404, headers: cors });
+  return new Response(req.method === "HEAD" ? null : text, { headers: { ...cors, "content-type": "application/schema+json" } });
 }
 
 export async function route(req: Request, front: Front, origin: string): Promise<Response> {
@@ -23,6 +36,7 @@ export async function route(req: Request, front: Front, origin: string): Promise
     if (!log) return unauthorized(origin, "Sign in to use this Relay.");
     return front.log(log, req, ["mcp"], origin);
   }
+  if (parts[0] === "protocol" && parts[1] === "v1" && front.schemas) return schema(req, parts, front.schemas);
   if (parts[0] === "v0" && parts[1] === "log" && LOG_ID.test(parts[2] ?? "")) return front.log(parts[2], req, parts.slice(3), origin);
   return new Response("not found", { status: 404 });
 }
