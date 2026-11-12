@@ -14,8 +14,8 @@ proposals alone.
 
 1. `recipe("grade-paper", {"paper": "/path/to/scan.pdf", "title": "Quiz 3 · Maya", "rubric": "…"})`
    places the paper (`paper`), the rubric, a note on how to grade and the "Send grades" button.
-   Its result gives the paper's `bounds`. Look at it (`look`, or `read(ids: ["paper"])`) to find each
-   answer on the page.
+   `read(ids: ["paper"], detail: "full")` gives the paper's `bounds`; look at it (`look`) to find each
+   answer on the page, and place your marks in those coordinates.
 2. One `apply` with your proposed marks, each next to the answer it is about. Give each one:
    - red text, short: "✗ −1 sign error", "✓ 2/2", "½ missing units".
    - `data`: the question, the rubric criterion, the points it gives or takes, and `status: "proposed"`.

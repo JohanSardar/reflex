@@ -642,9 +642,6 @@ final class SpaceSession {
     }
 
     #if DEBUG
-    /// Writes one line of text by hand in a Region, below the person's lines there,
-    /// as simulated Pencil strokes (the Simulator has no Pencil): each glyph's outline
-    /// becomes strokes, drawn one after another with the pen going down and up.
     /// Writes `text` by hand with its baseline starting at a screen point.
     func debugWrite(screen at: CGPoint, text: String, size: CGFloat, pause: Double = 0.05) async {
         let zoom = ink.zoomScale, offset = ink.contentOffset
@@ -668,6 +665,9 @@ final class SpaceSession {
         ink.debugDraw(screen: points)
     }
 
+    /// Writes one line of text by hand in a Region, below the person's lines there,
+    /// as simulated Pencil strokes (the Simulator has no Pencil): each glyph's outline
+    /// becomes strokes, drawn one after another with the pen going down and up.
     func debugWrite(region: String, text: String, size: CGFloat = 30, pause: Double = 0.05) async {
         guard let r = regions.first(where: { $0.id == region || $0.id.hasSuffix(":\(region)") }), let f = r.frame else {
             say("No Region '\(region)'")
