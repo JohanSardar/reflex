@@ -97,21 +97,42 @@ struct ElementView: View {
     private var textView: some View {
         let size = Palette.textSize[element.size ?? ""] ?? 18
         let string = element.text ?? ""
-        let content: Text
-        if element.markdown == true, let attributed = try? AttributedString(
-            markdown: string, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            content = Text(attributed)
-        } else {
-            content = Text(string)
-        }
+        let content = element.markdown == true ? Text(Self.markdown(string, size: size)) : Text(string)
         let alignment: Alignment = element.align == "middle" ? .top : element.align == "end" ? .topTrailing : .topLeading
         return content
-            .font(.system(size: size, weight: element.markdown == true && string.hasPrefix("#") ? .semibold : .regular))
+            .font(.system(size: size))
             .foregroundStyle(Palette.color(element.color))
             .multilineTextAlignment(element.align == "middle" ? .center : element.align == "end" ? .trailing : .leading)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
             .accessibilityIdentifier(element.id)
+    }
+
+    /// Markdown a line at a time: headings larger and bold, list items with bullets, emphasis and code inline.
+    static func markdown(_ string: String, size: CGFloat) -> AttributedString {
+        var out = AttributedString()
+        for (i, raw) in string.components(separatedBy: "\n").enumerated() {
+            if i > 0 { out.append(AttributedString("\n")) }
+            var line = Substring(raw)
+            var font: Font?
+            let hashes = line.prefix(while: { $0 == "#" }).count
+            if (1 ... 6).contains(hashes), line.dropFirst(hashes).first == " " {
+                line = line.dropFirst(hashes + 1)
+                font = .system(size: size * (hashes == 1 ? 1.4 : hashes == 2 ? 1.25 : 1.1), weight: .semibold)
+            }
+            let indent = line.prefix(while: { $0 == " " })
+            let rest = line.dropFirst(indent.count)
+            var bullet = ""
+            if rest.hasPrefix("- ") || rest.hasPrefix("* ") || rest.hasPrefix("+ ") {
+                bullet = indent + "• "
+                line = rest.dropFirst(2)
+            }
+            var part = (try? AttributedString(markdown: String(line), options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+                ?? AttributedString(line)
+            if let font { part.font = font }
+            out.append(AttributedString(bullet))
+            out.append(part)
+        }
+        return out
     }
 
     private var noteView: some View {
