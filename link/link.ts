@@ -260,6 +260,7 @@ export class Link {
       store: this.#store,
       inbox: this.#inbox,
       assets: this.#assets,
+      assetAdded: (hash) => this.#coord.announceAsset(hash),
       catalog: this.#catalog,
       person: this.#id.person,
       socket: agentSocketPath(this.dir),
