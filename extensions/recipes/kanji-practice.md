@@ -63,12 +63,12 @@ IDs, listed in the result.
 
 ```json template
 [
-  {"op": "add", "type": "text", "id": "prompt", "text": "Write {{character}} {{reading}} {{meaning}}: {{strokes}} strokes. Trace the first box, then write it twice on your own. Mind the stroke order.", "size": "m", "w": 1040},
-  {"op": "add", "type": "embed", "id": "model", "template": "guide-box", "w": 220, "h": 220, "at": {"below": "prompt", "gap": 20}, "params": {"character": "{{character}}", "show": "model", "label": "Model"}},
-  {"op": "add", "type": "region", "id": "practice", "title": "Practice", "send_button": "{{button}}", "w": 780, "h": 310, "at": {"right_of": "model", "gap": 40}},
-  {"op": "add", "type": "embed", "id": "box-1", "template": "guide-box", "w": 220, "h": 220, "at": {"inside": "practice", "gap": 40}, "params": {"character": "{{character}}", "show": "trace", "label": "Box 1"}},
-  {"op": "add", "type": "embed", "id": "box-2", "template": "guide-box", "w": 220, "h": 220, "at": {"right_of": "box-1", "gap": 20}, "params": {"show": "empty", "label": "Box 2"}},
-  {"op": "add", "type": "embed", "id": "box-3", "template": "guide-box", "w": 220, "h": 220, "at": {"right_of": "box-2", "gap": 20}, "params": {"show": "empty", "label": "Box 3"}}
+  {"op": "add", "type": "text", "id": "prompt", "text": "Write {{character}} {{reading}} {{meaning}}: {{strokes}} strokes. Trace the first box, then write it twice on your own. Mind the stroke order.", "size": "m", "w": 920},
+  {"op": "add", "type": "embed", "id": "model", "template": "guide-box", "w": 200, "h": 200, "at": {"below": "prompt", "gap": 36}, "params": {"character": "{{character}}", "show": "model", "label": "Model"}},
+  {"op": "add", "type": "region", "id": "practice", "title": "Practice", "send_button": "{{button}}", "w": 690, "h": 290, "at": {"right_of": "model", "gap": 30}},
+  {"op": "add", "type": "embed", "id": "box-1", "template": "guide-box", "w": 190, "h": 190, "at": {"inside": "practice", "gap": 40}, "params": {"character": "{{character}}", "show": "trace", "label": "Box 1"}},
+  {"op": "add", "type": "embed", "id": "box-2", "template": "guide-box", "w": 190, "h": 190, "at": {"right_of": "box-1", "gap": 20}, "params": {"show": "empty", "label": "Box 2"}},
+  {"op": "add", "type": "embed", "id": "box-3", "template": "guide-box", "w": 190, "h": 190, "at": {"right_of": "box-2", "gap": 20}, "params": {"show": "empty", "label": "Box 3"}}
 ]
 ```
 

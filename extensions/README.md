@@ -11,6 +11,9 @@ Built-in content uses the same rungs as anyone else's.
 
 | `models/` | Built-in 3D models | A `.glb` an Agent places as `model: "builtin:<name>"` (`builtin:heart`), with the script that makes it. |
 
+An Embed's Anchor answer can say `surface: "writing"` (the guide-box does): strokes on it are then
+handwriting Marks (`ink` or `writing`), never read as a strike, circle or tick of the Embed.
+
 An Embed Template whose HTML has `<meta name="reflex-background" content="transparent">` is drawn
 with no background or border, on the iPad and the web viewer, so what lies under it shows through
 (`overlay` uses it to sit over a sketch).

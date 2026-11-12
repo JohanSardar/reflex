@@ -654,11 +654,15 @@ final class SpaceSession {
             }
         }
         let pk = ink.pkStrokes(all)
+        saveEmbedState()
         let previous = sending
         sending = Task {
             await previous?.value
             let hints = await Handwriting.lineHints(pk)
             if !hints.isEmpty { raw["hints"] = hints }
+            // Embeds in the Region (a practice box, a table) say what each stroke is on.
+            let anchors = await embedAnchors(strokes)
+            if !anchors.isEmpty { raw["embed_anchors"] = anchors }
             freeze(raw)
         }
     }

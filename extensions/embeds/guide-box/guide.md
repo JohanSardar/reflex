@@ -18,10 +18,11 @@ Each stroke the person draws in the box is placed in the box's own terms: fracti
 0 at the top left, 0.5 on the center lines, 1 at the bottom right.
 
 ```json
-"target": { "kind": "box", "name": "Box 1", "box": [0.18, 0.12, 0.62, 0.08],
+"target": { "kind": "box", "surface": "writing", "name": "Box 1", "box": [0.18, 0.12, 0.62, 0.08],
   "start": [0.18, 0.16], "end": [0.8, 0.13], "label": "Box 1: x 0.18–0.8, y 0.12–0.2" }
 ```
 
-`start` and `end` are where the stroke began and ended, so their order and direction show stroke
+Each stroke is its own Mark of kind `ink` (or `writing` when it reads as text), never a strike or
+circle: the box is a writing surface. `start` and `end` are where the stroke began and ended, so their order and direction show stroke
 order. For the full path, `read(ids: [<mark>], detail: "strokes")`: points are in your coordinates;
 subtract the box's top left and divide by its side (`w`) to compare them.

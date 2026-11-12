@@ -57,7 +57,7 @@
       const f = (v) => Math.round(v * 1000) / 1000;
       const pts = (region.points ?? []).map((q) => [f((q[0] - x) / s), f((q[1] - y) / s)]);
       const box = [f((bx - x) / s), f((by - y) / s), f(bw / s), f(bh / s)];
-      const out = { kind: "box", box, start: pts[0], end: pts[pts.length - 1], label: `${p.label ?? "box"}: x ${box[0]}–${f(box[0] + box[2])}, y ${box[1]}–${f(box[1] + box[3])}` };
+      const out = { kind: "box", surface: "writing", box, start: pts[0], end: pts[pts.length - 1], label: `${p.label ?? "box"}: x ${box[0]}–${f(box[0] + box[2])}, y ${box[1]}–${f(box[1] + box[3])}` };
       if (p.label) out.name = String(p.label);
       return out;
     },

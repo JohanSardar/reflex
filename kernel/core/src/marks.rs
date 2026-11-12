@@ -1017,7 +1017,14 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
             .and_then(|(_, _, a)| a.get("line"))
             .and_then(Value::as_str)
             == Some("underline");
+        // An Embed that is a writing surface (a practice box) says so: what is drawn on it
+        // is handwriting, never a strike or a circle around it.
+        let writing = embed_hit
+            .and_then(|(_, _, a)| a.get("surface"))
+            .and_then(Value::as_str)
+            == Some("writing");
         let gesture = match (gesture, embed_at) {
+            (_, Some(_)) if writing => Kind::Ink,
             (Kind::Ink, Some(e)) if closed => Kind::Circle(vec![e]),
             (Kind::Ink, Some(e)) if line && under => Kind::Underline(e),
             (Kind::Ink, Some(e)) if line => Kind::Strike(e),
