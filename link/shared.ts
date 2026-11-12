@@ -159,7 +159,7 @@ export class SharedSpaces {
     this.#relay?.rotate(space);
     // They learn they were removed (the record without them), and nothing else.
     const p = this.#coord.peers().find((x) => x.device === member.device);
-    if (p) void p.session.send({ t: "share", share: signed.share, sig: signed.sig }, undefined, "control").catch(() => {});
+    if (p) this.#coord.send(p, { t: "share", share: signed.share, sig: signed.sig });
     this.#changed(signed);
     if (!this.#shares.spacesWith(member.device).length) setTimeout(() => this.#coord.forgetGuest(member.device), 500).unref();
     return this.summary().find((s) => s.space === space)!;
@@ -181,7 +181,7 @@ export class SharedSpaces {
     // To this person's other Links, every record; to someone else's, only those of Spaces this person owns that they are in.
     if (!own && !(s.owner.id === me && s.members.some((m) => m.device === d.device))) return;
     const key = this.#relay?.keyOf(s.space);
-    void p.session.send({ t: "share", share: s, sig: r.sig, ...(key ? { key } : {}) }, undefined, "control").catch(() => {});
+    this.#coord.send(p, { t: "share", share: s, sig: r.sig, ...(key ? { key } : {}) });
   }
 
   /** A Link connected: hand it the records it should have. */

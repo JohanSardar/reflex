@@ -25,6 +25,8 @@ Usage
   reflex link join <invite>           Join someone's Space with the invite they sent (reflex://invite?...)
   reflex link role <space> <person> viewer    Make someone in your Space a viewer
   reflex link remove <space> <person>         Remove someone from your Space (its key changes)
+  reflex link fault <spec>            Change fault injection on a Link started with --fault
+                                      (e.g. "lan:drop=1" takes LAN down, "" clears it)
 
 Sharing a Space: type \`invite <space> [editor|viewer]\` in the Link's terminal, or tap Share on your
 iPad. Making someone an editor needs you too: \`role <space> <person> editor\` there, or the iPad.
@@ -56,6 +58,9 @@ Options
   --relay <url>   Sync through this Reflex Relay (default wss://reflex.eilmer.si, or $REFLEX_RELAY);
                   remembered. --relay off stops using one
   --no-lan        Don't listen or look for devices on the local network (Relay only)
+  --no-p2p        Don't use Apple peer-to-peer Wi-Fi (on by default on macOS; needs npm run build:p2p)
+  --fault <spec>  Drop, delay or duplicate frames per transport, e.g. "lan:delay=80,jitter=40;p2p:drop=0.01"
+  --every-path    Send every change over every live path, not just the fastest
   --json          Machine-readable output
   --no-prompt     Don't use this terminal for pairing codes or questions
   -h, --help      Show this help
@@ -74,6 +79,9 @@ const { values: flags, positionals: args } = parseArgs({
     "no-web": { type: "boolean", default: false },
     relay: { type: "string" },
     "no-lan": { type: "boolean", default: false },
+    "no-p2p": { type: "boolean", default: false },
+    fault: { type: "string" },
+    "every-path": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -120,6 +128,9 @@ async function start(): Promise<void> {
     webPort: flags["no-web"] ? null : flags["web-port"] ? Number(flags["web-port"]) : undefined,
     relay: relayUrl(),
     lan: !flags["no-lan"],
+    p2p: !flags["no-p2p"],
+    fault: flags.fault,
+    everyPath: flags["every-path"],
   });
   await link.start();
   const stop = async (sig: string): Promise<void> => {
@@ -136,12 +147,13 @@ interface Status {
   name: string;
   person: { id: string; name: string };
   lan_port: number;
+  p2p_port: number | null;
   spaces: { id: string; kind: string; digest: string; elements: number; sends: string[] }[];
   journal: { entries: number; checkpoints: number };
   assets: number;
   inbox: { space: string; send: string; via: string; receipts: { recipient: string; state: string }[] }[];
   paired: { device: string; name: string; connected: boolean }[];
-  peers: { device: string; name: string; remote: string; rttMs: number | null }[];
+  peers: { device: string; name: string; paths: { transport: string; remote: string; rttMs: number | null; active: boolean; sentBytes: number; receivedBytes: number }[] }[];
   agents: { id: string; name: string; status: string }[];
   push?: {
     targets: { id: string; agent: string; adapter: string; config: Record<string, unknown>; live: boolean }[];
@@ -150,13 +162,18 @@ interface Status {
 }
 
 function showStatus(s: Status): string {
-  const lines = [`${s.name} (${s.device}) · ${s.person.name} · ${s.lan_port === undefined ? "no LAN" : `LAN :${s.lan_port}`}`, ""];
+  const lines = [`${s.name} (${s.device}) · ${s.person.name} · ${s.lan_port === undefined ? "no LAN" : `LAN :${s.lan_port}`}${s.p2p_port ? ` · peer-to-peer :${s.p2p_port}` : ""}`, ""];
   lines.push(`Spaces (${s.spaces.length}), journal ${s.journal.entries} entries, ${s.assets} assets`);
   for (const x of s.spaces) lines.push(`  ${x.id.padEnd(20)} ${x.kind.padEnd(8)} ${String(x.elements).padStart(3)} elements  ${x.sends.length} sends  digest ${x.digest.slice(0, 12)}`);
   lines.push(`Paired devices (${s.paired.length})`);
   for (const d of s.paired) {
     const p = s.peers.find((x) => x.device === d.device);
-    lines.push(`  ${d.name.padEnd(20)} ${d.device}  ${p ? `connected ${p.remote}${p.rttMs !== null ? `, ${p.rttMs} ms` : ""}` : "not connected"}`);
+    lines.push(`  ${d.name.padEnd(20)} ${d.device}  ${p ? `connected over ${p.paths.length} path${p.paths.length === 1 ? "" : "s"}` : "not connected"}`);
+    for (const x of p?.paths ?? [])
+      lines.push(
+        `    ${x.active ? "→" : " "} ${x.transport.padEnd(4)} ${x.remote}${x.rttMs !== null ? `, ${x.rttMs} ms` : ""}, ` +
+          `sent ${x.sentBytes} B, received ${x.receivedBytes} B${x.active ? " (sending here)" : ""}`,
+      );
   }
   lines.push(`Agents (${s.agents.length})`);
   for (const a of s.agents) lines.push(`  ${a.id.padEnd(28)} ${a.status.padEnd(9)} ${a.name}`);
@@ -295,6 +312,11 @@ async function main(): Promise<void> {
       if (!space || !person) throw new LinkError("usage", `reflex link ${cmd} <space> <person>${cmd === "role" ? " viewer" : ""}`, "Run reflex link shares to see who is in each Space.");
       const r = await admin(cmd === "role" ? "share.role" : "share.remove", { space, person, role });
       return out(JSON.stringify(r, null, 2), r);
+    }
+    case "fault": {
+      if (args[1] === undefined) throw new LinkError("usage", 'Which faults? reflex link fault "lan:drop=1" (or "" to clear)');
+      const f = await admin<Record<string, unknown>>("fault", { spec: args[1] });
+      return out(Object.entries(f).map(([t, v]) => `${t}: ${JSON.stringify(v)}`).join("\n"), f);
     }
     case "dev":
       return dev();

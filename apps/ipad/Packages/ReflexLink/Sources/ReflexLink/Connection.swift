@@ -2,18 +2,21 @@ import CryptoKit
 import Foundation
 import Network
 
-/// Ordered, reliable frames to one Link, over any path: the LAN
-/// (`FramedConnection`) or the Relay (`RelayConnection`). The handshake and
-/// the session don't care which.
+/// Ordered, reliable frames to one Link, over any path: the LAN or Apple
+/// peer-to-peer Wi-Fi (`FramedConnection`), or the Relay (`RelayConnection`).
+/// The handshake and the session don't care which.
 protocol FrameChannel: AnyObject, Sendable {
     var frames: AsyncThrowingStream<Data, Error> { get }
     var remote: String { get }
+    /// "lan", "p2p" or "relay", as the Link names its transports.
+    var transport: String { get }
     func send(_ frame: Data)
     func close()
 }
 
-/// TCP with length-prefixed frames (u32, big-endian), as the Link's LAN
-/// transport (`link/transports/lan.ts`).
+/// TCP with length-prefixed frames (u32, big-endian), as the Link's LAN and
+/// peer-to-peer transports (`link/transports/framed.ts`). The same frames go
+/// over the local network or over Apple peer-to-peer Wi-Fi.
 final class FramedConnection: FrameChannel, @unchecked Sendable {
     private let conn: NWConnection
     private let queue = DispatchQueue(label: "si.eilmer.reflex.link-connection")
@@ -21,15 +24,24 @@ final class FramedConnection: FrameChannel, @unchecked Sendable {
     private var continuation: AsyncThrowingStream<Data, Error>.Continuation!
     let frames: AsyncThrowingStream<Data, Error>
     let remote: String
+    /// "lan" or "p2p".
+    let transport: String
     static let maxFrame = 16 * 1024 * 1024
 
-    init(endpoint: NWEndpoint) {
+    /// Over the local network, or, given `peerToPeer`, only over that peer-to-peer interface.
+    init(endpoint: NWEndpoint, peerToPeer: NWInterface? = nil) {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         tcp.enableKeepalive = true
         tcp.keepaliveIdle = 10
-        conn = NWConnection(to: endpoint, using: NWParameters(tls: nil, tcp: tcp))
-        remote = "\(endpoint)"
+        let params = NWParameters(tls: nil, tcp: tcp)
+        if let peerToPeer {
+            params.includePeerToPeer = true
+            params.requiredInterface = peerToPeer
+        }
+        conn = NWConnection(to: endpoint, using: params)
+        transport = peerToPeer == nil ? "lan" : "p2p"
+        remote = peerToPeer.map { "\(endpoint) via \($0.name)" } ?? "\(endpoint)"
         var c: AsyncThrowingStream<Data, Error>.Continuation!
         frames = AsyncThrowingStream { c = $0 }
         continuation = c
@@ -117,6 +129,11 @@ private final class Once<T: Sendable>: @unchecked Sendable {
 final class Session {
     let conn: any FrameChannel
     let peer: PeerInfo
+    var transport: String { conn.transport }
+    /// Smoothed round trip from this side's pings, as on the Link (`FramedPath.recordRtt`).
+    private(set) var rttMs: Double?
+    /// When anything last arrived; a path that goes quiet is dropped.
+    var lastHeard = Date()
     private var tx: FrameCipher
     private var rx: FrameCipher
     private var iterator: AsyncThrowingStream<Data, Error>.AsyncIterator
@@ -144,12 +161,17 @@ final class Session {
         let next = try await it.next(isolation: MainActor.shared)
         iterator = it
         guard let f = next else { return nil }
+        lastHeard = Date()
         let plain = try rx.open(f)
         let n = plain.prefix(4).reduce(0) { $0 << 8 | Int($1) }
         guard plain.count >= 4 + n, let h = try JSONSerialization.jsonObject(with: plain.subdata(in: plain.startIndex + 4 ..< plain.startIndex + 4 + n)) as? [String: Any] else {
             throw LinkError.protocolError("a malformed message")
         }
         return (h, plain.subdata(in: plain.startIndex + 4 + n ..< plain.endIndex))
+    }
+
+    func recordRtt(_ ms: Double) {
+        rttMs = rttMs.map { (($0 * 0.7 + ms * 0.3) * 10).rounded() / 10 } ?? ms
     }
 
     func close() {
