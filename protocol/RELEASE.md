@@ -38,12 +38,14 @@ git tag -a protocol-v1.0.0 -m "Reflex Protocol v1.0.0" <merge commit on main>
 git push origin protocol-v1.0.0
 ```
 
-## 4. GitHub release
+## 4. GitLab release
+
+The project lives at https://gitlab.com/johansardar/reflex.
 
 ```sh
 (cd protocol && npm pack)                # reflex-protocol-1.0.0.tgz
-gh release create protocol-v1.0.0 protocol/reflex-protocol-1.0.0.tgz \
-  --title "Reflex Protocol v1.0.0" --notes-file protocol/CHANGELOG.md
+glab release create protocol-v1.0.0 protocol/reflex-protocol-1.0.0.tgz \
+  --repo johansardar/reflex --name "Reflex Protocol v1.0.0" --notes-file protocol/CHANGELOG.md
 ```
 
 ## 5. Make the `$id`s resolve (deploy the Relay)
@@ -59,13 +61,9 @@ node tests/conformance/run.ts relay --url https://reflex.eilmer.si   # the deplo
 
 This touches only the Worker on `reflex.eilmer.si`. Never change the `relay.eilmer.si` DNS record.
 
-## 6. Make the repo public
+## 6. The repo
 
-Only if the person decides to: the spec and conformance suite point at files in the repo (`tests/conformance/`, `agent/examples/`).
-
-```sh
-gh repo edit JohanSardar/reflex --visibility public --accept-visibility-change-consequences
-```
+The repo is public at https://gitlab.com/johansardar/reflex (`git clone https://gitlab.com/johansardar/reflex.git`). The spec and conformance suite point at files in it (`tests/conformance/`, `agent/examples/`).
 
 ## After
 
