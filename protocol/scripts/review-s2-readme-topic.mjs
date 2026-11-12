@@ -12,8 +12,8 @@ const ajv = new Ajv2020({ strict: true, allErrors: true, allowUnionTypes: true }
 for (const file of readdirSync(join(root, "schema")).filter((f) => f.endsWith(".schema.json")))
   ajv.addSchema(JSON.parse(readFileSync(join(root, "schema", file), "utf8")));
 
-const element = /** @type {any} */ (ajv.getSchema("https://reflex.eilmer.si/protocol/v0/element.schema.json"));
-const readMe = /** @type {any} */ (ajv.getSchema("https://reflex.eilmer.si/protocol/v0/read_me.input.schema.json"));
+const element = /** @type {any} */ (ajv.getSchema("https://reflex.eilmer.si/protocol/v1/element.schema.json"));
+const readMe = /** @type {any} */ (ajv.getSchema("https://reflex.eilmer.si/protocol/v1/read_me.input.schema.json"));
 
 const type = "plate_map";
 const el = { id: "pm", type, type_version: 1, owner: { agent: "a_cc7", name: "Claude Code" }, bounds: [0, 0, 10, 10], props: { wells: 96 } };

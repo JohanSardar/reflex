@@ -110,6 +110,10 @@ export async function startRelay(o: RelayOptions): Promise<{ port: number; close
     return r;
   };
 
+  // Protocol v1's schemas, served at their $ids (relay/domain/http.ts).
+  const schemaDir = new URL("../../protocol/schema/", import.meta.url);
+  const schemas = Object.fromEntries(readdirSync(schemaDir).filter((f) => f.endsWith(".schema.json")).map((f) => [f, readFileSync(new URL(f, schemaDir), "utf8")]));
+
   const server = createServer((req, res) => void serve(req, res));
   const originOf = (req: IncomingMessage) => o.origin ?? `http://${req.headers.host ?? `localhost:${o.port}`}`;
 
@@ -123,7 +127,7 @@ export async function startRelay(o: RelayOptions): Promise<{ port: number; close
     const request = new Request(new URL(req.url ?? "/", origin), { method: req.method, headers, body, signal: abort.signal, duplex: "half" } as RequestInit);
     let response: Response;
     try {
-      response = await route(request, { auth: (r, origin) => auth.fetch(r, origin), log: (id, r, path, origin) => logOf(id).fetch(r, path, origin) }, origin);
+      response = await route(request, { auth: (r, origin) => auth.fetch(r, origin), log: (id, r, path, origin) => logOf(id).fetch(r, path, origin), schemas }, origin);
     } catch (e) {
       log(`error on ${req.method} ${req.url}: ${(e as Error).stack}`);
       response = Response.json({ error: "internal" }, { status: 500 });

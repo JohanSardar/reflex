@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reflex.eilmer.si/protocol/v1/intent.schema.json",
+  "title": "User intent",
+  "description": "What a person's device writes into a Space through the kernel's apply_user_intent(person, device, intent, now_ms) (protocol/spec/operations.md §5). The kernel stamps the person and device from its arguments, never from the intent, and records each intent as one undo step for that person. Besides these, a device may send add and patch: an apply op (apply.input.schema.json, ops) with intent in place of op; a device-added Element needs its own id. Undo and redo are the kernel's undo(person, device) and redo(person, device), not intents.",
+  "oneOf": [
+    {
+      "title": "add_stroke",
+      "description": "One finished stroke. Agents can never change or remove it.",
+      "type": "object",
+      "properties": {
+        "intent": {
+          "const": "add_stroke"
+        },
+        "id": {
+          "description": "The device's stable stroke ID (PencilKit's, or a UUID).",
+          "$ref": "common.schema.json#/$defs/element_id"
+        },
+        "stroke": {
+          "type": "object",
+          "properties": {
+            "points": {
+              "type": "array",
+              "items": {
+                "description": "[x, y], [x, y, pressure] or [x, y, t, pressure]: Space coordinates, t in ms since the stroke began, pressure 0–1.",
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 2,
+                "maxItems": 4
+              },
+              "minItems": 1,
+              "maxItems": 20000
+            },
+            "width": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 200
+            }
+          },
+          "required": [
+            "points"
+          ],
+          "additionalProperties": false
+        },
+        "tool": {
+          "description": "pen (default), pencil, marker or highlighter.",
+          "type": "string",
+          "maxLength": 40
+        },
+        "color": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 200
+        }
+      },
+      "required": [
+        "intent",
+        "id",
+        "stroke"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "move",
+      "description": "The person dragged Elements.",
+      "type": "object",
+      "properties": {
+        "intent": {
+          "const": "move"
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/element_id"
+          },
+          "minItems": 1,
+          "maxItems": 2000
+        },
+        "by": {
+          "$ref": "common.schema.json#/$defs/offset"
+        }
+      },
+      "required": [
+        "intent",
+        "ids",
+        "by"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "erase",
+      "description": "The person erased whole strokes or removed Elements.",
+      "type": "object",
+      "properties": {
+        "intent": {
+          "const": "erase"
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/element_id"
+          },
+          "minItems": 1,
+          "maxItems": 2000
+        }
+      },
+      "required": [
+        "intent",
+        "ids"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "remove",
+      "description": "The same as erase.",
+      "type": "object",
+      "properties": {
+        "intent": {
+          "const": "remove"
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/element_id"
+          },
+          "minItems": 1,
+          "maxItems": 2000
+        }
+      },
+      "required": [
+        "intent",
+        "ids"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "erase_precise",
+      "description": "The pixel eraser cut a stroke: it is replaced by what is left of it (no fragments when nothing is).",
+      "type": "object",
+      "properties": {
+        "intent": {
+          "const": "erase_precise"
+        },
+        "id": {
+          "$ref": "common.schema.json#/$defs/element_id"
+        },
+        "fragments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fragment"
+          },
+          "maxItems": 1000
+        }
+      },
+      "required": [
+        "intent",
+        "id",
+        "fragments"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "set_state",
+      "description": "An Embed saved state with setState, or the person entered values in a Panel (panel and values). The keys given replace those keys.",
+      "type": "object",
+      "properties": {
+        "intent": {
+          "const": "set_state"
+        },
+        "id": {
+          "$ref": "common.schema.json#/$defs/element_id"
+        },
+        "state": {
+          "type": "object"
+        },
+        "panel": {
+          "$ref": "common.schema.json#/$defs/element_id"
+        },
+        "values": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "intent",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "library_rename",
+      "description": "The person renamed a Library entry.",
+      "type": "object",
+      "properties": {
+        "intent": {
+          "const": "library_rename"
+        },
+        "kind": {
+          "enum": [
+            "recipe",
+            "embed"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        }
+      },
+      "required": [
+        "intent",
+        "kind",
+        "name",
+        "to"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "library_delete",
+      "description": "The person deleted a Library entry.",
+      "type": "object",
+      "properties": {
+        "intent": {
+          "const": "library_delete"
+        },
+        "kind": {
+          "enum": [
+            "recipe",
+            "embed"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        }
+      },
+      "required": [
+        "intent",
+        "kind",
+        "name"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "fragment": {
+      "description": "What is left of an erased stroke: a new stroke.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/element_id"
+        },
+        "stroke": {
+          "type": "object",
+          "properties": {
+            "points": {
+              "type": "array",
+              "items": {
+                "description": "[x, y], [x, y, pressure] or [x, y, t, pressure]: Space coordinates, t in ms since the stroke began, pressure 0–1.",
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 2,
+                "maxItems": 4
+              },
+              "minItems": 1,
+              "maxItems": 20000
+            },
+            "width": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 200
+            }
+          },
+          "required": [
+            "points"
+          ],
+          "additionalProperties": false
+        },
+        "tool": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "color": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 200
+        }
+      },
+      "required": [
+        "id",
+        "stroke"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

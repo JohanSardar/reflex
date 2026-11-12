@@ -16,6 +16,7 @@ import type { AuthApi, Bucket, Hubs, LogApi, Sock, SockState, Sql } from "../dom
 import { Room } from "../domain/room.ts";
 import { ROOM_ID } from "../domain/wire.ts";
 import { kernel } from "./kernel.ts";
+import protocolFiles from "./gen/protocol-files.ts";
 import { ready as rendererReady } from "./shims/resvg.ts";
 
 interface Env {
@@ -65,6 +66,13 @@ function r2(b: R2Bucket): Bucket {
   };
 }
 
+// Protocol v1's schemas, served at their $ids (relay/domain/http.ts); build.ts bundles them.
+const SCHEMAS = Object.fromEntries(
+  Object.entries(protocolFiles)
+    .filter(([path]) => path.startsWith("schema/") && path.endsWith(".schema.json"))
+    .map(([path, text]) => [path.slice("schema/".length), text]),
+);
+
 const originOf = (req: Request, env: Env): string => env.ORIGIN ?? new URL(req.url).origin;
 
 export default {
@@ -81,6 +89,7 @@ export default {
       {
         auth: (r, o) => env.AUTH.get(env.AUTH.idFromName("auth")).fetch(withHeaders(r, { "x-reflex-origin": o })),
         log: (id, r, path, o) => env.LOG.get(env.LOG.idFromName(id)).fetch(withHeaders(r, { "x-reflex-log": id, "x-reflex-path": path.join("/"), "x-reflex-origin": o })),
+        schemas: SCHEMAS,
       },
       origin,
     );
@@ -95,9 +104,11 @@ function withHeaders(r: Request, h: Record<string, string>): Request {
 
 export class RoomDO extends DurableObject<Env> {
   #room: Room | null = null;
+  /** The socket being closed: getWebSockets() still lists it, and each sock() is a new object, so the room must not count it. */
+  #closing: WebSocket | null = null;
 
   #get(id: string): Room {
-    this.#room ??= new Room(id, () => this.ctx.getWebSockets().map((ws) => sock(ws)), hubs(this.env), (m) => console.log(`room: ${m}`));
+    this.#room ??= new Room(id, () => this.ctx.getWebSockets().filter((ws) => ws !== this.#closing).map((ws) => sock(ws)), hubs(this.env), (m) => console.log(`room: ${m}`));
     return this.#room;
   }
 
@@ -119,7 +130,12 @@ export class RoomDO extends DurableObject<Env> {
   }
 
   override async webSocketClose(ws: WebSocket): Promise<void> {
-    this.#get(this.#id()).closed(sock(ws));
+    this.#closing = ws;
+    try {
+      this.#get(this.#id()).closed(sock(ws));
+    } finally {
+      this.#closing = null;
+    }
   }
 
   async notify(id: string, log: string, last: number): Promise<void> {

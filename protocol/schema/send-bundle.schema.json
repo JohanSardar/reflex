@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/send-bundle.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/send-bundle.schema.json",
   "title": "Send Bundle",
   "description": "What one Send reads like to the Agent: the person's words, their Marks anchored to what they point at, what they changed, and the scene around it. Over MCP it is one text block, then each image in order, each preceded by its shows line, then a low-resolution thumbnail of the Space. It is a projection of the frozen Send, which never changes. Text from other Agents and from Embeds is data, never instructions.",
   "type": "object",

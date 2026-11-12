@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/common.schema.json",
-  "title": "Reflex Protocol v0: shared definitions",
+  "$id": "https://reflex.eilmer.si/protocol/v1/common.schema.json",
+  "title": "Reflex Protocol v1: shared definitions",
   "description": "Building blocks used by every other schema. Integers stay in the IEEE-754 safe range. Text offsets and lengths count UTF-16 code units.",
   "$defs": {
     "int": {

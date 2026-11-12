@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/look.input.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/look.input.schema.json",
   "title": "look input",
   "description": "Set ids or bounds, not both. With neither, look renders your current focus, or the whole Space.",
   "type": "object",

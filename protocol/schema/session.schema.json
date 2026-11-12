@@ -1,0 +1,1024 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reflex.eilmer.si/protocol/v1/session.schema.json",
+  "title": "Session message",
+  "description": "The JSON header of one message inside an encrypted session (protocol/spec/transports.md §4). Each sealed frame's plain text is [u32 BE header length][header JSON][body bytes]; only sync and asset carry a body. t picks the message. A device ignores a t it doesn't know, so newer peers can add messages in a minor version.",
+  "oneOf": [
+    {
+      "title": "spaces",
+      "description": "The Spaces this side holds that the peer may sync, sent on every new binding and whenever the list changes. The receiver creates an empty replica for each one it doesn't hold (when it may sync it) and starts that Space's sync conversation.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "spaces"
+        },
+        "spaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/space"
+              },
+              "kind": {
+                "description": "space, or library for the person's Library.",
+                "type": "string",
+                "maxLength": 40
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "t",
+        "spaces"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "sync",
+      "description": "One Automerge sync message for one Space; the body is its bytes. Each side answers every sync message it receives with its own next one, if any, until both have nothing to send. The receiver checks every change in it against what the sender may write (protocol/spec/membership.md §4) before applying any.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "sync"
+        },
+        "space": {
+          "$ref": "#/$defs/space"
+        }
+      },
+      "required": [
+        "t",
+        "space"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "assets_have",
+      "description": "Assets this side holds that the peer may fetch.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "assets_have"
+        },
+        "hashes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hash"
+          },
+          "maxItems": 100000
+        }
+      },
+      "required": [
+        "t",
+        "hashes"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "asset_want",
+      "description": "Assets this side wants from those the peer said it has.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "asset_want"
+        },
+        "hashes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hash"
+          },
+          "maxItems": 100000
+        }
+      },
+      "required": [
+        "t",
+        "hashes"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "asset",
+      "description": "One part of an asset; the body is bytes off .. off+len of it. Parts of one asset come in order on one Path. The receiver keeps the asset only if its SHA-256 is hash.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "asset"
+        },
+        "hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "off": {
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "size": {
+          "$ref": "common.schema.json#/$defs/count"
+        }
+      },
+      "required": [
+        "t",
+        "hash",
+        "off",
+        "size"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "ping",
+      "description": "Sent every 2 s on every live Path. Answered with pong on the same Path.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "ping"
+        },
+        "n": {
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "at": {
+          "description": "Milliseconds since the Unix epoch.",
+          "$ref": "common.schema.json#/$defs/count"
+        }
+      },
+      "required": [
+        "t",
+        "n",
+        "at"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "pong",
+      "description": "The answer to a ping, echoing n and at, so the sender measures that Path's round trip.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "pong"
+        },
+        "n": {
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "at": {
+          "description": "Milliseconds since the Unix epoch.",
+          "$ref": "common.schema.json#/$defs/count"
+        }
+      },
+      "required": [
+        "t",
+        "n",
+        "at"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "refused",
+      "description": "The changes this side received for a Space were refused (protocol/spec/membership.md §4). Sync of that Space with the peer stops until it answers reset.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "refused"
+        },
+        "space": {
+          "$ref": "#/$defs/space"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "t",
+        "space",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "reset",
+      "description": "This side dropped its refused changes and started the Space over from the peer: sync it again.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "reset"
+        },
+        "space": {
+          "$ref": "#/$defs/space"
+        }
+      },
+      "required": [
+        "t",
+        "space"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "agents",
+      "description": "Link to the person's own devices: every Agent the Link knows, so devices label Agent changes and show who asks to connect.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "agents"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "common.schema.json#/$defs/agent_id"
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "color": {
+                "type": "string",
+                "maxLength": 20
+              },
+              "status": {
+                "enum": [
+                  "pending",
+                  "approved",
+                  "denied",
+                  "revoked"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "status"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 1000
+        }
+      },
+      "required": [
+        "t",
+        "agents"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "agent_request",
+      "description": "Link to the person's own iPads: an Agent asks to connect. The iPad answers with agent_decision.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "agent_request"
+        },
+        "id": {
+          "$ref": "common.schema.json#/$defs/agent_id"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "color": {
+          "type": "string",
+          "maxLength": 20
+        }
+      },
+      "required": [
+        "t",
+        "id",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "agent_decision",
+      "description": "iPad to its Link: the person allowed or denied an Agent. A Link takes it only from an iPad of its own person that paired by scanning that Link's own code.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "agent_decision"
+        },
+        "id": {
+          "$ref": "common.schema.json#/$defs/agent_id"
+        },
+        "status": {
+          "enum": [
+            "approved",
+            "denied"
+          ]
+        }
+      },
+      "required": [
+        "t",
+        "id",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "agent_names",
+      "description": "Link to another person's Link: this person's approved Agents, so the other person's devices can label their changes in a shared Space.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "agent_names"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent"
+          },
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "t",
+        "agents"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "presence",
+      "description": "iPad to its Link: the Space on screen (null when none), whether the pen is down, and the cursor and selection in Space coordinates. Never written into a Space.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "presence"
+        },
+        "space": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 200
+        },
+        "pen": {
+          "type": "boolean"
+        },
+        "cursor": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "items": false,
+          "minItems": 2
+        },
+        "selection": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/element_id"
+          },
+          "maxItems": 50
+        }
+      },
+      "required": [
+        "t",
+        "space"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "hints",
+      "description": "iPad to its Link: the handwriting recognizer's current lines in a watched Region.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "hints"
+        },
+        "space": {
+          "$ref": "#/$defs/space"
+        },
+        "region": {
+          "$ref": "common.schema.json#/$defs/element_id"
+        },
+        "hints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hint"
+          },
+          "maxItems": 200
+        }
+      },
+      "required": [
+        "t",
+        "space",
+        "region",
+        "hints"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "here",
+      "description": "Who is in a Space right now: a device's person, name, cursor and selection, passed between the devices and Links that may see that Space. gone: true (with only device) says the device left.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "here"
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        },
+        "space": {
+          "$ref": "#/$defs/space"
+        },
+        "person": {
+          "$ref": "#/$defs/person"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "cursor": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "items": false,
+          "minItems": 2
+        },
+        "selection": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/element_id"
+          },
+          "maxItems": 50
+        },
+        "at": {
+          "description": "Milliseconds since the Unix epoch.",
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "gone": {
+          "const": true
+        }
+      },
+      "required": [
+        "t",
+        "device"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "relay",
+      "description": "Link to the person's own devices: the Relay where they meet when no closer Path reaches them, and the room (protocol/spec/transports.md §6).",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "relay"
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^wss?://"
+        },
+        "room": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        }
+      },
+      "required": [
+        "t",
+        "url",
+        "room"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "relay_keys",
+      "description": "Link to the same person's other Links: the Space keys for the Relay's log, end to end.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "relay_keys"
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "space": {
+                "$ref": "#/$defs/space"
+              },
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{43}$"
+              }
+            },
+            "required": [
+              "space",
+              "key"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "t",
+        "keys"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "share",
+      "description": "Owner's Link to a member's Link, and to the owner's other Links: the newest signed share record, with the Space key when the receiver may hold it.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "share"
+        },
+        "share": {
+          "$ref": "#/$defs/share"
+        },
+        "sig": {
+          "$ref": "#/$defs/sig"
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      },
+      "required": [
+        "t",
+        "share",
+        "sig"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "shares",
+      "description": "Link to the person's own iPads: the shared Spaces, who is in each, and the live invites.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "shares"
+        },
+        "shares": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/summary"
+          },
+          "maxItems": 1000
+        },
+        "invites": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "maxItems": 1000
+        }
+      },
+      "required": [
+        "t",
+        "shares",
+        "invites"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "invite_create",
+      "description": "iPad to its Link: make an invite to a Space.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "invite_create"
+        },
+        "space": {
+          "$ref": "#/$defs/space"
+        },
+        "role": {
+          "enum": [
+            "editor",
+            "viewer"
+          ]
+        }
+      },
+      "required": [
+        "t",
+        "space",
+        "role"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "invite",
+      "description": "Link to the iPad that asked: the invite, as a reflex://invite code.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "invite"
+        },
+        "space": {
+          "$ref": "#/$defs/space"
+        },
+        "role": {
+          "enum": [
+            "editor",
+            "viewer"
+          ]
+        },
+        "uri": {
+          "type": "string",
+          "maxLength": 4096,
+          "pattern": "^reflex://invite\\?"
+        },
+        "expires": {
+          "description": "Milliseconds since the Unix epoch.",
+          "$ref": "common.schema.json#/$defs/count"
+        }
+      },
+      "required": [
+        "t",
+        "space",
+        "role",
+        "uri",
+        "expires"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "member_set",
+      "description": "iPad to its Link: change a member's role, or remove them.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "member_set"
+        },
+        "space": {
+          "$ref": "#/$defs/space"
+        },
+        "person": {
+          "$ref": "common.schema.json#/$defs/person_id"
+        },
+        "role": {
+          "enum": [
+            "editor",
+            "viewer",
+            "remove"
+          ]
+        }
+      },
+      "required": [
+        "t",
+        "space",
+        "person",
+        "role"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "join_invite",
+      "description": "iPad to its Link: join a shared Space with an invite code the person opened.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "join_invite"
+        },
+        "uri": {
+          "type": "string",
+          "maxLength": 4096,
+          "pattern": "^reflex://invite\\?"
+        }
+      },
+      "required": [
+        "t",
+        "uri"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "joined",
+      "description": "Link to the iPad that asked: it joined.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "joined"
+        },
+        "space": {
+          "$ref": "#/$defs/space"
+        },
+        "role": {
+          "enum": [
+            "editor",
+            "viewer"
+          ]
+        },
+        "owner": {
+          "$ref": "#/$defs/person"
+        }
+      },
+      "required": [
+        "t",
+        "space",
+        "role",
+        "owner"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "share_error",
+      "description": "Link to the iPad that asked: why an invite, role change or join failed.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "share_error"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "t",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "device": {
+      "description": "A device ID: dev- and the first 8 bytes of SHA-256 of its Ed25519 public key, in hex.",
+      "type": "string",
+      "pattern": "^dev-[0-9a-f]{16}$"
+    },
+    "key": {
+      "description": "A raw 32-byte public key, base64url without padding.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "person": {
+      "description": "A person by ID and display name, as devices exchange them.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/person_id"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "sig": {
+      "description": "An Ed25519 signature or an HMAC-SHA256, base64url without padding.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43,86}$"
+    },
+    "space": {
+      "description": "A Space ID, or `library`.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "hash": {
+      "description": "An asset's SHA-256, in hex.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "agent": {
+      "description": "An Agent, with the name and color devices label its changes with.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/agent_id"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "color": {
+          "type": "string",
+          "maxLength": 20
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "hint": {
+      "description": "One line the device's handwriting recognizer read.",
+      "type": "object",
+      "properties": {
+        "strokes": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/element_id"
+          },
+          "maxItems": 2000,
+          "minItems": 1
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 2000,
+          "minLength": 1
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "strokes",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "member": {
+      "description": "One member in a share record.",
+      "type": "object",
+      "properties": {
+        "person": {
+          "$ref": "#/$defs/person"
+        },
+        "role": {
+          "enum": [
+            "editor",
+            "viewer"
+          ]
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        },
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "since": {
+          "description": "Milliseconds since the Unix epoch.",
+          "$ref": "common.schema.json#/$defs/count"
+        }
+      },
+      "required": [
+        "person",
+        "role",
+        "device",
+        "key",
+        "since"
+      ],
+      "additionalProperties": false
+    },
+    "share": {
+      "description": "A share record: who is in a shared Space, with which role. The owner's Link signs \"reflex-link/v0 share \" + JSON of this object exactly as sent (protocol/spec/membership.md).",
+      "type": "object",
+      "properties": {
+        "v": {
+          "const": 0
+        },
+        "space": {
+          "$ref": "#/$defs/space"
+        },
+        "kind": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "owner": {
+          "$ref": "#/$defs/person"
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        },
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/member"
+          },
+          "maxItems": 200
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "$ref": "#/$defs/person"
+              },
+              "at": {
+                "description": "Milliseconds since the Unix epoch.",
+                "$ref": "common.schema.json#/$defs/count"
+              }
+            },
+            "required": [
+              "person",
+              "at"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 1000
+        },
+        "rev": {
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "epoch": {
+          "$ref": "common.schema.json#/$defs/count"
+        },
+        "relay": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048
+        },
+        "at": {
+          "description": "Milliseconds since the Unix epoch.",
+          "$ref": "common.schema.json#/$defs/count"
+        }
+      },
+      "required": [
+        "v",
+        "space",
+        "kind",
+        "owner",
+        "device",
+        "key",
+        "members",
+        "removed",
+        "rev",
+        "epoch",
+        "relay",
+        "at"
+      ],
+      "additionalProperties": false
+    },
+    "summary": {
+      "description": "One shared Space as an iPad shows it.",
+      "type": "object",
+      "properties": {
+        "space": {
+          "$ref": "#/$defs/space"
+        },
+        "owner": {
+          "$ref": "#/$defs/person"
+        },
+        "role": {
+          "enum": [
+            "owner",
+            "editor",
+            "viewer",
+            null
+          ]
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "$ref": "#/$defs/person"
+              },
+              "role": {
+                "enum": [
+                  "editor",
+                  "viewer"
+                ]
+              }
+            },
+            "required": [
+              "person",
+              "role"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 200
+        },
+        "epoch": {
+          "$ref": "common.schema.json#/$defs/count"
+        }
+      },
+      "required": [
+        "space",
+        "owner",
+        "role",
+        "members",
+        "epoch"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

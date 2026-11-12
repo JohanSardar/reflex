@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/apply.output.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/apply.output.schema.json",
   "title": "apply result",
   "description": "What a successful apply returns. exec and recipe return the same fields plus their own. A rejected batch returns error.schema.json instead.",
   "type": "object",

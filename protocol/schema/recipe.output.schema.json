@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/recipe.output.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/recipe.output.schema.json",
   "title": "recipe result",
   "description": "The apply result fields, plus the ops the Recipe expanded to. They were applied as one batch; patch them like your own.",
   "type": "object",

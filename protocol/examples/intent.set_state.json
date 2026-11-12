@@ -1,0 +1,1 @@
+{ "intent": "set_state", "id": "claude:sim-1", "state": { "gravity": 4.2 } }

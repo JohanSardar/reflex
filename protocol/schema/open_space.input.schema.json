@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/open_space.input.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/open_space.input.schema.json",
   "title": "open_space input",
   "type": "object",
   "properties": {
