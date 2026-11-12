@@ -104,7 +104,8 @@ export function exampleParams(schema: Record<string, any>): Record<string, unkno
     switch ([s.type].flat()[0]) {
       case "integer":
       case "number":
-        return typeof s.minimum === "number" ? Math.max(s.minimum, Math.min(1, s.maximum ?? 1)) : 1;
+        // 1 when the range allows it, else the nearest bound (a maximum below 1, a minimum above it).
+        return Math.min(Math.max(1, s.minimum ?? -Infinity), s.maximum ?? Infinity);
       case "boolean":
         return false;
       case "array":

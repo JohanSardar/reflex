@@ -79,6 +79,8 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
     public var width: Double?
     public var behaviors: [Behavior]?
     public var draggable: Bool?
+    /// Where a drag lands: `grid` (a step in Space units) and `to` (Element IDs to drop into).
+    public var snap: JSONValue?
     public var locked: Bool?
     /// Region rules: whether the person may write there, watch mode, Agents read-only, and its Send button's label.
     public var ink: Bool?
@@ -88,7 +90,7 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, type, owner, bounds, text, markdown, size, color, align, shape, fill, stroke, from, to, arrow, points
-        case src, alt, latex, title, name, template, params, html, url, model, allow, state, values, data, mime, page, width, behaviors, draggable, locked
+        case src, alt, latex, title, name, template, params, html, url, model, allow, state, values, data, mime, page, width, behaviors, draggable, snap, locked
         case ink, watch, agentsReadOnly = "agents_read_only", sendButton = "send_button"
     }
 
@@ -131,6 +133,7 @@ public struct SceneElement: Decodable, Identifiable, Sendable, Equatable {
         width = try? c.decodeIfPresent(Double.self, forKey: .width)
         behaviors = try? c.decodeIfPresent([Behavior].self, forKey: .behaviors)
         draggable = try? c.decodeIfPresent(Bool.self, forKey: .draggable)
+        snap = try? c.decodeIfPresent(JSONValue.self, forKey: .snap)
         locked = try? c.decodeIfPresent(Bool.self, forKey: .locked)
         ink = try? c.decodeIfPresent(Bool.self, forKey: .ink)
         watch = try? c.decodeIfPresent(Bool.self, forKey: .watch)

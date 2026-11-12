@@ -130,6 +130,13 @@ pub enum Op {
         name: String,
         entry: Value,
     },
+    /// The person deleting a Library entry, or renaming it when `to` is set
+    /// (SPEC §7: "the user can rename or delete it").
+    LibraryEdit {
+        kind: String,
+        name: String,
+        to: Option<String>,
+    },
     ErasePrecise {
         target: String,
         fragments: Vec<AddOp>,
@@ -620,6 +627,16 @@ fn protocol_op(o: &Map<String, Value>, op: &str) -> Result<Op, OpError> {
 }
 
 /// Parses one user intent from a device. Undo and redo are handled by the caller.
+/// A Library entry's name: lowercase letters, digits and dashes (extensions/checks.ts NAME).
+fn library_name(n: &str) -> bool {
+    let b = n.as_bytes();
+    !b.is_empty()
+        && b.len() <= 63
+        && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit())
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+}
+
 pub fn parse_intent(v: &Value) -> Result<Op, Vec<OpError>> {
     let mut errs = vec![];
     let Some(o) = v.as_object() else {
@@ -709,6 +726,31 @@ pub fn parse_intent(v: &Value) -> Result<Op, Vec<OpError>> {
             }
             target.map(|target| Op::ErasePrecise { target, fragments })
         }
+        "library_rename" | "library_delete" => {
+            let field = |k: &str| o.get(k).and_then(Value::as_str).map(String::from);
+            let kind_ok = matches!(field("kind").as_deref(), Some("recipe" | "embed"));
+            let name_ok = |n: &Option<String>| n.as_deref().is_some_and(library_name);
+            let rename = kind == "library_rename";
+            if !kind_ok || !name_ok(&field("name")) || (rename && !name_ok(&field("to"))) {
+                errs.push(OpError::new(
+                    0,
+                    Code::InvalidInput,
+                    format!("{kind} needs kind (recipe or embed), name{}, each a Library name.", if rename { " and to" } else { "" }),
+                    if rename {
+                        "Pass {\"intent\": \"library_rename\", \"kind\": \"recipe\", \"name\": \"old-name\", \"to\": \"new-name\"}."
+                    } else {
+                        "Pass {\"intent\": \"library_delete\", \"kind\": \"recipe\", \"name\": \"its-name\"}."
+                    },
+                ));
+                None
+            } else {
+                Some(Op::LibraryEdit {
+                    kind: field("kind").unwrap_or_default(),
+                    name: field("name").unwrap_or_default(),
+                    to: if rename { field("to") } else { None },
+                })
+            }
+        }
         "set_state" => {
             let target = o.get("id").and_then(Value::as_str).map(String::from);
             let panel = o.get("panel").and_then(Value::as_str).map(String::from);
@@ -748,7 +790,7 @@ pub fn parse_intent(v: &Value) -> Result<Op, Vec<OpError>> {
                 0,
                 Code::InvalidInput,
                 format!("'{other}' is not a user intent."),
-                "Use add_stroke, add, patch, move, erase, erase_precise, set_state, undo or redo.",
+                "Use add_stroke, add, patch, move, erase, erase_precise, set_state, library_rename, library_delete, undo or redo.",
             ));
             None
         }

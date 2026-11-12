@@ -148,10 +148,29 @@ impl Stroke {
         let size = self.size();
         let (x0, y0) = self.first();
         let near = 0.3 * size;
-        self.pts[self.pts.len() / 2..]
+        if !self.pts[self.pts.len() / 2..]
             .iter()
             .any(|(x, y)| (x - x0).hypot(y - y0) < near)
-            && path_len(&self.pts) > 2.2 * size
+        {
+            return false;
+        }
+        let len = path_len(&self.pts);
+        // A flat oval around a wide button is shorter than 2.2 × its width, so it also
+        // counts when it goes around its box and encloses most of it.
+        let [_, _, w, h] = self.bounds;
+        len > 2.2 * size || (len > 1.4 * (w + h) && self.area() > 0.4 * w * h)
+    }
+    /// The area the path encloses (shoelace), closing it back to its start.
+    fn area(&self) -> f64 {
+        let n = self.pts.len();
+        (0..n)
+            .map(|i| {
+                let (a, b) = (self.pts[i], self.pts[(i + 1) % n]);
+                a.0 * b.1 - b.0 * a.1
+            })
+            .sum::<f64>()
+            .abs()
+            / 2.0
     }
 }
 
@@ -979,17 +998,36 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
         let gesture = classify(g, &strokes, ts);
         // An Embed that said what these strokes point at is what they are on: a closed
         // loop on part of a chart encloses no whole Element, but it circles a bar.
-        let embed_at = embed
-            .iter()
-            .find(|(ss, _, _)| {
-                g.strokes
-                    .iter()
-                    .any(|&i| ss.iter().any(|s| s == &strokes[i].key))
-            })
-            .and_then(|(_, el, _)| ts.iter().position(|t| &t.key == el));
+        let embed_hit = embed.iter().find(|(ss, _, _)| {
+            g.strokes
+                .iter()
+                .any(|&i| ss.iter().any(|s| s == &strokes[i].key))
+        });
+        let embed_at = embed_hit.and_then(|(_, el, _)| ts.iter().position(|t| &t.key == el));
         let closed = g.strokes.iter().any(|&i| strokes[i].closed());
+        // One straight flat line across part of an Embed (a table row, a sentence) is a
+        // strike, or an underline when the Embed said so; whole-Element tests miss it.
+        let line = g.strokes.len() == 1 && {
+            let s = &strokes[g.strokes[0]];
+            path_len(&s.pts) >= 30.0
+                && s.straightness() > 0.9
+                && s.bounds[3] <= (0.25 * s.bounds[2]).max(12.0)
+        };
+        let under = embed_hit
+            .and_then(|(_, _, a)| a.get("gesture"))
+            .and_then(Value::as_str)
+            == Some("underline");
+        // An Embed that is a writing surface (a practice box) says so: what is drawn on it
+        // is handwriting, never a strike or a circle around it.
+        let writing = embed_hit
+            .and_then(|(_, _, a)| a.get("surface"))
+            .and_then(Value::as_str)
+            == Some("writing");
         let gesture = match (gesture, embed_at) {
+            (_, Some(_)) if writing => Kind::Ink,
             (Kind::Ink, Some(e)) if closed => Kind::Circle(vec![e]),
+            (Kind::Ink | Kind::Strike(_), Some(e)) if line && under => Kind::Underline(e),
+            (Kind::Ink, Some(e)) if line => Kind::Strike(e),
             (Kind::Circle(on), Some(e))
                 if !on.contains(&e) && on.iter().all(|&j| is_container(&ts[j])) =>
             {

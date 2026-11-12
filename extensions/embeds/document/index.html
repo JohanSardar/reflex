@@ -1,0 +1,164 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #fff; overflow: hidden; }
+  body { font: 17px/1.6 "New York", Georgia, "Times New Roman", serif; color: #1d1d1f; }
+  #page { position: absolute; inset: 0; display: flex; }
+  #text { box-sizing: border-box; padding: 28px 24px 28px 36px; overflow: hidden; }
+  #margin { flex: 1; border-left: 1px dashed #d2d2d7; background: #fbfbfd; position: relative; }
+  #margin span { position: absolute; top: 10px; left: 10px; font: 11px -apple-system, system-ui, sans-serif; color: #aeaeb2; letter-spacing: .04em; text-transform: uppercase; }
+  h1 { font-size: 22px; margin: 0 0 14px; line-height: 1.3; }
+  h2 { font-size: 18px; margin: 18px 0 8px; }
+  p { margin: 0 0 14px; }
+  .s.changed { background: #e6f6ec; box-shadow: inset 0 -2px #30a46c; }
+</style>
+</head>
+<body>
+<div id="page"><div id="text"></div><div id="margin"><span>Notes</span></div></div>
+<script>
+(() => {
+  const p = reflex.element.props();
+  const marginShare = typeof p.margin === "number" ? Math.min(0.5, Math.max(0, p.margin)) : 0.28;
+  const text = document.getElementById("text");
+  const margin = document.getElementById("margin");
+  text.style.width = `${(1 - marginShare) * 100}%`;
+  if (marginShare === 0) margin.remove();
+  const changed = new Set(Array.isArray(p.changed) ? p.changed.map(String) : []);
+
+  /** Sentences, split after . ! ? (and a closing quote or bracket) followed by a space, so "1.3B" stays whole. */
+  const sentences = (t) => {
+    const parts = String(t).split(/(?<=[.!?]["'”’)\]]*)\s+/).filter((s) => s.trim());
+    return parts.map((s, i) => (i < parts.length - 1 ? `${s} ` : s));
+  };
+  const paras = (Array.isArray(p.paragraphs) ? p.paragraphs : []).map((q, i) => ({ id: String(q.id ?? `p${i + 1}`), text: String(q.text ?? ""), heading: Boolean(q.heading) }));
+
+  if (p.title) {
+    const h = document.createElement("h1");
+    h.textContent = p.title; // text, never markup
+    text.append(h);
+  }
+  for (const q of paras) {
+    const n = document.createElement(q.heading ? "h2" : "p");
+    n.dataset.p = q.id;
+    sentences(q.text).forEach((s, j) => {
+      const sp = document.createElement("span");
+      sp.className = "s";
+      sp.dataset.s = `${q.id}.s${j + 1}`;
+      if (changed.has(q.id) || changed.has(sp.dataset.s)) sp.classList.add("changed");
+      sp.textContent = s;
+      n.append(sp);
+    });
+    text.append(n);
+  }
+
+  // ---------- Anchors: what a Mark on the text points at ----------
+
+  const textRect = () => text.getBoundingClientRect();
+  const allSentences = () => [...text.querySelectorAll(".s")];
+  const rectsOf = (el) => [...el.getClientRects()];
+  const inside = (pt, poly) => {
+    let c = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < ((xj - xi) * (pt[1] - yi)) / (yj - yi) + xi) c = !c;
+    }
+    return c;
+  };
+  const near = (r, [x, y], pad) => x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad;
+  /** The text of the words between two points, read from the caret at each. */
+  const caret = (x, y) => {
+    if (document.caretPositionFromPoint) {
+      const c = document.caretPositionFromPoint(x, y);
+      return c && { node: c.offsetNode, offset: c.offset };
+    }
+    const r = document.caretRangeFromPoint?.(x, y);
+    return r && { node: r.startContainer, offset: r.startOffset };
+  };
+  const between = (a, b) => {
+    const ca = caret(...a), cb = caret(...b);
+    if (!ca || !cb || !text.contains(ca.node) || !text.contains(cb.node)) return "";
+    const r = document.createRange();
+    try {
+      r.setStart(ca.node, ca.offset);
+      r.setEnd(cb.node, cb.offset);
+      if (r.collapsed) { r.setStart(cb.node, cb.offset); r.setEnd(ca.node, ca.offset); }
+    } catch { return ""; }
+    // Widen to whole words.
+    const s = r.toString();
+    return s.trim();
+  };
+  const describe = (list, extra) => {
+    const ids = list.map((s) => s.dataset.s);
+    const paragraphs = [...new Set(ids.map((id) => id.split(".")[0]))];
+    const whole = list.map((s) => s.textContent).join("").trim();
+    return { kind: "text", paragraphs, sentences: ids, ...extra, text: whole.slice(0, 1500) };
+  };
+
+  reflex.anchors.register({
+    resolve(region) {
+      const pts = (region.points ?? []).map((q) => [q[0], q[1]]);
+      if (!pts.length) return null;
+      const [bx, by, bw, bh] = region.bounds;
+      const tr = textRect();
+      const inMargin = pts.filter(([x]) => x > tr.right).length > pts.length * 0.6;
+      const sents = allSentences();
+      const first = pts[0], last = pts[pts.length - 1];
+
+      // A mark in the margin: a tall one is a bracket beside lines, a short one is a note beside a sentence.
+      const leftEdge = pts.filter(([x]) => x < tr.left + 30).length > pts.length * 0.6;
+      if (inMargin || leftEdge) {
+        const tall = bh > 34 && bh > bw * 1.6;
+        const y0 = by, y1 = by + bh;
+        if (tall) {
+          const hit = sents.filter((s) => rectsOf(s).some((r) => r.bottom > y0 + 4 && r.top < y1 - 4));
+          if (hit.length) {
+            const out = describe(hit, { quote: hit.map((s) => s.textContent).join("").trim().slice(0, 1500) });
+            return { ...out, label: `bracket beside ${out.sentences.length === 1 ? out.sentences[0] : `${out.sentences[0]}–${out.sentences[out.sentences.length - 1]}`}` };
+          }
+        }
+        const cy = by + bh / 2;
+        let best = null, dist = Infinity;
+        for (const s of sents) for (const r of rectsOf(s)) {
+          const d = cy < r.top ? r.top - cy : cy > r.bottom ? cy - r.bottom : 0;
+          if (d < dist) { dist = d; best = s; }
+        }
+        if (!best) return { kind: "local", bounds: region.bounds.map(Math.round), label: "the margin" };
+        return { ...describe([best]), position: inMargin ? "margin" : "left edge", label: `${inMargin ? "margin note" : "mark at the left edge"} beside ${best.dataset.s}` };
+      }
+
+      // A loop around words: the sentences it encloses, and the words inside.
+      const closed = pts.length > 8 && Math.hypot(first[0] - last[0], first[1] - last[1]) < 0.35 * Math.hypot(bw, bh);
+      if (closed) {
+        const hit = sents.filter((s) => rectsOf(s).some((r) => inside([(r.left + r.right) / 2, (r.top + r.bottom) / 2], pts) || pts.some((q) => near(r, q, 0))));
+        // The enclosed words: from the top-left to the bottom-right of the loop.
+        const quote = between([bx + 6, by + bh / 2 - Math.min(bh / 2 - 4, 10)], [bx + bw - 6, by + bh / 2 + Math.min(bh / 2 - 4, 10)]);
+        if (hit.length) {
+          const out = describe(hit, { quote: quote || undefined });
+          return { ...out, label: `circled ${quote ? `"${quote.slice(0, 60)}"` : ""} in ${out.sentences.join(", ")}`.slice(0, 200) };
+        }
+      }
+
+      // A line along or through words (a bracket drawn in the text, an underline, a strike): the words it covers.
+      const hit = sents.filter((s) => rectsOf(s).some((r) => pts.some((q) => near(r, q, 3))));
+      if (!hit.length) return { kind: "local", bounds: region.bounds.map(Math.round), label: "the page, away from the text" };
+      const left = pts.reduce((a, q) => (q[0] < a[0] ? q : a)), right = pts.reduce((a, q) => (q[0] > a[0] ? q : a));
+      const lineH = parseFloat(getComputedStyle(text).lineHeight) || 27;
+      const flat = bh < lineH * 1.2;
+      // A flat line through the middle of a line of text strikes it; one along its bottom underlines it.
+      const midY = by + bh / 2;
+      const row = flat ? hit.flatMap(rectsOf).find((r) => midY >= r.top - 4 && midY <= r.bottom + 6) : null;
+      const gesture = row ? ((midY - row.top) / row.height < 0.72 ? "strike" : "underline") : undefined;
+      const lift = row ? Math.max(0, midY - (row.top + row.height / 2)) : lineH * 0.3;
+      const quote = flat ? between([left[0], left[1] - lift], [right[0], right[1] - lift]) : hit.map((s) => s.textContent).join("").trim();
+      const out = describe(hit, { quote: quote || undefined, ...(gesture ? { gesture } : {}) });
+      const what = gesture === "strike" ? "struck through" : gesture === "underline" ? "underlined" : flat ? "line under or through" : "mark over";
+      return { ...out, label: `${what} ${quote ? `"${quote.slice(0, 60)}"` : out.sentences.join(", ")}`.slice(0, 200) };
+    },
+  });
+})();
+</script>
+</body>
+</html>

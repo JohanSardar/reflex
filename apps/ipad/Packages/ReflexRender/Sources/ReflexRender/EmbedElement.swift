@@ -47,7 +47,7 @@ struct EmbedElementView: View {
                 ModelEmbedView(element: element, model: model, host: models)
             } else if let host, let spec = host.spec(template: element.template, html: element.html, url: element.url, params: element.params, data: element.data, state: element.state, allow: element.allow) {
                 EmbedView(host: host, key: element.id, spec: spec, interactive: false)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.color("grey").opacity(0.4), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.color("grey").opacity(spec.transparent ? 0 : 0.4), lineWidth: 1))
                     .overlay(alignment: .bottomLeading) {
                         if let note = host.notes[element.id] { EmbedNoteView(note: note) }
                     }

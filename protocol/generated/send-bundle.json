@@ -156,19 +156,14 @@
   "additionalProperties": false,
   "$defs": {
     "anchor": {
-      "description": "Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x, y and points; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description.",
+      "description": "Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x, y and points; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description. An Embed Template may answer its own kind (such as wells or box) and its own fields, which its guide.md documents; gesture: \"strike\" or \"underline\" says which a flat line across its content is.",
       "type": "object",
       "properties": {
         "kind": {
+          "description": "text, data, dom, part, line or local, or a kind an Embed Template defines.",
           "type": "string",
-          "enum": [
-            "text",
-            "data",
-            "dom",
-            "part",
-            "line",
-            "local"
-          ]
+          "minLength": 1,
+          "maxLength": 64
         },
         "range": {
           "description": "text: [start, end) in UTF-16 code units of the target's text.",
@@ -270,6 +265,209 @@
         "bounds": {
           "description": "local: [x, y, width, height] in the target's own pixels.",
           "$ref": "#/$defs/bounds"
+        },
+        "gesture": {
+          "description": "A flat line across an Embed's text: through the words or along their bottom.",
+          "type": "string",
+          "enum": [
+            "strike",
+            "underline"
+          ]
+        },
+        "paragraphs": {
+          "description": "Embed Template text (document): paragraph IDs.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "maxItems": 1000
+        },
+        "sentences": {
+          "description": "Embed Template text (document): sentence IDs.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "maxItems": 1000
+        },
+        "quote": {
+          "description": "The words the Mark covers.",
+          "type": "string",
+          "maxLength": 1500
+        },
+        "text": {
+          "description": "The whole text of the sentences the Mark is on.",
+          "type": "string",
+          "maxLength": 1500
+        },
+        "position": {
+          "description": "Where a note beside text sits.",
+          "type": "string",
+          "enum": [
+            "margin",
+            "left edge"
+          ]
+        },
+        "nodes": {
+          "description": "dom (prototype): the DOM nodes the Mark covers, outermost first.",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "properties": {
+              "selector": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "tag": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "data_id": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "text": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "role": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "class": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "box": {
+                "description": "[x, y, width, height] in the Embed's pixels.",
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 4,
+                "maxItems": 4
+              }
+            },
+            "required": [
+              "selector",
+              "tag"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "start_selector": {
+          "description": "dom: the node a line starts on.",
+          "type": "string",
+          "maxLength": 512
+        },
+        "end_selector": {
+          "description": "dom: the node a line ends on.",
+          "type": "string",
+          "maxLength": 512
+        },
+        "columns": {
+          "description": "data or wells: column keys the Mark covers.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "maxItems": 200
+        },
+        "cells": {
+          "description": "data (table): up to 12 cells the Mark covers, with their values.",
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "properties": {
+              "row": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "column": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "value": {}
+            },
+            "required": [
+              "row",
+              "column"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "wells": {
+          "description": "wells (plate): well IDs such as C4.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "maxItems": 1000
+        },
+        "contents": {
+          "description": "wells: what the plate's params say about each marked well, by well ID.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "description": "correction (overlay): the corrections the Mark is on.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "maxItems": 100
+        },
+        "surface": {
+          "description": "writing: the Embed is a writing surface, so strokes on it are handwriting.",
+          "type": "string",
+          "enum": [
+            "writing"
+          ]
+        },
+        "box": {
+          "description": "box (guide box): the Mark's [x, y, width, height] as fractions of the box's side.",
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "start": {
+          "description": "box: where the stroke began, as fractions of the box's side.",
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "end": {
+          "description": "box: where the stroke ended, as fractions of the box's side.",
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "name": {
+          "description": "The name the Embed gives the place the Mark is on.",
+          "type": "string",
+          "maxLength": 200
         },
         "label": {
           "type": "string",

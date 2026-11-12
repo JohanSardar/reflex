@@ -210,8 +210,8 @@ $("reset").onclick = () => void api("/api/dev/reset", {}).catch((e) => toast((e 
 // ---------- hot reload ----------
 
 conn.onStatus((s) => {
-  $("status").textContent = s === "live" ? "Live" : s === "connecting" ? "Connecting…" : "Offline, retrying";
-  $("status").className = `status ${s}`;
+  $("status").textContent = s === "live" ? "Live" : s === "connecting" ? "Connecting…" : s === "bad_key" ? "Key not accepted: reopen the address reflex dev printed" : "Offline, retrying";
+  $("status").className = `status ${s === "bad_key" ? "offline" : s}`;
 });
 let first = true;
 conn.on(({ event }) => {

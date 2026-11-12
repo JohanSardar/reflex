@@ -44,6 +44,9 @@ erasable TypeScript (`npx tsc -p apps/web`).
   stops answering for 5 seconds is stopped. Sandboxed frames can share a process, so one busy Embed
   freezes the others with it: all of them are removed and restarted one at a time, and the one that
   freezes again stays stopped. What the sandbox stops shows as a note on the Embed.
+- An Embed Template with `<meta name="reflex-background" content="transparent">` is drawn with no frame
+  background or border.
+- A refused viewer key (the Link restarted and made a new one) stops retrying and says so.
 - An MCP App view (an Embed Template with a `ui://` `source`) gets an MCP Apps host in its frame.
   The viewer can't call tools, so its `tools/call` is always denied, with a note.
 

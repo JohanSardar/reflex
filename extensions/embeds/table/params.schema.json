@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "properties": {
+    "title": { "type": "string", "maxLength": 120 },
+    "columns": {
+      "type": "array", "minItems": 1, "maxItems": 20,
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": { "type": "string", "minLength": 1, "maxLength": 40, "description": "The cell key in each row, and what Marks report in columns." },
+          "label": { "type": "string", "maxLength": 60 },
+          "unit": { "type": "string", "maxLength": 12, "description": "Shown after each number in the column." },
+          "numeric": { "type": "boolean", "description": "Right-align it. Defaults to true when every value is a number." }
+        },
+        "required": ["key"],
+        "additionalProperties": false
+      }
+    },
+    "rows": {
+      "type": "array", "minItems": 1, "maxItems": 200,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 80, "description": "What Marks report in rows. Defaults to r1, r2, …" },
+          "cells": { "type": "object", "description": "Values by column key: strings or numbers." },
+          "status": { "type": "string", "maxLength": 20, "description": "Adds a Status column: queued, running, done, approved, killed or failed are styled; any other word shows plain." },
+          "best": { "type": "boolean", "description": "Bold the row." }
+        },
+        "required": ["cells"],
+        "additionalProperties": false
+      }
+    },
+    "highlight": { "type": "array", "maxItems": 200, "items": { "type": "string", "maxLength": 80 }, "description": "Row IDs to shade, such as the ones you just changed." },
+    "note": { "type": "string", "maxLength": 400, "description": "A line under the table." }
+  },
+  "required": ["columns", "rows"],
+  "additionalProperties": false
+}

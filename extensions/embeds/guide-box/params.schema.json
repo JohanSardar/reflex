@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "character": { "type": "string", "maxLength": 2, "description": "The character to show. Leave it out for an empty box." },
+    "show": { "type": "string", "enum": ["model", "trace", "empty"], "description": "model: the character in black. trace: faint, to write over. empty: guide lines only. Defaults to model with a character, else empty." },
+    "guides": { "type": ["boolean", "string"], "enum": [true, false, "diagonal"], "description": "true (default): the two center lines (田). diagonal: also the diagonals (米). false: none." },
+    "label": { "type": "string", "maxLength": 30, "description": "A small label in the corner, and what Marks report as name." }
+  },
+  "additionalProperties": false
+}

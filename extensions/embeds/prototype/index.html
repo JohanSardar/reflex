@@ -1,0 +1,113 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #fff; overflow: hidden; }
+  body { font: 15px -apple-system, system-ui, "Segoe UI", sans-serif; color: #1d1d1f; }
+  #proto { position: absolute; inset: 0; overflow: hidden; }
+</style>
+<style id="user-css"></style>
+</head>
+<body>
+<main id="proto"></main>
+<script>
+(() => {
+  const p = reflex.element.props();
+  const root = document.getElementById("proto");
+  // The prototype is the Agent's own markup, shown as a static page: scripts in it don't run.
+  document.getElementById("user-css").textContent = String(p.css ?? "");
+  root.innerHTML = String(p.html ?? "");
+  for (const s of root.querySelectorAll("script")) s.remove();
+  for (const a of root.querySelectorAll("a[href]")) a.addEventListener("click", (e) => e.preventDefault());
+  for (const f of root.querySelectorAll("form")) f.addEventListener("submit", (e) => e.preventDefault());
+
+  /** A selector that finds this node again: its id or data-id if it has one, else a path from the nearest one. */
+  const selector = (el) => {
+    const parts = [];
+    for (let n = el; n && n !== root; n = n.parentElement) {
+      if (n.id) { parts.unshift(`#${CSS.escape(n.id)}`); break; }
+      if (n.dataset.id) { parts.unshift(`[data-id="${n.dataset.id.replace(/"/g, '\\"')}"]`); break; }
+      const same = [...n.parentElement.children].filter((c) => c.tagName === n.tagName);
+      parts.unshift(same.length > 1 ? `${n.tagName.toLowerCase()}:nth-of-type(${same.indexOf(n) + 1})` : n.tagName.toLowerCase());
+    }
+    return parts.join(" > ");
+  };
+  const textOf = (el) => (el.getAttribute("aria-label") || el.innerText || el.getAttribute("alt") || el.getAttribute("placeholder") || el.value || "").replace(/\s+/g, " ").trim().slice(0, 120);
+  const node = (el) => {
+    const r = el.getBoundingClientRect();
+    const out = { selector: selector(el), tag: el.tagName.toLowerCase() };
+    if (el.id) out.id = el.id;
+    if (el.dataset.id) out.data_id = el.dataset.id;
+    const t = textOf(el);
+    if (t) out.text = t;
+    const role = el.getAttribute("role");
+    if (role) out.role = role;
+    if (el.className && typeof el.className === "string") out.class = el.className.slice(0, 80);
+    out.box = [r.left, r.top, r.width, r.height].map(Math.round);
+    return out;
+  };
+  /** The deepest element of the prototype under a point. */
+  const at = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    return el && el !== root && root.contains(el) ? el : null;
+  };
+  const inside = (pt, poly) => {
+    let c = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < ((xj - xi) * (pt[1] - yi)) / (yj - yi) + xi) c = !c;
+    }
+    return c;
+  };
+  /** Of a set of elements, the ones not inside another one in the set. */
+  const outermost = (els) => els.filter((e) => !els.some((o) => o !== e && o.contains(e)));
+  const label = (n) => `${n.tag}${n.id ? `#${n.id}` : ""}${n.text ? ` "${n.text.slice(0, 40)}"` : ""}`;
+
+  reflex.anchors.register({
+    resolve(region) {
+      const pts = (region.points ?? []).map((q) => [q[0], q[1]]);
+      if (!pts.length) return null;
+      const [bx, by, bw, bh] = region.bounds;
+      const first = pts[0], last = pts[pts.length - 1];
+      const closed = pts.length > 8 && Math.hypot(first[0] - last[0], first[1] - last[1]) < 0.35 * Math.hypot(bw, bh);
+      let els = [];
+      if (closed) {
+        // A loop: the largest elements it encloses (their centers inside it, and mostly within its box).
+        const all = [...root.querySelectorAll("*")].filter((e) => {
+          const r = e.getBoundingClientRect();
+          if (r.width < 2 || r.height < 2) return false;
+          const c = [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+          const ix = Math.max(0, Math.min(r.right, bx + bw) - Math.max(r.left, bx)), iy = Math.max(0, Math.min(r.bottom, by + bh) - Math.max(r.top, by));
+          return inside(c, pts) && ix * iy >= 0.7 * r.width * r.height;
+        });
+        els = outermost(all);
+        if (!els.length) {
+          // A loop drawn inside one element: that element.
+          const e = at(bx + bw / 2, by + bh / 2);
+          if (e) els = [e];
+        }
+      } else {
+        // A line, strike or arrow: what is under it, deepest first; an arrow's start and end are named too.
+        const seen = new Set();
+        for (const q of pts) {
+          const e = at(q[0], q[1]);
+          if (e && !seen.has(e)) { seen.add(e); els.push(e); }
+        }
+        els = els.filter((e) => !els.some((o) => o !== e && e.contains(o))); // the deepest ones
+      }
+      if (!els.length) return { kind: "local", bounds: region.bounds.map(Math.round), label: "the prototype, away from its elements" };
+      const nodes = els.slice(0, 20).map(node);
+      const out = { kind: "dom", selector: nodes[0].selector, nodes, label: (nodes.length <= 3 ? nodes.map(label).join(", ") : `${nodes.length} elements: ${nodes.slice(0, 3).map(label).join(", ")}…`).slice(0, 200) };
+      if (!closed) {
+        const s = at(...first), e = at(...last);
+        if (s && e && s !== e) { out.start_selector = selector(s); out.end_selector = selector(e); }
+      }
+      return out;
+    },
+  });
+})();
+</script>
+</body>
+</html>

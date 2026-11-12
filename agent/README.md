@@ -37,7 +37,7 @@ sees no Space content until it is approved.
   network or files, 5 s and 64 MB).
 - `src/store.ts`: the §6 interfaces (`SpaceStore`, `Inbox`, `Assets`). The
   Link implements them on its storage.
-- `src/model.ts`: 3D models. Fetches a model link or reads a file path, packs a `.gltf` and its
+- `src/model.ts`: 3D models. Fetches a model link, reads a file path or a built-in model (`builtin:heart`, from [extensions/models](../extensions/models/)), packs a `.gltf` and its
   files into one GLB, lists its parts, and draws the flat-shaded picture `look` shows.
 - `src/render.ts`: the `Renderer` interface and the headless SVG→PNG
   renderer (resvg) `look` uses without an iPad: pictures from the asset

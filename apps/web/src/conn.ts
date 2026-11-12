@@ -13,7 +13,8 @@ export type HostEvent =
   | { t: "reload"; reason?: string }
   | { t: string; [k: string]: unknown };
 
-export type Status = "connecting" | "live" | "offline";
+/** `bad_key`: the host refused the viewer key (a Link restart makes a new one); retrying won't help. */
+export type Status = "connecting" | "live" | "offline" | "bad_key";
 
 const b64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
@@ -58,8 +59,8 @@ export class Connection {
       try {
         const res = await this.api(`/api/events?peer=${this.peer}`);
         if (res.status === 401) {
-          this.#setStatus("offline");
-          throw new Error("bad_key");
+          this.#setStatus("bad_key");
+          return;
         }
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
         // A new stream is a new sync conversation: the host reset its side, so reset ours.
@@ -78,8 +79,8 @@ export class Connection {
           }
           wait = 500;
         }
-      } catch (e) {
-        if ((e as Error).message === "bad_key") return;
+      } catch {
+        // Offline: try again below.
       }
       this.#setStatus("offline");
       await new Promise((r) => setTimeout(r, wait));

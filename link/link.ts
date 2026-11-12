@@ -731,6 +731,23 @@ export class Link {
         if (method === "dev.undo") return JSON.parse(this.#store.commit(space, "person", (s) => s.undo(person, device, now)));
         return JSON.parse(this.#store.commit(space, "send", (s) => s.freezeSend(person, device, JSON.stringify(p.raw), now)));
       }
+      case "library.list":
+      case "library.edit": {
+        // The person's own Library: list it, rename or delete an entry (SPEC §7). Applied as this
+        // Link's person, so it syncs, shows in history, and undo brings it back.
+        if (!this.#store.has("library")) {
+          if (method === "library.list") return [];
+          throw new LinkError("unknown_id", "The Library is empty: no Agent has saved anything yet.");
+        }
+        if (method === "library.list") {
+          const scene = JSON.parse(this.#store.read("library", (s) => s.scene(JSON.stringify({ detail: "full", ids: [] }))));
+          return ((scene.library ?? []) as { kind: string; name: string; summary?: string; by?: Record<string, string> }[]).map(({ kind, name, summary, by }) => ({ kind, name, summary, by }));
+        }
+        const intent = p.to ? { intent: "library_rename", kind: p.kind, name: p.name, to: p.to } : { intent: "library_delete", kind: p.kind, name: p.name };
+        const r = JSON.parse(this.#store.commit("library", "person", (s) => s.applyUserIntent(this.#id.person.id, this.#id.key.device, JSON.stringify(intent), Date.now())));
+        if (!r.ok) throw new LinkError(r.errors?.[0]?.code ?? "invalid_input", r.errors?.[0]?.msg ?? "The Library change was refused.", r.errors?.[0]?.fix);
+        return { ...intent, entry: r.entry };
+      }
       case "assets.put": {
         const hash = this.#assets.put(Buffer.from(String(p.base64 ?? ""), "base64"));
         this.#coord.announceAsset(hash);

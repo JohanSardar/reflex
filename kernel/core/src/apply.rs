@@ -595,6 +595,53 @@ fn run_op(
                 new: Some(entry),
             });
         }
+        Op::LibraryEdit { kind, name, to } => {
+            if ctx.space_kind != "library" || !matches!(p, Principal::Person(_)) {
+                return Err(vec![OpError::new(
+                    i,
+                    Code::InvalidInput,
+                    "Only the person renames or deletes Library entries, in the Space of kind \"library\".",
+                    "Run `reflex link library rename|delete` on the person's Link.",
+                )]);
+            }
+            let key = format!("{kind}:{name}");
+            let library = doc::root(tx, "library");
+            let Some(old) = doc::get_str(tx, &library, &key) else {
+                return Err(vec![OpError::new(
+                    i,
+                    Code::UnknownId,
+                    format!("The Library has no {kind} '{name}'."),
+                    "List it with `reflex link library`.",
+                )]);
+            };
+            if let Some(to) = to {
+                let new_key = format!("{kind}:{to}");
+                if doc::get_str(tx, &library, &new_key).is_some() {
+                    return Err(vec![OpError::new(
+                        i,
+                        Code::DuplicateId,
+                        format!("The Library already has a {kind} '{to}'."),
+                        "Pick another name, or delete that one first.",
+                    )]);
+                }
+                let mut e: Value = serde_json::from_str(&old).unwrap_or_else(|_| json!({}));
+                e["name"] = json!(to);
+                let entry = e.to_string();
+                tx.put(&library, new_key.as_str(), entry.as_str())
+                    .map_err(am(i))?;
+                out.edits.push(Edit::Library {
+                    key: new_key,
+                    old: None,
+                    new: Some(entry),
+                });
+            }
+            tx.delete(&library, key.as_str()).map_err(am(i))?;
+            out.edits.push(Edit::Library {
+                key,
+                old: Some(old),
+                new: None,
+            });
+        }
         Op::SetState {
             target,
             panel,
