@@ -152,7 +152,7 @@ export async function run(d: Driver, report: Report): Promise<void> {
             continue;
           }
           const frozen = JSON.parse(space.send(step.raw.send));
-          out.push(...partial({ from: { person: PERSON.id }, ...(step.expect.frozen ?? {}) }, frozen, `/frozen ${step.raw.send}`).filter((p) => !p.includes("/state")));
+          out.push(...partial({ from: { person: PERSON.id }, ...(step.expect.frozen ?? {}) }, frozen, `/frozen ${step.raw.send}`));
           out.push(...invalid("raw-send", step.raw).map((p) => `fixture: ${p}`));
           const marks = JSON.parse(space.marks(step.raw.send, JSON.stringify({ viewer: { agent: AGENT } })));
           out.push(...compareMarks(step.expect, marks.marks).map((p) => `${step.raw.send}: ${p}`));

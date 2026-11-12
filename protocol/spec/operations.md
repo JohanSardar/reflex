@@ -21,7 +21,7 @@ One `apply` is one atomic batch: every op succeeds, or nothing changes. [`apply.
 | `focus` | points the Agent's own view, the one `look` renders by default; it never moves the person's screen (that is `request_attention`) |
 | `define` | saves a Recipe or an Element template to the Library |
 
-- `request` (a request ID) makes a batch idempotent: the same ID with the same ops returns the first result with `duplicate: true`; with different ops it fails with `request_reused`. Request IDs are the Agent's own, and idempotent within one Space: the same ID in another Space is another batch. (An `add` of a built-in template also defines it in the Library Space under `<request>.builtin`, so there a reused ID with other templates fails with `request_reused`.)
+- `request` (a request ID) makes a batch idempotent: the same ID with the same ops returns the first result with `duplicate: true`; with different ops it fails with `request_reused`. Request IDs are the Agent's own, and idempotent within one Space: the same ID in another Space is another batch. (A batch's `define` ops are applied in the Library Space under `<request>.define`, and an `add` of a built-in template defines it there under `<request>.builtin`, so a reused ID with different ops in either fails with `request_reused`.)
 - `in_reply_to` names the Send the batch answers (§6); `look: true` returns a crop of the result.
 - An `add` whose ID exists already fails with `duplicate_id`; a `patch` or `remove` of something that isn't the Agent's fails with `not_yours`; an ID nobody has, with `unknown_id`.
 
