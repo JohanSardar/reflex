@@ -1539,7 +1539,7 @@ export type RelayPing = {
   at?: Count;
 };
 
-/** Relay → device: the answer to one request. ok false carries error. Other fields depend on the request: seqs (log.append); entries and last (log.read); last (log.watch); have (log.assets); client and scope (auth.lookup); grant (grant.issue); at (ping). */
+/** Relay → device: the answer to one request. ok false carries error. Other fields depend on the request: seqs (log.append); entries and last (log.read); last (log.watch); have (log.assets); client, client_uri and scope (auth.lookup); grant (grant.issue); at (ping). */
 export type RelayResult = {
   t: "result";
   /** The caller's request number, echoed in the result. */
@@ -1554,6 +1554,8 @@ export type RelayResult = {
   last?: Count;
   have?: string[];
   client?: string;
+  /** auth.lookup: the client's home page, as it registered it, or null. */
+  client_uri?: string | null;
   scope?: string;
   grant?: string;
   /** Milliseconds since the Unix epoch. */

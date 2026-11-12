@@ -96,7 +96,7 @@ A log the Relay doesn't have, or the wrong token, is refused. Assets go over HTT
 A host (a Link, `reflex dev`) serves a web viewer on loopback only, and checks the `Host` header against DNS rebinding. Every `/api` call carries the viewer key, which the host shows only to the person, in `x-reflex-key`.
 
 - `GET /api/events?peer=<id>`: a stream of newline-delimited JSON, [`viewer.schema.json`](../schema/viewer.schema.json): `hello` first (the person, names, Spaces), then `sync` (a base64 kernel sync message per Space), `here`, `ping` every 15 s, and `reload`. A new stream is a new sync conversation.
-- `POST /api/sync?peer=<id>&space=<space>`: the viewer's answer to a `sync`, as bytes. The host checks it with writers `{"people": [], "agents": []}`, so a viewer can read everything and change nothing: a change is answered 403 `read_only`.
+- `POST /api/sync?peer=<id>&space=<space>`: the viewer's answer to a `sync`, as bytes. The host checks it with writers `{"people": []}` (no `agents` means none), so a viewer can read everything and change nothing: a change is answered 403 `read_only`.
 - `GET /api/asset/<sha256>`: an asset's bytes.
 - A missing or wrong key is 401 `bad_key`; the viewer stops and says so.
 

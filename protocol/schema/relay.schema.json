@@ -453,7 +453,7 @@
     },
     {
       "title": "result",
-      "description": "Relay → device: the answer to one request. ok false carries error. Other fields depend on the request: seqs (log.append); entries and last (log.read); last (log.watch); have (log.assets); client and scope (auth.lookup); grant (grant.issue); at (ping).",
+      "description": "Relay → device: the answer to one request. ok false carries error. Other fields depend on the request: seqs (log.append); entries and last (log.read); last (log.watch); have (log.assets); client, client_uri and scope (auth.lookup); grant (grant.issue); at (ping).",
       "type": "object",
       "properties": {
         "t": {
@@ -510,6 +510,14 @@
         },
         "client": {
           "type": "string",
+          "maxLength": 400
+        },
+        "client_uri": {
+          "description": "auth.lookup: the client's home page, as it registered it, or null.",
+          "type": [
+            "string",
+            "null"
+          ],
           "maxLength": 400
         },
         "scope": {

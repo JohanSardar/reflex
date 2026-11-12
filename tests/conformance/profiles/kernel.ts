@@ -136,6 +136,6 @@ export async function run(k: Driver, report: Report): Promise<void> {
     const s = scenarios()[0];
     await k.call("create", { replica: "nobody", space: s.space });
     const problems = await sync(k, `${s.space}:ipad`, "nobody", { writers: NOBODY });
-    return problems.length ? [] : ["the person's strokes were accepted by a receiver that allows no writers"];
+    return problems.some((p) => p.includes("refused")) ? [] : problems.length ? problems : ["the person's strokes were accepted by a receiver that allows no writers"];
   });
 }
