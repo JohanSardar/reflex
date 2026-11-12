@@ -112,7 +112,7 @@
       if (cy < y0 - 2 && cx >= x0 && cx <= x0 + C * cell) {
         const c = Math.floor((cx - x0) / cell);
         const ids = Array.from({ length: R }, (_, r) => `${rowName(r)}${c + 1}`);
-        return { kind: "wells", wells: ids, columns: [c + 1], label: `column ${c + 1} (${R} wells)` };
+        return { kind: "wells", wells: ids, columns: [String(c + 1)], label: `column ${c + 1} (${R} wells)` };
       }
       const set = new Map();
       const addWell = (r, c) => set.set(`${rowName(r)}${c + 1}`, { r, c });

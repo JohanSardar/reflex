@@ -102,7 +102,7 @@
       const out = { kind: "dom", selector: nodes[0].selector, nodes, label: (nodes.length <= 3 ? nodes.map(label).join(", ") : `${nodes.length} elements: ${nodes.slice(0, 3).map(label).join(", ")}…`).slice(0, 200) };
       if (!closed) {
         const s = at(...first), e = at(...last);
-        if (s && e && s !== e) { out.start = selector(s); out.end = selector(e); }
+        if (s && e && s !== e) { out.start_selector = selector(s); out.end_selector = selector(e); }
       }
       return out;
     },

@@ -8,10 +8,10 @@ Built-in content uses the same rungs as anyone else's.
 | `guides/` | Guide (rung 0) | One Markdown file. Front matter `name` and `summary`; the body is what `read_me(name)` returns. |
 | `embeds/` | Embed Template (rung 2) | A folder: `reflex.json` (`kind: "embed"`, `name`, `summary`, an example), `index.html`, `params.schema.json`, `guide.md`. `reflex test extensions/embeds/<name>` checks it. An Agent adds it with `add embed {template: name, params}`; Reflex saves the built-in copy to the person's Library on first use, so every device can draw it. |
 | `recipes/` | Recipe (rung 1) | One Markdown file. Front matter `name` and `summary`, a `## Params` section with a fenced JSON Schema, and a `## Template` section with a fenced JSON list of `apply` ops. The rest is the Guide `read_me(name)` returns. |
-
 | `models/` | Built-in 3D models | A `.glb` an Agent places as `model: "builtin:<name>"` (`builtin:heart`), with the script that makes it. |
 
-An Embed's Anchor answer can say `surface: "writing"` (the guide-box does): strokes on it are then
+An Embed's Anchor answer must fit `$defs/anchor` in protocol/schema/common.schema.json; a new
+field goes there first. It can say `surface: "writing"` (the guide-box does): strokes on it are then
 handwriting Marks (`ink` or `writing`), never read as a strike, circle or tick of the Embed.
 
 An Embed Template whose HTML has `<meta name="reflex-background" content="transparent">` is drawn

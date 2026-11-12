@@ -24,7 +24,7 @@ Give each element you expect comments on an `id` or `data-id`: Marks name it by 
 
 - a circle: the largest elements inside it (`nodes`, outermost first), or the element it was drawn in
 - a strike, underline or arrow: the elements under the line; an arrow from one element to another
-  also has `start` and `end` selectors
+  also has `start_selector` and `end_selector`
 - handwriting next to an element comes as a `writing` Mark with `text_guess`, `near` the Embed;
   match it to the DOM Mark drawn just before it, or read both Marks' `bounds`
 - `box` is in the prototype's own pixels (0, 0 is its top left)

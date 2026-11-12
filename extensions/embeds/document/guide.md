@@ -24,8 +24,8 @@ Each paragraph's sentences are numbered `<id>.s1`, `<id>.s2`, … in reading ord
 
 - a bracket (a tall stroke in the margin or at the left edge): every sentence on the lines it spans
 - a circle: the sentences it touches, and `quote`, the words inside it
-- a strike or an underline: the words it runs along (`quote`) and their sentences, with `line:
-  "strike"` (through the middle of the words: cut or replace them) or `line: "underline"` (along
+- a strike or an underline: the words it runs along (`quote`) and their sentences, with `gesture:
+  "strike"` (through the middle of the words: cut or replace them) or `gesture: "underline"` (along
   their bottom: emphasis, or a question about them)
 - a note written in the margin: the sentence beside it (`label: "margin note beside p2.s1"`) and
   the note itself as a `writing` Mark with `text_guess`; read its strokes if the guess is unsure

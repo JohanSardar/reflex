@@ -98,7 +98,7 @@
       const area = (b) => (b.box[2] + 24) * (b.box[3] + 24);
       const d = (b) => Math.hypot(b.box[0] + b.box[2] / 2 - cx, b.box[1] + b.box[3] / 2 - cy);
       hit.sort((a, b) => (holds(b) - holds(a)) || (holds(a) ? area(a) - area(b) : d(a) - d(b)));
-      return { kind: "correction", items: hit.map((b) => b.id ?? b.n), label: `correction ${hit[0].id ?? hit[0].n}${hit[0].text ? ` "${String(hit[0].text).slice(0, 50)}"` : ""}`.slice(0, 200) };
+      return { kind: "correction", items: hit.map((b) => String(b.id ?? b.n)), label: `correction ${hit[0].id ?? hit[0].n}${hit[0].text ? ` "${String(hit[0].text).slice(0, 50)}"` : ""}`.slice(0, 200) };
     },
   });
 

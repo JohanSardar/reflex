@@ -87,6 +87,21 @@ pub fn element_value<R: ReadDoc>(
                 .and_then(|e| e.get(*f))
                 .and_then(Value::as_str)
                 .map(|k| json!(display_id(viewer, k))),
+            // snap.to names Elements by the owner's IDs; show them as this viewer sees them.
+            "snap" => rec.field_json("snap").map(|mut v| {
+                if let Some(to) = v.get_mut("to").and_then(Value::as_array_mut) {
+                    for t in to.iter_mut() {
+                        if let Some(id) = t.as_str().filter(|id| !id.contains(':')) {
+                            let key = match &rec.owner {
+                                Principal::Agent(a) => format!("{a}/{id}"),
+                                Principal::Person(_) => id.to_string(),
+                            };
+                            *t = json!(display_id(viewer, &key));
+                        }
+                    }
+                }
+                v
+            }),
             "parent" => rec
                 .field_json("parent")
                 .and_then(|p| p.as_str().map(|k| json!(display_id(viewer, k)))),

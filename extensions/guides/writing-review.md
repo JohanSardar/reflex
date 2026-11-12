@@ -31,8 +31,8 @@ Each Mark on the text has `target: {kind: "text", paragraphs, sentences, quote, 
 
 - a bracket in the margin or at the left edge: the sentences on the lines it spans
 - a circle: `quote` is the words inside it
-- a strike or underline: `quote` is the words it runs along; `line: "strike"` usually means cut or
-  replace them, `line: "underline"` questions or stresses them
+- a strike or underline: `quote` is the words it runs along; `gesture: "strike"` usually means cut or
+  replace them, `gesture: "underline"` questions or stresses them
 - a note written in the margin: the sentence beside it (`label: "margin note beside p2.s1"`), and
   the note's words as a `writing` Mark with `text_guess` near it
 

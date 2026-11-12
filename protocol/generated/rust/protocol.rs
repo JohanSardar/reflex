@@ -1707,41 +1707,95 @@ pub struct Camera {
     pub fov: Option<f64>,
 }
 
+/// A flat line across an Embed's text: through the words or along their bottom.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum AnchorKind {
-    #[serde(rename = "text")]
-    Text,
-    #[serde(rename = "data")]
-    Data,
-    #[serde(rename = "dom")]
-    Dom,
-    #[serde(rename = "part")]
-    Part,
-    #[serde(rename = "line")]
-    Line,
-    #[serde(rename = "local")]
-    Local,
+pub enum AnchorGesture {
+    #[serde(rename = "strike")]
+    Strike,
+    #[serde(rename = "underline")]
+    Underline,
 }
 
-impl AnchorKind {
-    pub const ALL: &'static [&'static str] = &["text", "data", "dom", "part", "line", "local"];
+impl AnchorGesture {
+    pub const ALL: &'static [&'static str] = &["strike", "underline"];
     pub fn as_str(&self) -> &'static str {
         match self {
-            AnchorKind::Text => "text",
-            AnchorKind::Data => "data",
-            AnchorKind::Dom => "dom",
-            AnchorKind::Part => "part",
-            AnchorKind::Line => "line",
-            AnchorKind::Local => "local",
+            AnchorGesture::Strike => "strike",
+            AnchorGesture::Underline => "underline",
         }
     }
 }
 
-/// Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x, y and points; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description.
+/// Where a note beside text sits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AnchorPosition {
+    #[serde(rename = "margin")]
+    Margin,
+    #[serde(rename = "left edge")]
+    LeftEdge,
+}
+
+impl AnchorPosition {
+    pub const ALL: &'static [&'static str] = &["margin", "left edge"];
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AnchorPosition::Margin => "margin",
+            AnchorPosition::LeftEdge => "left edge",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnchorNodesItem {
+    pub selector: String,
+    pub tag: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<String>,
+    /// [x, y, width, height] in the Embed's pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#box: Option<Vec<f64>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnchorCellsItem {
+    pub row: String,
+    pub column: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<Value>,
+}
+
+/// writing: the Embed is a writing surface, so strokes on it are handwriting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AnchorSurface {
+    #[serde(rename = "writing")]
+    Writing,
+}
+
+impl AnchorSurface {
+    pub const ALL: &'static [&'static str] = &["writing"];
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AnchorSurface::Writing => "writing",
+        }
+    }
+}
+
+/// Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x, y and points; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description. An Embed Template may answer its own kind (such as wells or box) and its own fields, which its guide.md documents; gesture: "strike" or "underline" says which a flat line across its content is.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Anchor {
-    pub kind: AnchorKind,
+    /// text, data, dom, part, line or local, or a kind an Embed Template defines.
+    pub kind: String,
     /// text: [start, end) in UTF-16 code units of the target's text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<[i64; 2]>,
@@ -1775,6 +1829,63 @@ pub struct Anchor {
     /// local: [x, y, width, height] in the target's own pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<[i64; 4]>,
+    /// A flat line across an Embed's text: through the words or along their bottom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gesture: Option<AnchorGesture>,
+    /// Embed Template text (document): paragraph IDs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paragraphs: Option<Vec<String>>,
+    /// Embed Template text (document): sentence IDs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sentences: Option<Vec<String>>,
+    /// The words the Mark covers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
+    /// The whole text of the sentences the Mark is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Where a note beside text sits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<AnchorPosition>,
+    /// dom (prototype): the DOM nodes the Mark covers, outermost first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nodes: Option<Vec<AnchorNodesItem>>,
+    /// dom: the node a line starts on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_selector: Option<String>,
+    /// dom: the node a line ends on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_selector: Option<String>,
+    /// data or wells: column keys the Mark covers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub columns: Option<Vec<String>>,
+    /// data (table): up to 12 cells the Mark covers, with their values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cells: Option<Vec<AnchorCellsItem>>,
+    /// wells (plate): well IDs such as C4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wells: Option<Vec<String>>,
+    /// wells: what the plate's params say about each marked well, by well ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contents: Option<BTreeMap<String, Map<String, Value>>>,
+    /// correction (overlay): the corrections the Mark is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub items: Option<Vec<String>>,
+    /// writing: the Embed is a writing surface, so strokes on it are handwriting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<AnchorSurface>,
+    /// box (guide box): the Mark's [x, y, width, height] as fractions of the box's side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#box: Option<Vec<f64>>,
+    /// box: where the stroke began, as fractions of the box's side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<Vec<f64>>,
+    /// box: where the stroke ended, as fractions of the box's side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<Vec<f64>>,
+    /// The name the Embed gives the place the Mark is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
 }
@@ -2825,7 +2936,7 @@ pub struct RawSendEmbedAnchorsItem {
     /// A short ID the Agent chose, such as 'n-auth'. IDs are scoped to the Agent that made them, so two Agents never collide. Reflex-made IDs (Ink, user imports, generated) use the same alphabet.
     pub element: String,
     pub strokes: Vec<String>,
-    /// Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x, y and points; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description.
+    /// Where on its target Element a Mark points, frozen when the Mark was drawn. kind picks which other fields apply: text uses range; data uses rows, x, y and points; dom uses selector; part uses part, parts and camera; line uses line; local uses bounds. label is the Embed's or recognizer's short description. An Embed Template may answer its own kind (such as wells or box) and its own fields, which its guide.md documents; gesture: "strike" or "underline" says which a flat line across its content is.
     pub anchor: Anchor,
 }
 

@@ -1014,7 +1014,7 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
                 && s.bounds[3] <= (0.25 * s.bounds[2]).max(12.0)
         };
         let under = embed_hit
-            .and_then(|(_, _, a)| a.get("line"))
+            .and_then(|(_, _, a)| a.get("gesture"))
             .and_then(Value::as_str)
             == Some("underline");
         // An Embed that is a writing surface (a practice box) says so: what is drawn on it
@@ -1026,7 +1026,7 @@ pub fn marks(now: &Automerge, send: &Value, viewer: Option<&Principal>) -> Value
         let gesture = match (gesture, embed_at) {
             (_, Some(_)) if writing => Kind::Ink,
             (Kind::Ink, Some(e)) if closed => Kind::Circle(vec![e]),
-            (Kind::Ink, Some(e)) if line && under => Kind::Underline(e),
+            (Kind::Ink | Kind::Strike(_), Some(e)) if line && under => Kind::Underline(e),
             (Kind::Ink, Some(e)) if line => Kind::Strike(e),
             (Kind::Circle(on), Some(e))
                 if !on.contains(&e) && on.iter().all(|&j| is_container(&ts[j])) =>

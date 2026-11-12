@@ -150,11 +150,11 @@
       // A flat line through the middle of a line of text strikes it; one along its bottom underlines it.
       const midY = by + bh / 2;
       const row = flat ? hit.flatMap(rectsOf).find((r) => midY >= r.top - 4 && midY <= r.bottom + 6) : null;
-      const line = row ? ((midY - row.top) / row.height < 0.72 ? "strike" : "underline") : undefined;
+      const gesture = row ? ((midY - row.top) / row.height < 0.72 ? "strike" : "underline") : undefined;
       const lift = row ? Math.max(0, midY - (row.top + row.height / 2)) : lineH * 0.3;
       const quote = flat ? between([left[0], left[1] - lift], [right[0], right[1] - lift]) : hit.map((s) => s.textContent).join("").trim();
-      const out = describe(hit, { quote: quote || undefined, ...(line ? { line } : {}) });
-      const what = line === "strike" ? "struck through" : line === "underline" ? "underlined" : flat ? "line under or through" : "mark over";
+      const out = describe(hit, { quote: quote || undefined, ...(gesture ? { gesture } : {}) });
+      const what = gesture === "strike" ? "struck through" : gesture === "underline" ? "underlined" : flat ? "line under or through" : "mark over";
       return { ...out, label: `${what} ${quote ? `"${quote.slice(0, 60)}"` : out.sentences.join(", ")}`.slice(0, 200) };
     },
   });
