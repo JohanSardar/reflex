@@ -454,7 +454,9 @@ fn classify(g: &Group, strokes: &[Stroke], ts: &[Target]) -> Kind {
         let headed = ss.len() > 1 || main.straightness() < 0.92;
         // A plain line from an Element to one inside it (from a scanned page to a mark on it) is a
         // strike that started just outside what it strikes, not an arrow.
-        let holds = |o: B, i: B| o[0] <= i[0] && o[1] <= i[1] && o[0] + o[2] >= i[0] + i[2] && o[1] + o[3] >= i[1] + i[3];
+        let holds = |o: B, i: B| {
+            o[0] <= i[0] && o[1] <= i[1] && o[0] + o[2] >= i[0] + i[2] && o[1] + o[3] >= i[1] + i[3]
+        };
         if let (Some(f), Some(t)) = (from, to) {
             if f != t {
                 if headed {

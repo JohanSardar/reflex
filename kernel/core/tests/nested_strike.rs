@@ -29,7 +29,11 @@ fn a_line_from_a_page_onto_the_mark_it_holds_is_a_strike() {
     let r = sp
         .apply_agent_batch("a1", "r1", &batch.to_string(), 1_700_000_000_000)
         .unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&r).unwrap()["ok"], true, "{r}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&r).unwrap()["ok"],
+        true,
+        "{r}"
+    );
 
     // The teacher strikes it out: one straight pen stroke from the page (40, 220) that stops on the
     // mark (150, 220). A headless line, so it is not an arrow.
@@ -42,7 +46,11 @@ fn a_line_from_a_page_onto_the_mark_it_holds_is_a_strike() {
     let r = sp
         .apply_user_intent("p1", "dev", &intent.to_string(), 1_700_000_100_000)
         .unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&r).unwrap()["ok"], true, "{r}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&r).unwrap()["ok"],
+        true,
+        "{r}"
+    );
 
     let send = json!({ "send": "send1", "trigger": "button", "viewport": [0, 0, 1366, 1024] });
     sp.freeze_send("p1", "dev", &send.to_string(), 1_700_000_200_000)
