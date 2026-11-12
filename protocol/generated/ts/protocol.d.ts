@@ -1885,7 +1885,7 @@ export type SessionReset = {
   space: SessionSpace;
 };
 
-/** Link to the person's own devices: every Agent the Link knows, so devices label Agent changes and show who asks to connect. */
+/** Link to the person's own devices: every Agent the Link knows, so devices label Agent changes and show who asks to connect, and whether this device's answers count (approver). */
 export type SessionAgents = {
   t: "agents";
   agents: ({
@@ -1893,22 +1893,64 @@ export type SessionAgents = {
     name: string;
     color?: string;
     status: "pending" | "approved" | "denied" | "revoked";
+    /** When the Link asked about this Agent, in milliseconds since the Unix epoch. An Agent asked again later (after a deny) is a new request with a new time; an answer carries the time of the request it answers, and a Link ignores an answer to an earlier one. */
+    requested_at?: Count;
   })[];
+  /** Whether the Link takes this device's agent_decision: it is an iPad of the person's that approves (identity.md §4). A device that isn't doesn't ask the person. */
+  approver?: boolean;
 };
 
-/** Link to the person's own iPads: an Agent asks to connect. The iPad answers with agent_decision. */
+/** Link to the person's approving iPads: an Agent asks to connect. The iPad answers with agent_decision. */
 export type SessionAgentRequest = {
   t: "agent_request";
   id: AgentId;
   name: string;
   color?: string;
+  /** When the Link asked about this Agent, in milliseconds since the Unix epoch. An Agent asked again later (after a deny) is a new request with a new time; an answer carries the time of the request it answers, and a Link ignores an answer to an earlier one. */
+  requested_at?: Count;
 };
 
-/** iPad to its Link: the person allowed or denied an Agent. A Link takes it only from an iPad of its own person that paired by scanning that Link's own code. */
+/** iPad to its Link: the person allowed or denied an Agent. A Link takes it only from an iPad of its own person that approves (identity.md §4), and only for the request it answers (requested_at); otherwise it answers agent_decision_refused or ignores it, and always answers with agents. */
 export type SessionAgentDecision = {
   t: "agent_decision";
   id: AgentId;
   status: "approved" | "denied";
+  /** When the Link asked about this Agent, in milliseconds since the Unix epoch. An Agent asked again later (after a deny) is a new request with a new time; an answer carries the time of the request it answers, and a Link ignores an answer to an earlier one. */
+  requested_at?: Count;
+};
+
+/** Link to an iPad of its person's: that iPad's agent_decision doesn't count, because it doesn't approve. The iPad drops the answer, stops asking, and shows the reason. */
+export type SessionAgentDecisionRefused = {
+  t: "agent_decision_refused";
+  id: AgentId;
+  reason: string;
+};
+
+/** Link to the person's iPads: another device of the person's paired with the Link, so one nobody meant to pair shows. Each iPad is told once, on its next binding if it wasn't connected. */
+export type SessionDevicePaired = {
+  t: "device_paired";
+  device: SessionDevice;
+  name: string;
+  /** Whether its answers about Agents count. */
+  approves: boolean;
+};
+
+/** Link to the person's approving iPads: every iPad of the person's waiting for "Let … approve Agents?", the whole list, on every binding and whenever it changes. Once an iPad approves, only an approving iPad makes another one approve. */
+export type SessionApproverRequests = {
+  t: "approver_requests";
+  requests: {
+    device: SessionDevice;
+    name: string;
+    /** Milliseconds since the Unix epoch. */
+    asked_at: Count;
+  }[];
+};
+
+/** Approving iPad to its Link: the person's answer to "Let … approve Agents?" for another of their iPads. A Link takes it only from an iPad that approves. */
+export type SessionApproverDecision = {
+  t: "approver_decision";
+  device: SessionDevice;
+  allow: boolean;
 };
 
 /** Link to another person's Link: this person's approved Agents, so the other person's devices can label their changes in a shared Space. */
@@ -2025,7 +2067,7 @@ export type SessionShareError = {
 };
 
 /** The JSON header of one message inside an encrypted session (protocol/spec/transports.md §4). Each sealed frame's plain text is [u32 BE header length][header JSON][body bytes]; only sync and asset carry a body. t picks the message. A device ignores a t it doesn't know, so newer peers can add messages in a minor version. */
-export type Session = SessionSpaces | SessionSync | SessionAssetsHave | SessionAssetWant | SessionAsset | SessionPing | SessionPong | SessionRefused | SessionReset | SessionAgents | SessionAgentRequest | SessionAgentDecision | SessionAgentNames | SessionPresence | SessionHints | SessionHere | SessionRelay | SessionRelayKeys | SessionShare_ | SessionShares | SessionInviteCreate | SessionInvite | SessionMemberSet | SessionJoinInvite | SessionJoined | SessionShareError;
+export type Session = SessionSpaces | SessionSync | SessionAssetsHave | SessionAssetWant | SessionAsset | SessionPing | SessionPong | SessionRefused | SessionReset | SessionAgents | SessionAgentRequest | SessionAgentDecision | SessionAgentDecisionRefused | SessionDevicePaired | SessionApproverRequests | SessionApproverDecision | SessionAgentNames | SessionPresence | SessionHints | SessionHere | SessionRelay | SessionRelayKeys | SessionShare_ | SessionShares | SessionInviteCreate | SessionInvite | SessionMemberSet | SessionJoinInvite | SessionJoined | SessionShareError;
 
 // ---------- viewer.schema.json ----------
 

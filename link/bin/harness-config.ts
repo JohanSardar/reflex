@@ -57,6 +57,31 @@ function valueEnd(lines: string[], i: number): number {
   return i;
 }
 
+/**
+ * Why Reflex's server in this config.toml is written in a form this editor doesn't handle (dotted keys, a multi-line
+ * string or inline table, an array of tables), or null. Setup then leaves the file alone and says what to write.
+ */
+export function unsupported(text: string): string | null {
+  const lines = text.split("\n");
+  let section = "";
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^\s*\[\[\s*"?mcp_servers"?\s*\.\s*"?reflex"?\b/.test(l)) return `line ${i + 1} makes it an array of tables ([[…]])`;
+    const h = header(l);
+    if (h !== undefined) {
+      section = h;
+      continue;
+    }
+    const mine = section === "mcp_servers.reflex" || section.startsWith("mcp_servers.reflex.");
+    const inline = section === "mcp_servers" && /^\s*"?reflex"?\s*=/.test(l);
+    if (section === "" && /^\s*"?mcp_servers"?\s*\.\s*"?reflex"?\s*[.=]/.test(l)) return `line ${i + 1} sets it with dotted keys (mcp_servers.reflex.…)`;
+    if (section === "mcp_servers" && /^\s*"?reflex"?\s*\./.test(l)) return `line ${i + 1} sets it with dotted keys (reflex.…)`;
+    if (inline && /=\s*\{/.test(l) && !/\}\s*(#.*)?$/.test(l)) return `line ${i + 1} spreads its inline table over several lines`;
+    if ((mine || inline) && /"""|'''/.test(l)) return `line ${i + 1} has a multi-line string`;
+  }
+  return null;
+}
+
 /** config.toml with Reflex's MCP server set to `want`. Returns the text unchanged when it already is. */
 export function codexConfig(text: string, want: Want): string {
   const lines = text.split("\n");

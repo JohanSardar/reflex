@@ -23,6 +23,7 @@ Usage
   reflex link agents                  List Agents and their approval
   reflex link deny <agent>            Deny an Agent waiting to connect
   reflex link revoke <agent>          Take an approved Agent's access away
+  reflex link forget <device>         Forget a paired device that is gone (a reinstalled or lost iPad), by name or ID
   reflex link relay                   The Relay: connection and the grants you gave cloud Agents
   reflex link relay revoke <grant>    End a cloud Agent's grant now
   reflex link shares                  Shared Spaces: who is in each, with which role, and live invites
@@ -43,7 +44,7 @@ Space is kept there as an encrypted log the Relay can't read. A cloud Agent sign
 Relay's page, which shows a code: type it into this Link's terminal to pick one Space and how
 long it may use it. Nothing else can grant one.
 
-Agents are approved by you: tap Allow on your iPad, or answer y in the Link's terminal.
+Agents are approved by you: tap Allow on your iPad. Until an iPad approves, y in the Link's terminal does too.
 
 Acting as the person without an iPad (a Link started with --dev)
   reflex link dev space <space>                     Create a Space
@@ -294,6 +295,17 @@ async function main(): Promise<void> {
       }
       for (let i = 0; i < 100 && existsSync(join(dir, "link.json")); i++) await new Promise((r) => setTimeout(r, 100));
       return out(`Stopped the Link (pid ${pid}). \`reflex mcp\` and the CLI start it again when they need it.`, { stopped: true, pid });
+    }
+    case "forget": {
+      if (!args[1]) throw new LinkError("usage", "Which device? reflex link forget <device>", "Run reflex link status to see them.");
+      const d = await admin<{ device: string; name: string; window_until?: number }>("forget", { device: args[1] });
+      return out(
+        `Forgot ${d.name} (${d.device}).` +
+          (d.window_until
+            ? ` No iPad approves Agents now: until ${new Date(d.window_until).toLocaleTimeString()}, \`reflex pair\` pairs one that does. Run it and scan the code on your iPad.`
+            : ""),
+        d,
+      );
     }
     case "agents": {
       const list = await admin<{ id: string; name: string; status: string; color: string }[]>("agents.list");

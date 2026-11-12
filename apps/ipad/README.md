@@ -14,7 +14,7 @@ That's it. When an Agent opens a Space, it shows up in the Spaces menu (a dot ma
 
 1. **"This Mac's Link changed. Scan its code again."** The Mac at the paired address answered with another key: its Link was reset or reinstalled. The iPad stops dialing it. Run `reflex pair` and scan. Spaces made under the earlier Link's person stay on this iPad only ("this iPad only" in the Spaces menu), aren't sent to the new Link, and can be deleted from the question shown after pairing.
 2. **"Offline", never connecting.** The Wi-Fi keeps devices apart (campus, hotel, guest), or the iPad is on another network. With the Mac's peer-to-peer helper built (`reflex setup` does it when Xcode's command-line tools are there), the iPad reaches the Mac over peer-to-peer Wi-Fi with no shared network. Restart the Link (`reflex link stop`, then `reflex pair`) after it is built.
-3. **An Agent waits for approval, but no question shows.** The iPad isn't connected to the Link the Agent uses: see 1 and 2. `reflex link agents` on the computer lists the Agents waiting.
+3. **An Agent waits for approval, but no question shows.** The iPad isn't connected to the Link the Agent uses (see 1 and 2), or it isn't the iPad that approves: the first iPad does, and it asks "Let … approve Agents?" when another pairs. If that iPad is gone (the app was reinstalled), run `reflex link forget <its name>` on the computer, then `reflex pair`, and scan. `reflex link agents` lists the Agents waiting.
 
 The iPad keeps working offline. Strokes and Sends are saved in the kernel first and go out when the Link is back.
 

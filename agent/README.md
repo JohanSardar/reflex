@@ -128,7 +128,7 @@ does with a long `wait_for_user`.
 
 ```sh
 reflex link                              # in its own terminal: the Link, with a pairing code for the iPad
-reflex spaces create demo                # the Link asks you to approve this Agent: answer y
+reflex spaces create demo                # the Link asks you to approve this Agent: tap Allow on your iPad
 
 reflex elements apply demo --ops '[{"op":"add","id":"n-auth","type":"shape","shape":"rect","text":"Auth service"}]'
 reflex look demo                         # writes a PNG under $TMPDIR/reflex/ and prints its path

@@ -18,7 +18,7 @@ import { homeDir } from "../home.ts";
 import { qrText } from "../pairing/offer.ts";
 import { LinkClient, RpcError } from "../rpc/client.ts";
 import { ensureLink } from "../../agent/src/host/start.ts";
-import { claudeEntry, codexConfig, isReflex, sameEntry, type ClaudeEntry, type Want } from "./harness-config.ts";
+import { claudeEntry, codexConfig, isReflex, sameEntry, unsupported, type ClaudeEntry, type Want } from "./harness-config.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const BIN = join(REPO, "agent/bin/reflex.mjs");
@@ -164,6 +164,15 @@ function codex(): void {
   if (!register("Codex")) return;
   const file = join(codexHome, "config.toml");
   const text = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const odd = unsupported(text);
+  if (odd) {
+    const w = want(false);
+    return note(
+      `left ${file} alone: Reflex's server there is in a form setup doesn't edit (${odd}). Replace it by hand with:\n` +
+        `      [mcp_servers.reflex]\n      command = ${JSON.stringify(w.command)}\n      args = [${w.args.map((a) => JSON.stringify(a)).join(", ")}]\n      tool_timeout_sec = 300` +
+        (w.home ? `\n      env = { REFLEX_HOME = ${JSON.stringify(w.home)} }` : ""),
+    );
+  }
   const next = codexConfig(text, want(false));
   if (next === text) return ok("Codex already has Reflex");
   mkdirSync(codexHome, { recursive: true });
@@ -194,14 +203,12 @@ async function pair(): Promise<void> {
     while (Date.now() < o.expires) {
       await new Promise((r) => setTimeout(r, 1000));
       // The code itself, so an iPad that was paired already and scans again counts too.
-      const u = await c.call<{ used: boolean; name?: string; approves?: boolean }>("pair.check", { offer: o.offer });
+      const u = await c.call<{ used: boolean; name?: string; approves?: boolean; asked?: boolean; hint?: string }>("pair.check", { offer: o.offer });
       if (!u.used) continue;
       say(`\nPaired with ${u.name ?? "your iPad"}. Done: start Claude Code (\`claude\`) or Codex and ask it to draw on your iPad.`);
-      say(
-        u.approves
-          ? `The first time, your iPad asks "Allow … to use your Spaces?": tap Allow.`
-          : `Approving Agents stays with the iPad you paired first: tap Allow there.`,
-      );
+      if (u.approves) say(`The first time, your iPad asks "Allow … to use your Spaces?": tap Allow.`);
+      else if (u.asked) say(`To let it approve Agents too, tap Allow on your first iPad: it asks "Let ${u.name} approve Agents?".`);
+      else say(`It syncs, but can't approve Agents yet. ${u.hint ?? ""}`);
       return;
     }
     say("The code expired. Run `reflex pair` for a new one.");

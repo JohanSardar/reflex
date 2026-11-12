@@ -9,14 +9,19 @@
 // An Agent then says who it is with a credential it made itself; the first
 // time, the person is asked to approve it, and until they do it sees nothing.
 //
-// Approving an Agent needs the person, not a credential file: only a `y` in
-// the Link's own terminal or Allow on an iPad that paired as the person
-// approves (catalog.ts mayApprove): one that scanned a code shown in this
-// terminal, or the first iPad, paired during setup. `admin.key` can make a
-// pairing code (`reflex pair`), but an iPad paired with one after the first
-// can't approve; deny, revoke and status need only `admin.key`. Acting as the
-// person (`dev` commands) needs a Link started with --dev.
-import { existsSync, linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// Approving an Agent needs the person: Allow on an approving iPad
+// (catalog.ts mayApprove), or `y` in the Link's own terminal while no iPad
+// approves yet. The first approving iPad pairs with a code from this terminal,
+// or with a `reflex pair` code within 15 minutes of the profile's creation (or
+// of forgetting the last approving iPad). After that only an approving iPad
+// makes another one approve ("Let … approve Agents?"): the person's iPad is
+// the boundary, not this terminal, which anything with the person's shell can
+// run. No command approves an Agent; deny, revoke, forget and status need only
+// `admin.key`. Code running as the person's OS user can still forge state (it
+// can read identity.json and sign catalog records) until the keys move to the
+// Keychain or the Secure Enclave. Acting as the person (`dev` commands) needs a
+// Link started with --dev.
+import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { connect, createServer, type Server, type Socket } from "node:net";
@@ -105,9 +110,11 @@ function answering(socket: string, ms = 1000): Promise<boolean> {
 const APPROVAL_WAIT_S = 300;
 /** The one line under a pairing code: what to do on the iPad. */
 export const PAIR_LINE = "On your iPad: open Reflex Canvas, tap Connect, then Scan the QR code (single use, 10 minutes). Then tap Allow when your Agent asks.";
-/** Under a code from `reflex pair` once an iPad can approve: the new one syncs, but approving stays with the first. */
+/** Under a code once an iPad approves: the new one syncs, and approves too only if that iPad says so. */
 export const PAIR_LINE_MORE =
-  "On the other iPad: open Reflex Canvas, tap Connect, then Scan the QR code. It syncs your Spaces; approving Agents stays with the iPad you paired first (to move it, scan a code shown in a terminal running `reflex link`).";
+  "On the other iPad: open Reflex Canvas, tap Connect, then Scan the QR code. It syncs your Spaces. To let it approve Agents too, tap Allow on your first iPad when it asks.";
+/** How long after the profile is made (or its last approving iPad is forgotten) a `reflex pair` code pairs an approving iPad. */
+const firstPairMs = (): number => Number(process.env.REFLEX_FIRST_PAIR_S ?? 900) * 1000;
 type Decision = "approved" | "denied" | "revoked";
 
 export class Link {
@@ -289,6 +296,8 @@ export class Link {
         this.#relay.importKeys(h.keys as { space: string; key: string }[], p.name, (space) => this.#shares.get(space) !== undefined);
     };
     this.#coord.onPaired((d) => process.stdout.write(`\nPaired with ${d.name} (${d.device}).\n`));
+    this.#coord.grantsApproval = (source) => this.#grantsApproval(source);
+    this.#coord.approvalHint = () => this.#approvalHint();
     this.#coord.pendingAgents = () =>
       this.#catalog.agents().filter((a) => a.status === "pending").map(({ id, name, color, requested_at }) => ({ id, name, color, requested_at }));
     this.#coord.onAgentDecision = (device, id, status) => {
@@ -371,6 +380,9 @@ export class Link {
       if (/^\s*(invite|role|remove|shares)\b/i.test(line)) return void this.#shareCommand(line.trim());
       const a = this.#questions[0];
       if (a && this.#catalog.agent(a.id)?.status === "pending" && /^(y(es)?|n(o)?)$/i.test(line.trim())) {
+        // Once an iPad approves, this terminal can only refuse: anything with the person's shell can type here.
+        if (/^y/i.test(line.trim()) && this.#approvers().length)
+          return void process.stdout.write(`Allow it on your iPad (${this.#approvers().map((d) => d.name).join(", ")}): this terminal can only refuse once an iPad approves. Type n to refuse.\n`);
         this.#questions.shift();
         this.#decide(a.id, /^y/i.test(line.trim()) ? "approved" : "denied", "terminal");
         return this.#ask();
@@ -523,6 +535,39 @@ export class Link {
     process.stdout.write(`\n${qr}\n${uri}\n\n${PAIR_LINE}\nPress Enter for a new code.\n`);
   }
 
+  #approvers(): PairedDevice[] {
+    return this.#catalog.devices().filter((d) => mayApprove(d, this.#id.person.id));
+  }
+
+  /**
+   * Until when a `reflex pair` code pairs an iPad that may approve, while none does: 15 minutes from the profile's
+   * creation (`reflex setup` on a new profile), or from forgetting the last approving iPad (a reinstalled iPad).
+   */
+  #windowUntil(): number {
+    const st = statSync(join(this.dir, "identity.json"));
+    const born = this.#id.created_at ?? (st.birthtimeMs || st.mtimeMs);
+    let forgot = 0;
+    try {
+      forgot = Number(JSON.parse(readFileSync(join(this.dir, "first-pair.json"), "utf8")).forgot_at) || 0;
+    } catch {}
+    return Math.max(born, forgot) + firstPairMs();
+  }
+
+  /** Whether a code from this source makes the iPad that scans it approve: only while no iPad approves. */
+  #grantsApproval(source: "terminal" | "admin"): boolean {
+    if (this.#approvers().length) return false;
+    return source === "terminal" || Date.now() < this.#windowUntil();
+  }
+
+  /** What to do so an iPad may approve, in words for the log, the iPad and `reflex pair`. */
+  #approvalHint(): string {
+    const a = this.#approvers();
+    if (a.length)
+      return `Approving is on ${a.map((d) => d.name).join(", ")}: it asks "Let … approve Agents?" when another iPad pairs. If that iPad is gone (reinstalled, lost), run \`reflex link forget ${a[0].device}\`, then \`reflex pair\` and scan the new code on this one.`;
+    if (Date.now() < this.#windowUntil()) return "Run `reflex pair` and scan its code on this iPad.";
+    return "No iPad approves Agents yet. Run `reflex link stop`, then `reflex link` in a terminal: press Enter and scan the code it shows on your iPad.";
+  }
+
   /** A new single-use pairing code, valid 10 minutes. `admin`: made by a command, not shown in this terminal (offer.ts). */
   pairingCode(source: "terminal" | "admin" = "terminal"): string {
     if (this.#ports.lan === undefined) throw new LinkError("no_lan", "Pairing an iPad needs the local network, and this Link was started with --no-lan.", "Restart it without --no-lan.");
@@ -533,14 +578,20 @@ export class Link {
     const a = this.#questions.find((q) => this.#catalog.agent(q.id)?.status === "pending");
     this.#questions = a ? this.#questions.slice(this.#questions.indexOf(a)) : [];
     clearTimeout(this.#reask);
-    if (a) process.stdout.write(`\n>>> Allow "${a.name}" (${a.id}) to use your Spaces? Type y and Enter here, or tap Allow on your iPad. [y/N]\n`);
+    if (!a) return;
+    const ipads = this.#approvers().map((d) => d.name);
+    process.stdout.write(
+      ipads.length
+        ? `\n>>> "${a.name}" (${a.id}) asks to use your Spaces. Tap Allow on your iPad (${ipads.join(", ")}). Type n and Enter here to refuse.\n`
+        : `\n>>> Allow "${a.name}" (${a.id}) to use your Spaces? Type y and Enter here, or tap Allow on your iPad. [y/N]\n`,
+    );
   }
 
   /**
    * One Link per profile, even when two start at once (`reflex mcp` and the CLI start one on demand).
    * `link.lock` holds `{pid, at}`, written whole to a temp file and linked into place, so a reader never sees it
-   * half written. A lock is stale, and taken over, unless a Link answers on the socket or the lock is under a
-   * minute old and its pid is alive (a Link still starting): a pid alone may belong to another program by now.
+   * half written. A lock is stale, and taken over (compare and swap), unless a Link answers on the socket or the lock
+   * is under a minute old and its pid is alive (a Link still starting): a pid alone may belong to another program by now.
    */
   async #lock(): Promise<void> {
     const file = join(this.dir, "link.lock");
@@ -552,10 +603,6 @@ export class Link {
       writeFileSync(tmp, body, { mode: 0o600 });
       try {
         linkSync(tmp, file);
-        // Two Links that both judged an old lock stale: the second one's removal can take the first's new lock.
-        // Whoever's lock is in place a moment later holds it.
-        await new Promise((r) => setTimeout(r, 300));
-        if (readFileSync(file, "utf8") !== body) throw busy(0);
         this.#lockBody = body;
         return;
       } catch (e) {
@@ -563,17 +610,39 @@ export class Link {
       } finally {
         rmSync(tmp, { force: true });
       }
+      let raw = "";
+      try {
+        raw = readFileSync(file, "utf8");
+      } catch {
+        continue; // gone already: try again
+      }
       let held = { pid: 0, at: 0 };
       try {
-        held = { ...held, ...JSON.parse(readFileSync(file, "utf8")) };
-      } catch {} // gone already, or an older Link's bare pid
+        held = { ...held, ...JSON.parse(raw) };
+      } catch {} // an older Link's bare pid
       let alive = false;
       try {
         if (held.pid && held.pid !== process.pid) process.kill(held.pid, 0);
         alive = Boolean(held.pid) && held.pid !== process.pid;
       } catch {}
       if ((await answering(this.home.socket)) || (alive && Date.now() - held.at < 60_000)) throw busy(held.pid);
-      rmSync(file, { force: true });
+      // Compare and swap: move the lock aside (atomic) and take it over only if it is the one judged stale. Another
+      // Link that took it over meanwhile gets its lock back, and this one stops.
+      const aside = `${file}.${process.pid}.stale`;
+      try {
+        renameSync(file, aside);
+      } catch {
+        continue;
+      }
+      const moved = readFileSync(aside, "utf8");
+      if (moved !== raw) {
+        try {
+          linkSync(aside, file);
+        } catch {}
+        rmSync(aside, { force: true });
+        throw busy(0);
+      }
+      rmSync(aside, { force: true });
     }
     throw busy(0);
   }
@@ -698,7 +767,7 @@ export class Link {
       a = this.#catalog.agent(a.id)!;
     }
     if (a.status === "pending")
-      throw new LinkError("approval_pending", `Waiting for the user to approve ${a.name} (${a.id}).`, "Ask the person to tap Allow on their iPad, or answer y in the terminal running `reflex link`, then connect again.");
+      throw new LinkError("approval_pending", `Waiting for the user to approve ${a.name} (${a.id}).`, "Ask the person to tap Allow on their iPad, then connect again.");
     if (a.status !== "approved") throw new LinkError("agent_denied", `The user ${a.status} ${a.name} (${a.id}).`);
     c.agent = a;
     return { agent: a.id, name: a.name, color: a.color };
@@ -798,7 +867,7 @@ export class Link {
           throw new LinkError(
             "needs_person",
             "Approving an Agent needs you, not a command: anything with your shell could run one.",
-            "Tap Allow on your iPad, or answer y in the Link's terminal.",
+            "Tap Allow on your iPad.",
           );
         if (status !== "denied" && status !== "revoked") throw new LinkError("bad_status", `'${status}' is not denied or revoked.`);
         return this.#decide(String(p.id), status, "command");
@@ -809,15 +878,39 @@ export class Link {
         // here, and the person's iPads hear of each new device, so a code nobody asked for shows.
         const uri = this.pairingCode("admin");
         const offer = new URL(uri).searchParams.get("o")!;
-        const first = !this.#catalog.devices().some((d) => mayApprove(d, this.#id.person.id));
-        this.#log(`made a pairing code for \`reflex pair\` (single use, 10 minutes)${first ? "" : "; an iPad paired with it syncs but can't approve Agents"}`);
-        return { uri, offer, expires: Date.now() + 10 * 60_000, line: first ? PAIR_LINE : PAIR_LINE_MORE };
+        const grants = this.#grantsApproval("admin");
+        const more = this.#approvers().length > 0;
+        this.#log(`made a pairing code for \`reflex pair\` (single use, 10 minutes)${grants ? "" : "; an iPad paired with it syncs, and approves only if your iPad lets it"}`);
+        const line = grants ? PAIR_LINE : more ? PAIR_LINE_MORE : `${PAIR_LINE_MORE.replace(/ To let it.*$/, "")} ${this.#approvalHint()}`;
+        return { uri, offer, expires: Date.now() + 10 * 60_000, line };
       }
       case "pair.check": {
         // Whether a code from pair.offer was used, and by which device (it may have been paired already).
         const device = this.#offers.usedBy(String(p.offer ?? ""));
         const d = device ? this.#catalog.device(device) : undefined;
-        return { used: Boolean(device), ...(d ? { device: d.device, name: d.name, approves: mayApprove(d, this.#id.person.id) } : {}) };
+        return {
+          used: Boolean(device),
+          ...(d ? { device: d.device, name: d.name, approves: mayApprove(d, this.#id.person.id), asked: Boolean(d.approver_asked) } : {}),
+          ...(d && !mayApprove(d, this.#id.person.id) ? { hint: this.#approvalHint() } : {}),
+        };
+      }
+      case "forget": {
+        // `reflex link forget <device>`: a device that is gone (a reinstalled or lost iPad). It can't connect or approve
+        // until it pairs again. Forgetting the last approving iPad opens the first-pairing window again, so the
+        // reinstalled one can become the approver with a `reflex pair` code; that is logged.
+        const who = String(p.device ?? "").trim();
+        const hits = this.#catalog.devices().filter((d) => d.device === who || d.name.toLowerCase() === who.toLowerCase());
+        if (!hits.length) throw new LinkError("unknown_device", `No paired device '${who}'.`, "Run `reflex link status` to see them.");
+        if (hits.length > 1) throw new LinkError("ambiguous", `${hits.length} paired devices are called '${who}'.`, "Name it by its ID (dev-…), from `reflex link status`.");
+        const was = mayApprove(hits[0], this.#id.person.id);
+        const d = this.#coord.forgetDevice(hits[0].device)!;
+        let opens: number | undefined;
+        if (was && !this.#approvers().length) {
+          writeFileSync(join(this.dir, "first-pair.json"), JSON.stringify({ forgot_at: Date.now() }) + "\n", { mode: 0o600 });
+          opens = this.#windowUntil();
+          this.#log(`forgot the last iPad that approves Agents: for ${firstPairMs() / 60_000} minutes, \`reflex pair\` pairs one that approves`);
+        }
+        return { device: d.device, name: d.name, ...(opens ? { window_until: opens } : {}) };
       }
       case "shutdown": {
         // `reflex link stop`: the Link that answers on this profile's socket stops, never a process found by pid.

@@ -10,12 +10,17 @@
 //   asset         { hash, off, size } + bytes   one part of at most 1 MiB, in order; the whole
 //                                               asset is checked against the hash before it is kept
 //   ping / pong   { n, at }                     RTT
-//   agent_request { id, name, color, requested_at }   an Agent is waiting for the person's approval (to iPads)
+//   agent_request { id, name, color, requested_at }   an Agent is waiting for the person's approval (to approving iPads)
 //   agent_decision { id, status, requested_at } the person's answer, from an iPad that may approve
 //                                               (catalog.ts mayApprove); an answer to an older request is ignored
+//   agent_decision_refused { id, reason }       that iPad's answers don't count, and why
 //   agents        { agents: [{ id, name, color, status, requested_at }], approver }   every known Agent (to iPads),
 //                                               for chips and history; `approver`: whether that iPad's answers count
-//   device_paired { device, name, approves }    a new device of this person's paired (to its iPads)
+//   device_paired { device, name, approves }    a new device of this person's paired (to their iPads, each told once,
+//                                               on the next binding if it wasn't connected)
+//   approver_requests { requests: [{ device, name, asked_at }] }   iPads waiting for "Let … approve Agents?" (to
+//                                               approving iPads, on every binding and change)
+//   approver_decision { device, allow }         the answer, from an approving iPad
 //   refused       { space, reason }             the changes it sent to that Space were refused
 //
 // Changes a peer sends are taken only if they were its to make: an iPad
@@ -152,6 +157,10 @@ export class Coordinator {
   onBound: (p: Peer) => void = () => {};
   /** Called when a bound peer's session ends. */
   onUnbound: (p: Peer) => void = () => {};
+  /** Whether a code from this source makes the iPad that scans it approve now (link.ts): only while none does. */
+  grantsApproval: (source: "terminal" | "admin") => boolean = () => false;
+  /** What to do so an iPad may approve, for logs and for the iPad (link.ts). */
+  approvalHint: () => string = () => "";
   /** Messages the coordinator itself doesn't handle (the Relay's `relay_keys`, link/relay/sync.ts). */
   onMessage: (p: Peer, h: Record<string, unknown>, body: Uint8Array) => void = () => {};
   /** The secret of a live invite to a shared Space (link/sharing.ts). */
@@ -257,18 +266,11 @@ export class Coordinator {
         // A code is single-use, even when the device that used it was already paired.
         const source = this.#offers.source(r.offer) ?? "terminal";
         this.#offers.consume(r.offer, r.peer.device);
-        if (r.paired) {
-          // A code from `reflex pair` can be made by anything with the person's shell, an Agent too: the iPad that
-          // pairs with it may approve only if none can yet (first-time setup).
-          const first = !this.#catalog.devices().some((d) => mayApprove(d, this.#me.person.id));
-          this.#remember(r.peer, null, source === "terminal" ? "offer" : "admin-offer", source === "admin" && first);
-        } else {
+        if (r.paired) this.#remember(r.peer, null, source === "terminal" ? "offer" : "admin-offer", source);
+        else {
+          // A paired iPad that can't approve scanned a code again: it may approve if the code grants it now, or it asks.
           const known = this.#catalog.device(r.peer.device)!;
-          // A paired iPad that scans a code shown in the Link's own terminal: the person is there, so from now on it may approve.
-          if (source === "terminal" && known.kind === "ipad" && !mayApprove(known, this.#me.person.id) && known.person.id === this.#me.person.id) {
-            this.#catalog.pairDevice({ ...known, via: "offer" });
-            this.#log(`${known.name} (${known.device}) scanned this terminal's code: it may approve Agents now`);
-          }
+          if (known.kind === "ipad" && known.person.id === this.#me.person.id && !mayApprove(known, this.#me.person.id)) this.#letApprove(known, source);
           for (const f of this.#onPaired) f(this.#catalog.device(r.peer.device)!);
         }
       }
@@ -291,24 +293,78 @@ export class Coordinator {
     peer: { device: string; key: string; person: PairedDevice["person"]; name: string; kind: "ipad" | "link" },
     at: Candidate | null,
     via: NonNullable<PairedDevice["via"]>,
-    approves = false,
+    source?: "terminal" | "admin",
   ): void {
-    const d: PairedDevice = { device: peer.device, key: peer.key, name: peer.name, person: peer.person, kind: peer.kind, via, ...(via === "admin-offer" ? { approves } : {}), paired_at: Date.now() };
+    const own = peer.person.id === this.#me.person.id;
+    const d: PairedDevice = { device: peer.device, key: peer.key, name: peer.name, person: peer.person, kind: peer.kind, via, paired_at: Date.now() };
+    // An iPad approves only as #letApprove decides: a code alone, from a terminal or a command, isn't enough once one does.
+    if (peer.kind === "ipad" && source) d.approves = false;
     this.#catalog.pairDevice(d);
     if (at) this.#catalog.seen(d.device, at.host, at.port);
-    const may = mayApprove(d, this.#me.person.id);
-    this.#log(
-      `paired with ${peer.name} (${peer.device}, person ${peer.person.name})` +
-        (via === "admin-offer" && !may
-          ? `. It syncs, but can't approve Agents: it paired with a code from \`reflex pair\`, which anything with your shell can make. To let it, press Enter in a terminal running \`reflex link\` and scan that code on it.`
-          : ""),
-    );
+    this.#log(`paired with ${peer.name} (${peer.device}, person ${peer.person.name})`);
+    if (peer.kind === "ipad" && own && source) this.#letApprove(d, source);
     if (via === "invite") return;
     // The person's iPads hear of every new device of theirs, so one nobody meant to pair shows.
-    for (const p of this.#peers.values())
-      if (p.device !== d.device && this.#catalog.device(p.device)?.kind === "ipad" && this.#own(p))
-        this.#send(p, { t: "device_paired", device: d.device, name: d.name, approves: may });
-    for (const f of this.#onPaired) f(d);
+    for (const p of this.#peers.values()) this.#news(p);
+    for (const f of this.#onPaired) f(this.#catalog.device(d.device) ?? d);
+  }
+
+  /** iPads of this person's whose Allow counts. */
+  #approvers(): PairedDevice[] {
+    return this.#catalog.devices().filter((d) => mayApprove(d, this.#me.person.id));
+  }
+
+  /**
+   * An iPad of the person's that can't approve, after it scanned a code: it may approve now if the code grants it (no iPad
+   * approves yet), or an approving iPad is asked "Let it approve Agents?". The person's iPad is the boundary: nothing
+   * with only the person's shell (a terminal, a command) makes another approver once one exists.
+   */
+  #letApprove(d: PairedDevice, source: "terminal" | "admin"): void {
+    if (this.grantsApproval(source)) {
+      const { approver_asked: _, ...rest } = d;
+      this.#catalog.pairDevice({ ...rest, approves: true });
+      this.#log(`${d.name} (${d.device}) may approve Agents`);
+      return;
+    }
+    const approvers = this.#approvers();
+    if (!approvers.length) return this.#log(`${d.name} (${d.device}) syncs, but can't approve Agents yet. ${this.approvalHint()}`);
+    if (!d.approver_asked) this.#catalog.pairDevice({ ...d, approves: false, approver_asked: Date.now() });
+    this.#log(`${d.name} (${d.device}) syncs; asked ${approvers.map((a) => a.name).join(", ")} "Let ${d.name} approve Agents?"`);
+    this.#sendApproverRequests();
+  }
+
+  /** Approving iPads: who waits for "Let … approve Agents?". */
+  #sendApproverRequests(only?: Peer): void {
+    const requests = this.#catalog
+      .devices()
+      .filter((d) => d.approver_asked && !mayApprove(d, this.#me.person.id))
+      .map((d) => ({ device: d.device, name: d.name, asked_at: d.approver_asked! }));
+    for (const p of only ? [only] : this.#peers.values())
+      if (mayApprove(this.#catalog.device(p.device), this.#me.person.id)) this.#send(p, { t: "approver_requests", requests });
+  }
+
+  /** What an iPad of the person's hasn't heard yet: devices paired after it (each once), and who waits to approve. */
+  #news(p: Peer): void {
+    const me = this.#catalog.device(p.device);
+    if (me?.kind !== "ipad" || me.person.id !== this.#me.person.id) return;
+    for (const d of this.#catalog.devices()) {
+      if (d.device === p.device || d.via === "invite" || d.paired_at < me.paired_at || (d.announced ?? []).includes(p.device)) continue;
+      this.#send(p, { t: "device_paired", device: d.device, name: d.name, approves: mayApprove(d, this.#me.person.id) });
+      this.#catalog.pairDevice({ ...d, announced: [...(d.announced ?? []), p.device] });
+    }
+    this.#sendApproverRequests(p);
+  }
+
+  /** Forgets one of this person's devices (`reflex link forget`): it can't connect or approve until it pairs again. */
+  forgetDevice(device: string): PairedDevice | undefined {
+    const d = this.#catalog.device(device);
+    if (!d) return undefined;
+    this.#catalog.forget("device", device);
+    this.#candidates.delete(device);
+    for (const e of this.#peers.get(device)?.paths.all() ?? []) e.session.close("forgotten by the person");
+    this.#log(`forgot ${d.name} (${device})`);
+    this.#sendApproverRequests();
+    return d;
   }
 
   /** Records another person's Link met through an invite: it syncs only the Spaces it shares with this one. */
@@ -542,6 +598,7 @@ export class Coordinator {
     if (mayApprove(this.#catalog.device(peer.device), this.#me.person.id))
       for (const a of this.pendingAgents()) this.#send(peer, { t: "agent_request", ...a });
     this.#sendAgents(peer);
+    this.#news(peer);
   }
 
   /** Whether a peer is one of this person's own devices. */
@@ -762,17 +819,33 @@ export class Coordinator {
         // Only an iPad that paired as the person may approve (catalog.ts mayApprove): an Agent with the person's
         // shell can pair a device of its own, but not one that scanned the code in the Link's terminal, nor the first.
         if (!mayApprove(d, this.#me.person.id)) {
-          this.#quiet.say(
-            `decision:${p.device}`,
-            `ignored an Agent decision from ${p.name}: it paired with a code from \`reflex pair\` after another iPad, so it can't approve. Fix: approve on that iPad, or press Enter in a terminal running \`reflex link\` and scan that code on ${p.name}.`,
-          );
-          this.#send(p, { t: "agent_decision_refused", id, reason: "This iPad can't approve Agents: it paired with a code from `reflex pair`. Approve on your other iPad, or scan a code shown in the terminal running `reflex link`." });
+          const hint = this.approvalHint();
+          this.#quiet.say(`decision:${p.device}`, `ignored an Agent decision from ${p.name}: it can't approve Agents. ${hint}`);
+          this.#send(p, { t: "agent_decision_refused", id, reason: `This iPad can't approve Agents. ${hint}` });
         } else if (h.requested_at !== undefined && asked !== undefined && Number(h.requested_at) !== asked)
           // Tapped for an earlier request (say, while offline) that was answered since and asked again: not this one.
           this.#quiet.say(`stale:${p.device}|${id}`, `ignored an earlier answer about Agent ${id} from ${p.name}: it was asked again since; the iPad asks anew`);
         else this.onAgentDecision(p.device, id, status);
         // Always answered with the Agents as they now stand, so the iPad knows its decision landed (or didn't) and stops sending it.
         this.#sendAgents(p);
+        return;
+      }
+      case "approver_decision": {
+        // An approving iPad answers "Let … approve Agents?" for another iPad of the person's.
+        const d = this.#catalog.device(String(h.device ?? ""));
+        if (!mayApprove(this.#catalog.device(p.device), this.#me.person.id))
+          return this.#quiet.say(`approver:${p.device}`, `ignored "Let … approve Agents?" from ${p.name}: it can't approve Agents itself`);
+        if (!d || !d.approver_asked || mayApprove(d, this.#me.person.id)) return this.#sendApproverRequests(p);
+        const allow = h.allow === true;
+        const { approver_asked: _, ...rest } = d;
+        this.#catalog.pairDevice({ ...rest, approves: allow });
+        this.#log(`${p.name} ${allow ? "let" : "did not let"} ${d.name} (${d.device}) approve Agents`);
+        this.#sendApproverRequests();
+        const q = this.#peers.get(d.device);
+        if (q) {
+          this.#sendAgents(q);
+          if (allow) for (const a of this.pendingAgents()) this.#send(q, { t: "agent_request", ...a });
+        }
         return;
       }
       case "refused": {

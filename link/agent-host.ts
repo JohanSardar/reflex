@@ -307,7 +307,7 @@ export async function startAgentHost(o: AgentHostOptions) {
           {
             code: "not_approved",
             msg: `Still waiting for the person to tap Allow for ${a.name} on their iPad (asked ${asked} min ago). Nothing is wrong; the question stays up until they answer.`,
-            fix: `Tell the person: "Tap Allow in Reflex on your iPad (or type y in the Link's terminal)." Then call this tool again. Don't give up or switch tools: you are let in as soon as they tap.`,
+            fix: `Tell the person: "Tap Allow in Reflex on your iPad." Then call this tool again. Don't give up or switch tools: you are let in as soon as they tap.`,
           },
         ],
         ["Call the same tool again: it waits for the person's answer."],

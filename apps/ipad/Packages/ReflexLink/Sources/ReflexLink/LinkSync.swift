@@ -17,6 +17,13 @@ public struct AgentRequest: Identifiable, Sendable, Equatable {
     public var requestedAt: Int64?
 }
 
+/// Another iPad of the person's waiting for "Let … approve Agents?" (asked of approving iPads only).
+public struct ApproverRequest: Identifiable, Sendable, Equatable {
+    public var device: String
+    public var name: String
+    public var id: String { device }
+}
+
 /// The person's answer to one request, kept until the Link confirms it.
 public struct AgentDecision: Codable, Sendable, Equatable {
     public var status: String
@@ -114,6 +121,8 @@ public final class LinkSync {
     public private(set) var canApprove = true
     /// Why this iPad isn't asked about Agents, when it isn't (`canApprove` is false and one is waiting).
     public private(set) var approvalElsewhere: String?
+    /// iPads of the person's waiting for this one to answer "Let … approve Agents?" (it approves).
+    public private(set) var approverRequests: [ApproverRequest] = []
     /// A new device of this person's paired with the Link: said once, so a device nobody meant to pair shows.
     public var newDevice: (name: String, approves: Bool)?
     /// Spaces made under another person (an earlier pairing): kept on this iPad only, in their own folder and
@@ -590,6 +599,12 @@ public final class LinkSync {
         if paths.isEmpty { linkLog.info("Kept the answer for \(agent, privacy: .public); it goes out when the Link is back") }
     }
 
+    /// The person's answer to "Let <device> approve Agents?", on this approving iPad.
+    public func decideApprover(_ device: String, allow: Bool) {
+        approverRequests.removeAll { $0.device == device }
+        session?.send(["t": "approver_decision", "device": device, "allow": allow])
+    }
+
     private func sendDecisions(_ s: Session, only: String? = nil) {
         for (id, d) in decisions where only == nil || only == id {
             var m: [String: Any] = ["t": "agent_decision", "id": id, "status": d.status]
@@ -613,7 +628,7 @@ public final class LinkSync {
         }
         if next != agentRequests { agentRequests = next }
         let elsewhere = !canApprove && !pending.isEmpty
-            ? "\(pending.first!.name) wants to use your Spaces. Allow it on the iPad you paired first, or type y in the terminal running `reflex link`."
+            ? "\(pending.first!.name) wants to use your Spaces. Allow it on your iPad that approves Agents: this one can't yet."
             : nil
         if elsewhere != approvalElsewhere { approvalElsewhere = elsewhere }
     }
@@ -1046,6 +1061,12 @@ public final class LinkSync {
             canApprove = false
             refreshRequests()
             if approvalElsewhere == nil { approvalElsewhere = h["reason"] as? String }
+        case "approver_requests":
+            let list = (h["requests"] as? [[String: Any]] ?? []).compactMap { r -> ApproverRequest? in
+                guard let d = r["device"] as? String else { return nil }
+                return ApproverRequest(device: d, name: r["name"] as? String ?? d)
+            }
+            if list != approverRequests { approverRequests = list }
         case "device_paired":
             guard let name = h["name"] as? String else { return }
             newDevice = (name, h["approves"] as? Bool ?? false)

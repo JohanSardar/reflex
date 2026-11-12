@@ -23,6 +23,7 @@ struct CanvasScreen: View {
     /// The Agent question on screen: the first one the Link lists as waiting. Kept in view state so the alert
     /// is shown again for each new question, also while a Space is open.
     @State private var asking: AgentRequest?
+    @State private var askingApprover: ApproverRequest?
     @Environment(\.scenePhase) private var scenePhase
     @Binding var incomingCode: String?
 
@@ -168,6 +169,22 @@ struct CanvasScreen: View {
                 Text(link.newDevice?.approves == true
                     ? "It was paired with a code shown in the Link's terminal: it can sync your Spaces and approve Agents."
                     : "It can sync your Spaces, but approving Agents stays with this iPad. If you didn't pair it, run `reflex link status` on your computer to see it.")
+            }
+        }
+        // Another iPad of the person's wants to approve Agents: only an approving iPad can let it.
+        .onChange(of: link.approverRequests, initial: true) { _, list in
+            if askingApprover.map({ a in !list.contains { $0.id == a.id } }) ?? true { askingApprover = list.first }
+        }
+        .background {
+            Color.clear.alert(
+                "Let \(askingApprover?.name ?? "this iPad") approve Agents?",
+                isPresented: Binding(get: { askingApprover != nil && asking == nil && link.newDevice == nil }, set: { if !$0 { askingApprover = nil } }),
+                presenting: askingApprover
+            ) { r in
+                Button("Don't Allow", role: .cancel) { link.decideApprover(r.device, allow: false) }
+                Button("Allow") { link.decideApprover(r.device, allow: true) }
+            } message: { _ in
+                Text("It paired with your Link. If you allow it, its Allow lets Agents use your Spaces, like this iPad's. Only allow an iPad you paired yourself.")
             }
         }
         .onChange(of: link.agentRequests, initial: true) { _, list in
