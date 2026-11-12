@@ -9,12 +9,13 @@
 // An Agent then says who it is with a credential it made itself; the first
 // time, the person is asked to approve it, and until they do it sees nothing.
 //
-// Anything that grants access needs the person, not a credential file: new
-// pairing codes are shown only on the Link's own terminal, and an Agent is
-// approved only there or on an iPad that paired by scanning such a code.
-// `admin.key` can still deny and revoke, and read status. Acting as the
-// person (`dev` commands) needs a Link started with --dev.
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// Approving an Agent needs the person, not a credential file: only a `y` in
+// the Link's own terminal or Allow on an iPad that paired by scanning one of
+// this Link's codes approves. `admin.key` can make a pairing code
+// (`reflex pair`), deny and revoke, and read status; it can't approve. Acting
+// as the person (`dev` commands) needs a Link started with --dev.
+import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createServer, type Server, type Socket } from "node:net";
 import { createInterface } from "node:readline";
@@ -83,6 +84,8 @@ export interface LinkOptions {
 }
 
 const APPROVAL_WAIT_S = 300;
+/** The one line under a pairing code: what to do on the iPad. */
+export const PAIR_LINE = "On your iPad: open Reflex Canvas, tap Connect, then Scan the QR code (single use, 10 minutes). Then tap Allow when your Agent asks.";
 type Decision = "approved" | "denied" | "revoked";
 
 export class Link {
@@ -116,12 +119,23 @@ export class Link {
   #shares!: Shares;
   #shared!: SharedSpaces;
   #here!: Here;
+  #reask: NodeJS.Timeout | undefined;
+  #locked = false;
 
   constructor(opts: LinkOptions) {
     this.#opts = opts;
     this.dir = opts.dir;
     this.home = home(opts.dir);
-    this.#log = opts.log ?? ((m) => console.log(`link: ${m}`));
+    const log = opts.log ?? ((m) => console.log(`link: ${m}`));
+    // A question waiting in this terminal is shown again once the logs go quiet, so it is never buried.
+    this.#log = (m) => {
+      log(m);
+      if (this.#rl && this.#questions.length) {
+        clearTimeout(this.#reask);
+        this.#reask = setTimeout(() => this.#ask(), 1500);
+        this.#reask.unref();
+      }
+    };
   }
 
   async start(): Promise<void> {
@@ -129,6 +143,7 @@ export class Link {
     this.#me = { key: this.#id.key, person: this.#id.person, name: this.#id.name, kind: "link" };
     this.#keys = { rpc: localKey(this.dir, "rpc.key"), admin: localKey(this.dir, "admin.key") };
     this.#refuseSecondLink();
+    this.#lock();
 
     const db = openDb(this.home.db);
     this.#db = db;
@@ -275,6 +290,7 @@ export class Link {
       writing: (space) => presence.writing(space),
       deviceHints: (space, region) => presence.hints(space, region),
       announce: (a) => this.#announce(a),
+      remind: (a) => this.#coord.askAboutAgent({ id: a.id, name: a.name, color: a.color }),
       decision: (id, ms, signal) => this.#waitDecision(id, ms, signal),
       log: (event, data = {}) => this.#log(`agent layer: ${event} ${JSON.stringify(data)}`),
     });
@@ -477,18 +493,48 @@ export class Link {
   async showPairingCode(): Promise<void> {
     const uri = this.pairingCode();
     const qr = await qrText(uri);
-    process.stdout.write(`\nPair an iPad: open Reflex, tap Connect, and scan this code or type it (single use, 10 minutes).\n\n${qr}\n${uri}\n\nPress Enter for a new code.\n`);
+    process.stdout.write(`\n${qr}\n${uri}\n\n${PAIR_LINE}\nPress Enter for a new code.\n`);
   }
 
-  /** A new single-use pairing code. Only the process running the Link can make one; the RPC can't. */
+  /** A new single-use pairing code, valid 10 minutes. */
   pairingCode(): string {
+    if (this.#ports.lan === undefined) throw new LinkError("no_lan", "Pairing an iPad needs the local network, and this Link was started with --no-lan.", "Restart it without --no-lan.");
     return this.#offers.create({ device: this.#id.key.device, key: b64(this.#id.key.publicRaw), name: this.#id.name, person: this.#id.person }, this.#ports.lan).uri;
   }
 
   #ask(): void {
     const a = this.#questions.find((q) => this.#catalog.agent(q.id)?.status === "pending");
     this.#questions = a ? this.#questions.slice(this.#questions.indexOf(a)) : [];
-    if (a) process.stdout.write(`\nAllow "${a.name}" (${a.id}) to use your Spaces? Answer here [y/N], or on your iPad.\n`);
+    clearTimeout(this.#reask);
+    if (a) process.stdout.write(`\n>>> Allow "${a.name}" (${a.id}) to use your Spaces? Type y and Enter here, or tap Allow on your iPad. [y/N]\n`);
+  }
+
+  /**
+   * One Link per profile, even when two start at once (`reflex mcp` and the CLI start one on demand):
+   * `link.lock` is created exclusively and holds the pid; a lock whose process is gone is taken over.
+   */
+  #lock(): void {
+    const file = join(this.dir, "link.lock");
+    for (let tries = 0; tries < 2; tries++) {
+      try {
+        const fd = openSync(file, "wx", 0o600);
+        writeSync(fd, String(process.pid));
+        closeSync(fd);
+        this.#locked = true;
+        return;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+        const pid = Number(readFileSync(file, "utf8").trim());
+        let alive = false;
+        try {
+          if (pid) process.kill(pid, 0);
+          alive = Boolean(pid) && pid !== process.pid;
+        } catch {}
+        if (alive) throw new LinkError("already_running", `A Link is already running from ${this.dir} (pid ${pid}).`, "Use that one, or pass --home for a second profile.");
+        rmSync(file, { force: true });
+      }
+    }
+    throw new LinkError("already_running", `Another Link is starting from ${this.dir}.`, "Use that one, or pass --home for a second profile.");
   }
 
   #refuseSecondLink(): void {
@@ -514,6 +560,7 @@ export class Link {
     await new Promise<void>((r) => (this.#server ? this.#server.close(() => r()) : r()));
     rmSync(this.home.runtime, { force: true });
     rmSync(this.home.socket, { force: true });
+    if (this.#locked) rmSync(join(this.dir, "link.lock"), { force: true });
   }
 
   // Local RPC
@@ -711,9 +758,16 @@ export class Link {
         if (status !== "denied" && status !== "revoked") throw new LinkError("bad_status", `'${status}' is not denied or revoked.`);
         return this.#decide(String(p.id), status, "command");
       }
-      case "pair.offer":
+      case "pair.offer": {
+        // `reflex pair` and `reflex setup`, from any terminal. An iPad that pairs with it can approve Agents,
+        // like one that scanned the code in this terminal; see link/README.md "Not here yet" for what that means
+        // for a process with your shell. Each code is logged here, so a code nobody asked for shows.
+        const uri = this.pairingCode();
+        this.#log(`made a pairing code for \`reflex pair\` (single use, 10 minutes)`);
+        return { uri, expires: Date.now() + 10 * 60_000, line: PAIR_LINE };
+      }
       case "pair.wait":
-        throw new LinkError("needs_person", "Pairing codes are shown only on the Link's own terminal.", "Press Enter in the terminal running `reflex link` for a new code.");
+        throw new LinkError("unknown_method", "No method 'pair.wait'.");
       case "pair.join":
         return this.#join(String(p.uri));
       case "dev.intent":

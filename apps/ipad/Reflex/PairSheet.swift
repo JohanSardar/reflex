@@ -22,8 +22,10 @@ struct PairSheet: View {
                         Label("Connected to \(name)", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                     } else if case .offline(let why) = link.state {
                         Label(why, systemImage: "wifi.exclamationmark").foregroundStyle(.secondary)
+                    } else if case .linkChanged = link.state {
+                        Label("This Mac's Link changed. Scan its code again.", systemImage: "arrow.triangle.2.circlepath").foregroundStyle(.orange)
                     }
-                    Text("Run `reflex link` on your computer. It shows a QR code and the same code as text.")
+                    Text("Run `reflex setup` on your computer (or `reflex pair` for a new code). It shows a QR code and the same code as text.")
                         .foregroundStyle(.secondary)
                 }
                 if canScan {

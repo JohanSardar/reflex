@@ -194,13 +194,18 @@ export interface AgentHostOptions {
   deviceHints?: (space: string, region: string) => { strokes: string[]; text: string; confidence: number }[];
   /** Asks the person to approve a new Agent (on the Link's terminal and on paired iPads). */
   announce: (a: AgentRecord) => void;
+  /** Asks connected iPads again about an Agent still waiting (one may have missed the question). */
+  remind?: (a: AgentRecord) => void;
   /** Resolves once the person decides about this Agent, or after `ms`. */
   decision: (id: string, ms: number, signal: AbortSignal) => Promise<void>;
   log: (event: string, data?: Record<string, unknown>) => void;
 }
 
-/** How long a first call waits for the person to approve the Agent before it returns `not_approved`. */
-const APPROVAL_WAIT_MS = 120_000;
+/**
+ * How long a call waits for the person to approve the Agent before it answers "still waiting, call again".
+ * Under a minute, so it ends well inside every harness's tool timeout (Claude Code's Bash tool stops at 2 min).
+ */
+const approvalWaitMs = () => Number(process.env.REFLEX_APPROVAL_WAIT_S ?? 50) * 1000;
 /** After the person turns an Agent away, how long before it may ask them again. */
 const reaskMs = () => Number(process.env.REFLEX_REASK_S ?? 600) * 1000;
 
@@ -253,7 +258,7 @@ export async function startAgentHost(o: AgentHostOptions) {
   const notApproved = (a: AgentRecord, msg: string, fix: string) =>
     new ReflexError("not_approved", [{ code: "not_approved", msg, fix }]);
 
-  async function authorize(who: Who, signal: AbortSignal): Promise<Identity> {
+  async function authorize(who: Who, signal: AbortSignal, progress?: (p: { elapsed_s: number; timeout_s: number; message: string }) => void): Promise<Identity> {
     const name = String(who?.name ?? "").trim().slice(0, 80);
     const credential = String(who?.credential ?? "");
     if (!name || credential.length < 32) throw new ReflexError("invalid_input", [{ code: "invalid_input", msg: "An Agent must say its name and present its credential.", fix: "Connect through `reflex mcp` or the reflex CLI." }]);
@@ -282,11 +287,32 @@ export async function startAgentHost(o: AgentHostOptions) {
       o.announce(a);
     }
     if (a.status === "pending") {
-      await o.decision(a.id, APPROVAL_WAIT_MS, signal);
+      o.remind?.(a);
+      const ms = approvalWaitMs();
+      const started = Date.now();
+      const message = `Waiting for you to tap Allow on your iPad for ${a.name}`;
+      const tick = setInterval(() => progress?.({ elapsed_s: Math.round((Date.now() - started) / 1000), timeout_s: ms / 1000, message }), 10_000);
+      try {
+        await o.decision(a.id, ms, signal);
+      } finally {
+        clearInterval(tick);
+      }
       a = o.catalog.agent(a.id)!;
     }
-    if (a.status === "pending")
-      throw notApproved(a, `The person has not approved ${a.name} yet.`, "Ask them to tap Allow on their iPad, or answer y in the Link's terminal, then call again.");
+    if (a.status === "pending") {
+      const asked = Math.max(1, Math.round((Date.now() - a.requested_at) / 60_000));
+      throw new ReflexError(
+        "not_approved",
+        [
+          {
+            code: "not_approved",
+            msg: `Still waiting for the person to tap Allow for ${a.name} on their iPad (asked ${asked} min ago). Nothing is wrong; the question stays up until they answer.`,
+            fix: `Tell the person: "Tap Allow in Reflex on your iPad (or type y in the Link's terminal)." Then call this tool again. Don't give up or switch tools: you are let in as soon as they tap.`,
+          },
+        ],
+        ["Call the same tool again: it waits for the person's answer."],
+      );
+    }
     if (a.status !== "approved") throw notApproved(a, `The person ${a.status} ${a.name}.`, "Call again to ask the person once more, and tell them to expect the question on their iPad or in the Link's terminal.");
     return { agent: a.id, name: a.name, color: a.color };
   }

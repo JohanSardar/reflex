@@ -11,11 +11,15 @@ import { LinkClient, RpcError } from "../rpc/client.ts";
 
 const HELP = `Reflex Link keeps every Space durable on this computer, in sync with your iPad, and open to your Agents.
 
+First time? Run \`reflex setup\`: it starts the Link in the background and shows the code to scan.
+
 Usage
   reflex link                         Start the Link in this terminal and show a pairing code
                                       (Enter shows a new code; y/n answers an Agent asking to connect)
   reflex link status                  Show Spaces, peers, Agents and the Inbox
+  reflex link stop                    Stop the Link running from this profile (in the background or a terminal)
   reflex link pair <code>             Pair with another Link showing <code> (reflex://pair?...)
+                                      (to pair an iPad: reflex pair)
   reflex link agents                  List Agents and their approval
   reflex link deny <agent>            Deny an Agent waiting to connect
   reflex link revoke <agent>          Take an approved Agent's access away
@@ -268,9 +272,23 @@ async function main(): Promise<void> {
       return out(showStatus(s), s);
     }
     case "pair": {
-      if (!args[1]) throw new LinkError("usage", "A new pairing code is shown only in the Link's own terminal.", "Press Enter there. To pair with another Link, run: reflex link pair '<its code>'");
+      if (!args[1]) throw new LinkError("usage", "To pair an iPad, run `reflex pair`: it shows a fresh code to scan.", "To pair this Link with another Link, run: reflex link pair '<its code>'");
       const d = await admin<{ device: string; name: string }>("pair.join", { uri: args[1] });
       return out(`Paired with ${d.name} (${d.device}).`, d);
+    }
+    case "stop": {
+      // The Link running from this profile, in the background or in another terminal.
+      const file = join(dir, "link.json");
+      const pid = existsSync(file) ? Number(JSON.parse(readFileSync(file, "utf8")).pid) : 0;
+      let alive = false;
+      try {
+        if (pid) process.kill(pid, 0);
+        alive = Boolean(pid);
+      } catch {}
+      if (!alive) return out(`No Link is running from ${dir}.`, { stopped: false });
+      process.kill(pid, "SIGTERM");
+      for (let i = 0; i < 50 && existsSync(file); i++) await new Promise((r) => setTimeout(r, 100));
+      return out(`Stopped the Link (pid ${pid}). \`reflex mcp\` and the CLI start it again when they need it.`, { stopped: true, pid });
     }
     case "agents": {
       const list = await admin<{ id: string; name: string; status: string; color: string }[]>("agents.list");

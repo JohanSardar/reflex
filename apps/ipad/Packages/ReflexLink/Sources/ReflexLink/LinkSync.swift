@@ -84,6 +84,9 @@ public final class LinkSync {
         case connecting
         case connected(String)
         case offline(String)
+        /// The computer at the paired address answered with another key (its Link was reset): scan its code again.
+        /// The iPad stops dialing it until then.
+        case linkChanged(String)
     }
 
     public private(set) var state: State = .unpaired
@@ -91,7 +94,17 @@ public final class LinkSync {
     public private(set) var spaces: [String] = []
     /// Bumps each time a Space changes, from here or from the Link.
     public private(set) var revision: [String: Int] = [:]
+    /// Agents waiting for the person's answer. Kept while the Link lists them as pending, through
+    /// reconnects and relaunches (rebuilt from the saved `agents`), until the person answers.
     public private(set) var agentRequests: [AgentRequest] = []
+    /// Answers the person gave that the Link hasn't confirmed yet (its `agents` list still says pending).
+    /// Saved, and sent again on every new path until it does.
+    public private(set) var decisions: [String: String] = [:]
+    /// Spaces made under another person (an earlier pairing): kept on this iPad only, never offered to
+    /// this Link, by Space, with that person's name.
+    public private(set) var localOnly: [String: String] = [:]
+    /// Said once after pairing into a new person: how many Spaces stay on this iPad only, and whose they were.
+    public private(set) var localOnlyNotice: (count: Int, owner: String)?
     /// Every Agent the Link knows, by ID (sent by the Link, kept for offline use).
     public private(set) var agents: [String: AgentInfo] = [:]
     /// Bumps each time an asset arrives from the Link, so images waiting for it draw.
@@ -132,6 +145,9 @@ public final class LinkSync {
     /// Assets arriving in parts from the Link, by hash.
     @ObservationIgnored private var incoming: [String: (size: Int, data: Data)] = [:]
     @ObservationIgnored private var joining: CheckedContinuation<String, Error>?
+    /// The paired address answered with another key: stop dialing until the person scans again, or
+    /// Bonjour finds the paired Link itself again.
+    @ObservationIgnored private var linkChanged = false
 
     struct Paired: Codable {
         var device: String
@@ -172,6 +188,10 @@ public final class LinkSync {
         paired = (try? Data(contentsOf: Self.linkDir.appending(path: "paired.json"))).flatMap { try? JSONDecoder().decode(Paired.self, from: $0) }
         relay = (try? Data(contentsOf: Self.linkDir.appending(path: "relay.json"))).flatMap { try? JSONDecoder().decode(RelayInfo.self, from: $0) }
         agents = (try? Data(contentsOf: Self.linkDir.appending(path: "agents.json"))).flatMap { try? JSONDecoder().decode([String: AgentInfo].self, from: $0) } ?? [:]
+        decisions = (try? Data(contentsOf: Self.linkDir.appending(path: "decisions.json"))).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+        localOnly = (try? Data(contentsOf: Self.linkDir.appending(path: "local-only.json"))).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+        // A question still open when the app last ran is asked again at once, before the Link is back.
+        refreshRequests()
         loadReplicas()
         if paired != nil {
             state = .connecting
@@ -227,7 +247,7 @@ public final class LinkSync {
 
     /// The person's Library (the Space of kind `library`): its ID and revision, so a view can tell when it changed.
     public var library: (id: String, revision: Int)? {
-        guard let id = replicas.first(where: { $0.value.kind() == "library" })?.key else { return nil }
+        guard let id = replicas.first(where: { $0.value.kind() == "library" && localOnly[$0.key] == nil })?.key else { return nil }
         return (id, revision[id] ?? 0)
     }
 
@@ -504,9 +524,52 @@ public final class LinkSync {
 
     // MARK: Agent approval
 
+    /// The person's answer. It is kept until the Link's `agents` list shows it, and sent on every live
+    /// path now and on every new one, so an answer given while the connection is down or switching lands.
     public func decide(_ agent: String, allow: Bool) {
         agentRequests.removeAll { $0.id == agent }
-        session?.send(["t": "agent_decision", "id": agent, "status": allow ? "approved" : "denied"])
+        decisions[agent] = allow ? "approved" : "denied"
+        saveDecisions()
+        for s in paths.all { sendDecisions(s, only: agent) }
+        if paths.isEmpty { linkLog.info("Kept the answer for \(agent, privacy: .public); it goes out when the Link is back") }
+    }
+
+    private func sendDecisions(_ s: Session, only: String? = nil) {
+        for (id, status) in decisions where only == nil || only == id { s.send(["t": "agent_decision", "id": id, "status": status]) }
+    }
+
+    private func saveDecisions() {
+        if let data = try? JSONEncoder().encode(decisions) { try? data.write(to: Self.linkDir.appending(path: "decisions.json"), options: .atomic) }
+    }
+
+    /// Questions to show: every Agent the Link lists as pending that the person hasn't answered here yet.
+    private func refreshRequests() {
+        let pending = agents.values.filter { $0.status == "pending" && decisions[$0.id] == nil }
+        var next = agentRequests.filter { r in pending.contains { $0.id == r.id } }
+        for a in pending.sorted(by: { $0.id < $1.id }) where !next.contains(where: { $0.id == a.id }) {
+            next.append(AgentRequest(id: a.id, name: a.name, color: a.color))
+        }
+        if next != agentRequests { agentRequests = next }
+    }
+
+    // MARK: Spaces from an earlier pairing
+
+    /// Deletes the Spaces kept from an earlier pairing, from this iPad.
+    public func deleteLocalOnly() {
+        for id in localOnly.keys {
+            replicas[id] = nil
+            try? FileManager.default.removeItem(at: Self.spacesDir.appending(path: id, directoryHint: .isDirectory))
+        }
+        localOnly = [:]
+        saveLocalOnly()
+        localOnlyNotice = nil
+        publishSpaces()
+    }
+
+    public func dismissLocalOnlyNotice() { localOnlyNotice = nil }
+
+    private func saveLocalOnly() {
+        if let data = try? JSONEncoder().encode(localOnly) { try? data.write(to: Self.linkDir.appending(path: "local-only.json"), options: .atomic) }
     }
 
     // MARK: Pairing and connecting
@@ -523,12 +586,27 @@ public final class LinkSync {
             do {
                 try await conn.start()
                 let s = try await handshake(conn, me: identity, pairedKey: nil, offer: offer)
+                // Spaces made under another person (an earlier Link) aren't this person's to sync: the new Link
+                // would refuse every change in them. They stay here, offered to no Link.
+                if let old = person, old.id != offer.person.id {
+                    let mine = replicas.keys.filter { localOnly[$0] == nil }
+                    for id in mine { localOnly[id] = old.name.isEmpty ? old.id : old.name }
+                    saveLocalOnly()
+                    let shown = mine.filter { replicas[$0]?.kind() == "space" }
+                    if !shown.isEmpty { localOnlyNotice = (shown.count, old.name.isEmpty ? "an earlier pairing" : old.name) }
+                }
+                linkChanged = false
                 paired = Paired(device: s.peer.device, key: s.peer.key, name: offer.name, person: offer.person, hosts: offer.hosts, port: offer.port)
                 Self.writeSecret(paired!, to: Self.linkDir.appending(path: "paired.json"))
                 person = offer.person
                 Self.writeSecret(Saved(key: B64.encode(identity.key.rawRepresentation), actor: actor, name: identity.name, person: offer.person), to: Self.linkDir.appending(path: "identity.json"))
                 linkLog.info("Paired with \(offer.name, privacy: .public) at \(host, privacy: .public)")
+                // The peer-to-peer browser looks for one Link by its device ID: a new Link needs a new one.
+                p2p?.stop()
+                p2p = nil
+                discovered = nil
                 browse()
+                for old in paths.all where old.peer.device != s.peer.device { old.close() }
                 bind(s)
                 return
             } catch {
@@ -558,6 +636,7 @@ public final class LinkSync {
                 for r in results {
                     if case .bonjour(let txt) = r.metadata, txt["dev"] == device {
                         self.discovered = r.endpoint
+                        self.linkChanged = false
                         if self.paths.on("lan") == nil { self.reconnectSoon(after: 0) }
                     }
                 }
@@ -588,11 +667,13 @@ public final class LinkSync {
 
     /// Reaches the Link over the local network (Bonjour, then the addresses in its pairing code).
     private func reconnect() async {
-        guard let paired, paths.on("lan") == nil, !dialing else { return }
+        guard let paired, paths.on("lan") == nil, !dialing, !linkChanged else { return }
         dialing = true
         defer { dialing = false }
         var endpoints: [NWEndpoint] = discovered.map { [$0] } ?? []
-        endpoints += paired.hosts.map { .hostPort(host: .init($0), port: .init(rawValue: paired.port)!) }
+        // Loopback is never the Link (an older code listed it); on the iPad it is the iPad itself.
+        endpoints += paired.hosts.filter { $0 != "127.0.0.1" || Self.simulator }.map { .hostPort(host: .init($0), port: .init(rawValue: paired.port)!) }
+        var changed = false
         for e in endpoints {
             let conn = FramedConnection(endpoint: e)
             do {
@@ -600,9 +681,21 @@ public final class LinkSync {
                 let s = try await handshake(conn, me: identity, pairedKey: paired.key, offer: nil)
                 bind(s)
                 return
+            } catch LinkError.linkChanged {
+                changed = true
+                try? await Task.sleep(for: .milliseconds(200)) // let the refusal reach the Link before closing
+                conn.close()
             } catch {
                 conn.close()
             }
+        }
+        // Another Link answers where this iPad's Link was, and its own Link answered nowhere: it was reset or
+        // reinstalled. Dialing again would only be refused every 2 s; ask the person to scan its new code.
+        if changed, paths.isEmpty {
+            linkChanged = true
+            state = .linkChanged(paired.name)
+            linkLog.error("The Link at \(paired.name, privacy: .public)'s address has a new key; waiting for the person to scan its code")
+            return
         }
         // Nothing reaches the Link: go through the Relay, if it named one. Next to a live LAN or
         // peer-to-peer path the Relay isn't needed.
@@ -624,7 +717,8 @@ public final class LinkSync {
 
     /// Reaches the Link over Apple peer-to-peer Wi-Fi, when its helper has been seen there.
     private func dialPeerToPeer() {
-        guard let paired, let found = p2p?.found, paths.on("p2p") == nil, !dialingP2P else { return }
+        // The Simulator has no peer-to-peer Wi-Fi: it would only time out, over and over.
+        guard !Self.simulator, let paired, let found = p2p?.found, paths.on("p2p") == nil, !dialingP2P, !linkChanged else { return }
         dialingP2P = true
         Task {
             defer { dialingP2P = false }
@@ -692,10 +786,12 @@ public final class LinkSync {
     private func fresh(_ s: Session) {
         incoming = [:] // parts of an asset from an earlier path never complete
         for (_, space) in replicas { space.resetSync(peer: s.peer.device) }
-        s.send(["t": "spaces", "spaces": replicas.map { ["id": $0.key, "kind": $0.value.kind()] }])
+        s.send(["t": "spaces", "spaces": replicas.filter { localOnly[$0.key] == nil }.map { ["id": $0.key, "kind": $0.value.kind()] }])
         s.send(["t": "assets_have", "hashes": assetHashes()])
         for id in replicas.keys { pump(id, s) }
         sendPresence(s)
+        // Answers the Link hasn't confirmed: every new path carries them again.
+        sendDecisions(s)
         for (space, regions) in watchHints {
             for (region, hints) in regions { s.send(["t": "hints", "space": space, "region": region, "hints": hints]) }
         }
@@ -724,7 +820,7 @@ public final class LinkSync {
     }
 
     private func pump(_ id: String, _ s: Session) {
-        guard paths.active === s, let space = replicas[id], let msg = space.syncMessage(peer: s.peer.device) else { return }
+        guard paths.active === s, localOnly[id] == nil, let space = replicas[id], let msg = space.syncMessage(peer: s.peer.device) else { return }
         s.send(["t": "sync", "space": id], msg)
     }
 
@@ -732,7 +828,8 @@ public final class LinkSync {
         switch h["t"] as? String {
         case "spaces":
             for item in h["spaces"] as? [[String: Any]] ?? [] {
-                guard let id = item["id"] as? String, let kind = item["kind"] as? String else { continue }
+                // A Space of this Link's with the name of one kept from an earlier pairing: the old one stays as it is.
+                guard let id = item["id"] as? String, let kind = item["kind"] as? String, localOnly[id] == nil else { continue }
                 if replicas[id] == nil, let space = try? Space.create(spaceId: id, kind: kind, actorHex: actor) {
                     replicas[id] = space
                     persist(id)
@@ -741,7 +838,7 @@ public final class LinkSync {
                 if let a = paths.active { pump(id, a) }
             }
         case "sync":
-            guard let id = h["space"] as? String, let space = replicas[id] else { return }
+            guard let id = h["space"] as? String, let space = replicas[id], localOnly[id] == nil else { return }
             let before = space.heads()
             do {
                 // The Link is trusted for every principal: it hosts the Agents and relays this person's other devices.
@@ -769,6 +866,13 @@ public final class LinkSync {
             }
             agents = known
             if let data = try? JSONEncoder().encode(known) { try? data.write(to: Self.linkDir.appending(path: "agents.json"), options: .atomic) }
+            // An answer is done once the Link no longer lists that Agent as pending.
+            let landed = decisions.keys.filter { known[$0]?.status != "pending" }
+            if !landed.isEmpty {
+                for id in landed { decisions[id] = nil }
+                saveDecisions()
+            }
+            refreshRequests()
         case "asset_want":
             for hash in h["hashes"] as? [String] ?? [] {
                 if let bytes = try? Data(contentsOf: Self.assetsDir.appending(path: hash)), let a = paths.active { sendAsset(hash, bytes, a) }
@@ -807,7 +911,7 @@ public final class LinkSync {
             joining?.resume(returning: h["space"] as? String ?? "")
             joining = nil
         case "refused":
-            guard let id = h["space"] as? String else { return }
+            guard let id = h["space"] as? String, localOnly[id] == nil else { return }
             startOver(id, reason: h["reason"] as? String ?? "", s)
         case "pong":
             guard let at = (h["at"] as? NSNumber)?.int64Value else { return }
@@ -818,7 +922,10 @@ public final class LinkSync {
                 publishPaths()
             }
         case "agent_request":
-            guard let id = h["id"] as? String, !agentRequests.contains(where: { $0.id == id }) else { return }
+            guard let id = h["id"] as? String else { return }
+            // Already answered here: the Link asks because the answer hasn't reached it. Send it again.
+            if decisions[id] != nil { return sendDecisions(s, only: id) }
+            guard !agentRequests.contains(where: { $0.id == id }) else { return }
             agentRequests.append(AgentRequest(id: id, name: h["name"] as? String ?? id, color: h["color"] as? String ?? "violet"))
         default:
             return // anything from a newer Link
@@ -828,6 +935,12 @@ public final class LinkSync {
     // MARK: Helpers
 
     static func now() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+
+    #if targetEnvironment(simulator)
+    static let simulator = true
+    #else
+    static let simulator = false
+    #endif
 
     static func json(_ v: Any) -> String {
         (try? JSONSerialization.data(withJSONObject: v)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"

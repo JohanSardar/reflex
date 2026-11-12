@@ -20,6 +20,9 @@ struct CanvasScreen: View {
     @State private var voice = VoiceCapture()
     /// Spaces changed since the person last looked at them (SPEC §4, Attention).
     @State private var lastSeen: [String: Int] = [:]
+    /// The Agent question on screen: the first one the Link lists as waiting. Kept in view state so the alert
+    /// is shown again for each new question, also while a Space is open.
+    @State private var asking: AgentRequest?
     @Environment(\.scenePhase) private var scenePhase
     @Binding var incomingCode: String?
 
@@ -114,18 +117,49 @@ struct CanvasScreen: View {
                     .accessibilityIdentifier("send-notice")
             }
         }
+        .overlay(alignment: .top) {
+            // The Mac's Link was reset: this iPad stopped dialing it, and says what to do.
+            if case .linkChanged = link.state {
+                HStack(spacing: 12) {
+                    Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.orange)
+                    Text("This Mac's Link changed. Scan its code again.").font(.callout)
+                    Button("Scan") { pairing = true }.buttonStyle(.glassProminent).accessibilityIdentifier("scan-again")
+                }
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .glassEffect()
+                .padding(.top, 72)
+                .accessibilityIdentifier("link-changed")
+            }
+        }
         .sheet(isPresented: $pairing) { PairSheet(link: link, code: incomingCode ?? "") }
         .sheet(isPresented: $sharing) { if let open { ShareSheet(link: link, space: open.id) } }
         .sheet(isPresented: $showHistory) { if let open { HistorySheet(session: open, link: link) } }
-        .alert(
-            "Allow \(link.agentRequests.first?.name ?? "this Agent") to use your Spaces?",
-            isPresented: Binding(get: { !link.agentRequests.isEmpty }, set: { _ in })
-        ) {
-            if let a = link.agentRequests.first {
-                Button("Don't Allow", role: .cancel) { link.decide(a.id, allow: false) }
-                Button("Allow") { link.decide(a.id, allow: true) }
+        // On its own view, so it and the Agent question never compete for one view's alert.
+        .background {
+            Color.clear.alert(
+                link.localOnlyNotice?.count == 1 ? "1 Space from \(link.localOnlyNotice?.owner ?? "an earlier pairing") stays on this iPad" : "\(link.localOnlyNotice?.count ?? 0) Spaces from \(link.localOnlyNotice?.owner ?? "an earlier pairing") stay on this iPad",
+                isPresented: Binding(get: { link.localOnlyNotice != nil && asking == nil }, set: { if !$0 { link.dismissLocalOnlyNotice() } })
+            ) {
+                Button("Keep on this iPad", role: .cancel) { link.dismissLocalOnlyNotice() }
+                Button("Delete them", role: .destructive) {
+                    if let o = open, link.localOnly[o.id] != nil { open = nil }
+                    link.deleteLocalOnly()
+                }
+            } message: {
+                Text("They were made with an earlier Link, so they aren't sent to this one. You can still open them here.")
             }
-        } message: {
+        }
+        .onChange(of: link.agentRequests, initial: true) { _, list in
+            if asking.map({ a in !list.contains { $0.id == a.id } }) ?? true { asking = list.first }
+        }
+        .alert(
+            "Allow \(asking?.name ?? "this Agent") to use your Spaces?",
+            isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } }),
+            presenting: asking
+        ) { a in
+            Button("Don't Allow", role: .cancel) { link.decide(a.id, allow: false) }
+            Button("Allow") { link.decide(a.id, allow: true) }
+        } message: { _ in
             Text("It will be able to read and draw on your Spaces, and receive what you send.")
         }
         .onChange(of: link.revision) { _, _ in
@@ -221,8 +255,12 @@ struct CanvasScreen: View {
             switch link.state {
             case .unpaired:
                 Text("Connect this iPad to your Reflex Link").font(.title3)
-                Text("Run `reflex link` on your computer, then tap Connect.").foregroundStyle(.secondary)
+                Text("Run `reflex setup` on your computer, then tap Connect and scan the code it shows.").foregroundStyle(.secondary)
                 Button("Connect") { pairing = true }.buttonStyle(.glassProminent).accessibilityIdentifier("connect-empty")
+            case .linkChanged:
+                Text("This Mac's Link changed").font(.title3)
+                Text("Run `reflex pair` on your computer, then scan its code again.").foregroundStyle(.secondary)
+                Button("Scan again") { pairing = true }.buttonStyle(.glassProminent).accessibilityIdentifier("connect-empty")
             default:
                 Text(link.spaces.isEmpty ? "No Spaces yet" : "Pick a Space").font(.title3)
                 Text(link.spaces.isEmpty ? "When an Agent opens a Space, it shows up in the Spaces menu." : "Open one from the Spaces menu.").foregroundStyle(.secondary)
@@ -240,7 +278,7 @@ struct CanvasScreen: View {
                     open = SpaceSession(id: id, link: link)
                     lastSeen[id] = link.revision[id] ?? 0
                 } label: {
-                    Label(id, systemImage: open?.id == id ? "checkmark" : unread(id) ? "circle.fill" : "square.on.square")
+                    Label(link.localOnly[id] == nil ? id : "\(id) (this iPad only)", systemImage: open?.id == id ? "checkmark" : unread(id) ? "circle.fill" : "square.on.square")
                 }
                 .accessibilityIdentifier("space-\(id)")
             }
@@ -277,6 +315,7 @@ struct CanvasScreen: View {
         case .connecting: "Connecting…"
         case .connected(let name): name.split(separator: ".").first.map(String.init) ?? name
         case .offline: "Offline"
+        case .linkChanged: "Scan again"
         }
     }
 
@@ -285,6 +324,7 @@ struct CanvasScreen: View {
         case .connected: .green
         case .connecting: .orange
         case .offline: .red
+        case .linkChanged: .orange
         case .unpaired: .gray
         }
     }

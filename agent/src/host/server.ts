@@ -24,7 +24,7 @@ export type HostOptions = {
   /** The credential every local client presents. */
   token: string;
   /** Who a caller is, once the person approved it; throws a ReflexError otherwise. */
-  authorize: (who: Who, signal: AbortSignal) => Promise<Identity>;
+  authorize: (who: Who, signal: AbortSignal, progress?: (p: { elapsed_s: number; timeout_s: number; message: string }) => void) => Promise<Identity>;
   /** `reflex dev person`: only on a Link started with --dev. */
   devPerson: boolean;
   /** Registers a push target; returns its ID, or throws a ReflexError when it isn't accepted. */
@@ -73,7 +73,8 @@ export function serveHost(o: HostOptions): Promise<Server> {
       calls.set(f.id, ac);
       try {
         if (f.t === "call") {
-          const who = await o.authorize(f.who, ac.signal);
+          // While the person hasn't answered yet, the surface shows why the call is waiting.
+          const who = await o.authorize(f.who, ac.signal, (p) => send({ t: "progress", id: f.id, ...p }));
           const started = Date.now();
           if (f.tool === "wait_for_user") log("wait_start", { client, who: who.name, args: f.args as Record<string, unknown> });
           const r = await core.call(f.tool, f.args, {

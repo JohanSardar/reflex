@@ -4,11 +4,17 @@ The iPad app: a PencilKit canvas for the user's Ink, with Agent Elements drawn u
 
 ## Use it
 
-1. Run `reflex link` on your computer. It shows a QR code and the same code as text.
-2. On the iPad, tap Connect and scan the code, or paste its text (it starts with `reflex://pair?`). Opening a `reflex://pair?…` link pairs too.
-3. When an Agent opens a Space, it shows up in the Spaces menu (a dot marks Spaces that changed). Draw on it, and press Send to hand your strokes to the Agents in that Space.
-4. The first time an Agent connects, the iPad asks whether to allow it.
-5. To share a Space, tap the people button, pick Editor or Viewer and Make an invite: a QR code and a `reflex://invite?…` code, single use. The other person scans it, opens it, or pastes it in Connect and taps Join. The People list there changes someone's role or removes them. Who else is here shows as named chips at the top right, with their cursors and selections on the canvas; a viewer sees "View only", and someone removed sees "Removed".
+1. On your computer, in the Reflex checkout: `node agent/bin/reflex.mjs setup` (README.md, "Use it"). It starts the Link and shows a QR code.
+2. On the iPad, open Reflex Canvas, tap Connect, then Scan the QR code. You can also paste its text (it starts with `reflex://pair?`) or open a `reflex://pair?…` link. `reflex pair` shows a new code at any time.
+3. The first time an Agent connects, the iPad asks "Allow … to use your Spaces?". Tap Allow. The question stays up until you answer, through reconnects and relaunches, and your answer is kept until the Link confirms it, so an Allow tapped while the connection is down still lands.
+
+That's it. When an Agent opens a Space, it shows up in the Spaces menu (a dot marks Spaces that changed). Draw on it, and press Send to hand your strokes to the Agents in that Space. To share a Space, tap the people button, pick Editor or Viewer and Make an invite: a QR code and a `reflex://invite?…` code, single use. The other person scans it, opens it, or pastes it in Connect and taps Join. The People list there changes someone's role or removes them. Who else is here shows as named chips at the top right, with their cursors and selections on the canvas. A viewer sees "View only", and someone removed sees "Removed".
+
+### If it doesn't connect
+
+1. **"This Mac's Link changed. Scan its code again."** The Mac at the paired address answered with another key: its Link was reset or reinstalled. The iPad stops dialing it. Run `reflex pair` and scan. Spaces made under the earlier Link's person stay on this iPad only ("this iPad only" in the Spaces menu), aren't sent to the new Link, and can be deleted from the question shown after pairing.
+2. **"Offline", never connecting.** The Wi-Fi keeps devices apart (campus, hotel, guest), or the iPad is on another network. With the Mac's peer-to-peer helper built (`reflex setup` does it when Xcode's command-line tools are there), the iPad reaches the Mac over peer-to-peer Wi-Fi with no shared network. Restart the Link (`reflex link stop`, then `reflex pair`) after it is built.
+3. **An Agent waits for approval, but no question shows.** The iPad isn't connected to the Link the Agent uses: see 1 and 2. `reflex link agents` on the computer lists the Agents waiting.
 
 The iPad keeps working offline. Strokes and Sends are saved in the kernel first and go out when the Link is back.
 

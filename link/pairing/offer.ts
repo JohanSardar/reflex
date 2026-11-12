@@ -30,13 +30,25 @@ export interface ParsedOffer extends ScannedOffer {
   person: Person;
 }
 
-/** This machine's LAN addresses, IPv4 first, loopback last. */
+/**
+ * The addresses an iPad can reach this machine at, for a pairing code: home and office networks first,
+ * VPN and carrier-grade NAT addresses (Tailscale's 100.64.0.0/10) last, since an iPad off the VPN waits
+ * for each to time out. Loopback and link-local are left out: an iPad dialing 127.0.0.1 reaches itself.
+ * Only a machine with no network at all lists 127.0.0.1 (for the Simulator on the same Mac).
+ */
 export function lanAddresses(): string[] {
+  const rank = (ip: string): number => {
+    const [a, b] = ip.split(".").map(Number);
+    if (a === 192 && b === 168) return 0;
+    if (a === 10 || (a === 172 && b >= 16 && b <= 31)) return 1;
+    if (a === 100 && b >= 64 && b <= 127) return 3;
+    return 2;
+  };
   const out: string[] = [];
   for (const list of Object.values(networkInterfaces()))
-    for (const a of list ?? []) if (!a.internal && a.family === "IPv4") out.push(a.address);
-  out.push("127.0.0.1");
-  return out;
+    for (const a of list ?? []) if (!a.internal && a.family === "IPv4" && !a.address.startsWith("169.254.") && !out.includes(a.address)) out.push(a.address);
+  out.sort((x, y) => rank(x) - rank(y));
+  return out.length ? out : ["127.0.0.1"];
 }
 
 export class Offers {

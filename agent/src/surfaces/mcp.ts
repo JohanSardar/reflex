@@ -133,7 +133,7 @@ export async function runMcp(o: { channel?: boolean } = {}) {
       } catch (e) {
         if (!(e instanceof NoLink)) throw e;
         log("no_link", { tool, error: e.message });
-        const json = { ok: false, reason: "unavailable", errors: [{ code: "unavailable", msg: e.message, fix: "Ask the person to start the Reflex Link (`reflex link`), then call again." }] };
+        const json = { ok: false, reason: "unavailable", errors: [{ code: "unavailable", msg: e.message, fix: "Ask the person to run `reflex setup` in a terminal (it starts the Reflex Link), then call again." }] };
         return { content: [{ type: "text", text: JSON.stringify(json) }], isError: true };
       }
       const r = await client.call(tool, args, who(), {
@@ -143,7 +143,7 @@ export async function runMcp(o: { channel?: boolean } = {}) {
           progressSent++;
           void extra.sendNotification({
             method: "notifications/progress",
-            params: { progressToken, progress: p.elapsed_s, total: p.timeout_s, message: `Waiting for the person to press Send (${p.elapsed_s}s)` },
+            params: { progressToken, progress: p.elapsed_s, total: p.timeout_s, message: `${p.message ?? "Waiting for the person to press Send"} (${p.elapsed_s}s)` },
           });
         },
       });
@@ -213,7 +213,8 @@ export async function runMcp(o: { channel?: boolean } = {}) {
         c?.close();
         // The person turned this Agent away or didn't answer: stop, so the target never asks them again on its
         // own. Tool calls still work; restarting the session opens the target once they approve.
-        if (/^(rate_limited|not_approved)/.test(error)) return log(`${event}_stopped`, { error });
+        // Still waiting for their answer is not a no: keep the target asking.
+        if (/^(rate_limited|not_approved)/.test(error) && !/Still waiting/.test(error)) return log(`${event}_stopped`, { error });
       }
       await new Promise((r) => setTimeout(r, 3000));
     }
