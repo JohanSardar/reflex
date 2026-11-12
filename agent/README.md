@@ -77,7 +77,9 @@ Run `npm install` at the repo root, and build the kernel's WASM once
 ## Connect a harness
 
 `node agent/bin/reflex.mjs setup` does this for you: it adds Reflex to Claude Code (user scope, with
-`--channel`) and Codex once, replacing an entry that points at another checkout. By hand:
+`--channel`) and Codex once, and points an entry at another checkout at this one, keeping your own
+env, extra args and, in Codex's config.toml, every other key and comment. Setup with `--home <dir>` (a
+test profile) leaves both alone unless you add `--register`. By hand:
 
 Claude Code:
 

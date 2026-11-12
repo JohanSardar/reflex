@@ -138,13 +138,14 @@ async function start(): Promise<void> {
     p2p: !flags["no-p2p"],
     fault: flags.fault,
     everyPath: flags["every-path"],
+    onShutdown: () => void stop("`reflex link stop`"),
   });
-  await link.start();
   const stop = async (sig: string): Promise<void> => {
     console.log(`link: ${sig}, stopping`);
     await link.stop();
     process.exit(0);
   };
+  await link.start();
   process.on("SIGINT", () => void stop("SIGINT"));
   process.on("SIGTERM", () => void stop("SIGTERM"));
 }
@@ -277,17 +278,21 @@ async function main(): Promise<void> {
       return out(`Paired with ${d.name} (${d.device}).`, d);
     }
     case "stop": {
-      // The Link running from this profile, in the background or in another terminal.
-      const file = join(dir, "link.json");
-      const pid = existsSync(file) ? Number(JSON.parse(readFileSync(file, "utf8")).pid) : 0;
-      let alive = false;
+      // The Link answering on this profile's socket, in the background or in another terminal: asked to stop
+      // over its admin socket, so a pid that now belongs to another program is never signalled.
+      let c: LinkClient;
       try {
-        if (pid) process.kill(pid, 0);
-        alive = Boolean(pid);
-      } catch {}
-      if (!alive) return out(`No Link is running from ${dir}.`, { stopped: false });
-      process.kill(pid, "SIGTERM");
-      for (let i = 0; i < 50 && existsSync(file); i++) await new Promise((r) => setTimeout(r, 100));
+        c = await LinkClient.connect(dir, "admin");
+      } catch {
+        return out(`No Link is running from ${dir}.`, { stopped: false });
+      }
+      let pid: number;
+      try {
+        pid = (await c.call<{ pid: number }>("shutdown")).pid;
+      } finally {
+        c.close();
+      }
+      for (let i = 0; i < 100 && existsSync(join(dir, "link.json")); i++) await new Promise((r) => setTimeout(r, 100));
       return out(`Stopped the Link (pid ${pid}). \`reflex mcp\` and the CLI start it again when they need it.`, { stopped: true, pid });
     }
     case "agents": {

@@ -129,6 +129,14 @@ struct CanvasScreen: View {
                 .glassEffect()
                 .padding(.top, 72)
                 .accessibilityIdentifier("link-changed")
+            } else if let why = link.approvalElsewhere {
+                // An Agent waits, but this iPad's Allow wouldn't count: say where to answer.
+                Text(why)
+                    .font(.callout)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .glassEffect()
+                    .padding(.top, 72).padding(.horizontal, 120)
+                    .accessibilityIdentifier("approve-elsewhere")
             }
         }
         .sheet(isPresented: $pairing) { PairSheet(link: link, code: incomingCode ?? "") }
@@ -147,6 +155,19 @@ struct CanvasScreen: View {
                 }
             } message: {
                 Text("They were made with an earlier Link, so they aren't sent to this one. You can still open them here.")
+            }
+        }
+        // A device of this person's paired with the Link: said once, so one nobody meant to pair shows.
+        .background {
+            Color.clear.alert(
+                "\(link.newDevice?.name ?? "A device") paired with your Link",
+                isPresented: Binding(get: { link.newDevice != nil && asking == nil }, set: { if !$0 { link.newDevice = nil } })
+            ) {
+                Button("OK", role: .cancel) { link.newDevice = nil }
+            } message: {
+                Text(link.newDevice?.approves == true
+                    ? "It was paired with a code shown in the Link's terminal: it can sync your Spaces and approve Agents."
+                    : "It can sync your Spaces, but approving Agents stays with this iPad. If you didn't pair it, run `reflex link status` on your computer to see it.")
             }
         }
         .onChange(of: link.agentRequests, initial: true) { _, list in
@@ -278,14 +299,14 @@ struct CanvasScreen: View {
                     open = SpaceSession(id: id, link: link)
                     lastSeen[id] = link.revision[id] ?? 0
                 } label: {
-                    Label(link.localOnly[id] == nil ? id : "\(id) (this iPad only)", systemImage: open?.id == id ? "checkmark" : unread(id) ? "circle.fill" : "square.on.square")
+                    Label(link.localOnly[id] == nil ? id : "\(link.title(id)) (this iPad only)", systemImage: open?.id == id ? "checkmark" : unread(id) ? "circle.fill" : "square.on.square")
                 }
                 .accessibilityIdentifier("space-\(id)")
             }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "square.stack")
-                Text(open?.id ?? "Spaces").lineLimit(1)
+                Text(open.map { link.title($0.id) } ?? "Spaces").lineLimit(1)
                 if link.spaces.contains(where: unread) { Circle().fill(.blue).frame(width: 8, height: 8) }
             }
             .font(.system(size: 16, weight: .medium))

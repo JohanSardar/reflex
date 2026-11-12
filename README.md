@@ -22,7 +22,7 @@ node agent/bin/reflex.mjs setup
 2. **Scan.** On the iPad, open Reflex Canvas, tap Connect, then Scan the QR code. The terminal says "Paired with …".
 3. **Tap Allow.** Start Claude Code (`claude`) or Codex and ask it to draw something on your iPad. The first time, the iPad asks "Allow … to use your Spaces?". Tap Allow.
 
-That's all. `reflex pair` shows a new code at any time, from any terminal. The Link keeps running when you close the terminal, and `reflex mcp` starts it again after a restart. `reflex link stop` stops it.
+That's all. `reflex pair` shows a new code at any time, from any terminal. A second iPad paired with it syncs your Spaces, but approving Agents stays with the first (so an Agent can't pair a device of its own and approve itself); your first iPad hears of each new one. The Link keeps running when you close the terminal, and `reflex mcp` starts it again after a restart. `reflex link stop` stops it.
 
 For Sends pushed into Claude Code as new turns, start it with `claude --dangerously-load-development-channels server:reflex`.
 

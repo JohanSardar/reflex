@@ -21,6 +21,8 @@ export interface Offer {
   secret: Buffer;
   expires: number;
   uri: string;
+  /** Where the code was shown: in the Link's own terminal (the person is there), or made by an admin call (`reflex pair`). */
+  source: "terminal" | "admin";
 }
 
 export interface ParsedOffer extends ScannedOffer {
@@ -53,8 +55,10 @@ export function lanAddresses(): string[] {
 
 export class Offers {
   #live = new Map<string, Offer>();
+  /** Codes used up, and by which device: `reflex pair` waits on this, so an iPad that was paired already and scans again counts. */
+  #used = new Map<string, string>();
 
-  create(me: { device: string; key: string; name: string; person: Person }, port: number, now = Date.now()): Offer {
+  create(me: { device: string; key: string; name: string; person: Person }, port: number, source: Offer["source"] = "terminal", now = Date.now()): Offer {
     const offer = "o_" + randomBytes(6).toString("hex");
     const secret = randomBytes(32);
     const q = new URLSearchParams({
@@ -69,7 +73,7 @@ export class Offers {
       pi: me.person.id,
       pn: me.person.name,
     });
-    const o = { offer, secret, expires: now + TTL_MS, uri: `reflex://pair?${q}` };
+    const o: Offer = { offer, secret, expires: now + TTL_MS, uri: `reflex://pair?${q}`, source };
     this.#live.set(offer, o);
     return o;
   }
@@ -85,9 +89,19 @@ export class Offers {
     return o.secret;
   }
 
+  /** Where a live (or just consumed) offer's code was shown. */
+  source(offer: string): Offer["source"] | undefined {
+    return this.#live.get(offer)?.source;
+  }
+
   /** An offer is used up once a device pairs with it. */
-  consume(offer: string): void {
-    this.#live.delete(offer);
+  consume(offer: string, device?: string): void {
+    if (this.#live.delete(offer) && device) this.#used.set(offer, device);
+  }
+
+  /** The device that used this code, if one did. */
+  usedBy(offer: string): string | undefined {
+    return this.#used.get(offer);
   }
 
   remaining(offer: string, now = Date.now()): number {
