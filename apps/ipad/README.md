@@ -101,3 +101,5 @@ Debug builds also take `reflex://debug/ellipse?cx=&cy=&rx=&ry=` (screen points),
 On a real iPad, Debug builds keep the screen on while Reflex is in front (release builds with `-ReflexKeepAwake`), so a device run isn't cut short by Auto-Lock. Peer-to-peer Wi-Fi only works on real hardware; build the kernel for the device too (`sh kernel/swift/build.sh`).
 
 Debug builds also take `reflex://debug/write?region=<id>&text=<line>[&pause=<s>]`, which writes one line by hand below the person's lines in that Region: each glyph's outline in a handwriting font becomes pen strokes, drawn one after another (`pause` seconds apart, 0.05 by default) with the pen going down and up, through the same PencilKit path. Encode `+` as `%2B`.
+
+Debug builds also take `reflex://debug/write?x=&y=&text=<line>[&size=]`, which writes a line by hand with its baseline starting at a screen point (anywhere, not only in a Region), and `reflex://debug/line?points=x,y;x,y;…`, which draws one pen stroke through those screen points, for lines, ticks and sketches.

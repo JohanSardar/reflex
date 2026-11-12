@@ -1,7 +1,7 @@
 # chart
 
 A live chart: bars, a line, or a scatter of points, drawn in the person's Space on the iPad and in
-the web viewer. It needs no network. Place it with data in one call:
+the web viewer. It needs no network. Place it with data in one call (for a grid of charts the person marks up, read_me("charts")):
 
 ```json
 { "op": "add", "id": "revenue", "type": "embed", "template": "chart", "w": 640, "h": 400,
