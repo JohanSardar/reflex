@@ -1,19 +1,21 @@
-# Reflex Protocol v0
+# Reflex Protocol v1
 
-The public contract every Agent, client and kernel builds on: JSON Schemas for every message, one hand-written example of each, and the hand-written text Agents read. Vocabulary follows [GLOSSARY.md](../GLOSSARY.md); the design is in [ARCHITECTURE.md §4, §5 and §9](../docs/ARCHITECTURE.md).
+The public contract every Agent, client, Link, Relay and kernel builds on: JSON Schemas for every message, one hand-written example of each, generated types, the hand-written text Agents read, and the written spec in [`spec/`](spec/README.md). The conformance profiles are in [`tests/conformance/`](../tests/conformance/README.md). Vocabulary follows [GLOSSARY.md](../GLOSSARY.md); the design is in [ARCHITECTURE.md §4, §5 and §9](../docs/ARCHITECTURE.md).
 
-v0 is a draft. It becomes v1 when it is published with conformance profiles (T21).
+Version 1.0.0. What changes in a minor or a major version is in [spec/versioning.md](spec/versioning.md); what changed is in [CHANGELOG.md](CHANGELOG.md); how it is released is in [RELEASE.md](RELEASE.md).
 
 ## What's here
 
 | Path | What |
 |---|---|
-| `schema/` | JSON Schema 2020-12, the source of truth. One `<tool>.input` and `<tool>.output` per tool, plus the shared shapes below. |
-| `examples/` | One correct example per message, written by hand. `<schema>.json` or `<schema>.<variant>.json`. |
+| `spec/` | What the messages mean and the rules the schemas can't express: Elements, operations, Send Bundles, identity, shared Spaces, transports, versioning. |
+| `schema/` | JSON Schema 2020-12, the source of truth. One `<tool>.input` and `<tool>.output` per tool, the shared shapes, and the wire messages below. |
+| `examples/` | One correct example per message, written by hand: `<schema>.json`, or `<schema>.<t>.json` for each message of a wire schema. `check` fails if a message has none. |
 | `tool-text/` | `instructions.md` (the server instructions, always loaded, under about 400 tokens) and one description per tool. Hand-written, never generated from the schemas. |
-| `generated/` | Self-contained copies of the tool, error, Element and Send Bundle schemas with every `$ref` inlined, for surfaces that need one document per schema (an MCP tool's `inputSchema`), and `rust/protocol.rs`, the kernel's serde types. Don't edit; run `npm run build -w @reflex/protocol`. |
+| `generated/` | Self-contained copies of the tool, error, Element and Send Bundle schemas with every `$ref` inlined, for surfaces that need one document per schema (an MCP tool's `inputSchema`), `rust/protocol.rs`, the kernel's serde types, and `ts/protocol.d.ts`, TypeScript types for every schema. Don't edit; run `npm run build -w @reflex/protocol`. |
 | `scripts/check.mjs` | Compiles every schema, enforces the rules below, validates the examples, and checks `generated/`. |
-| `scripts/gen-rust.mjs` | Generates `generated/rust/protocol.rs` from the schemas: one struct or enum per object, enum and `oneOf`, with each union's variant picked by its `const` fields. |
+| `scripts/gen-rust.mjs` | Generates `generated/rust/protocol.rs` from the schemas: one struct or enum per object, enum and `oneOf`, with each union's variant picked by its `const` fields. The wire schemas are left out: the kernel doesn't speak them. |
+| `scripts/gen-ts.mjs` | Generates `generated/ts/protocol.d.ts`: a type for each schema (`ApplyInput`, `SendBundle`, `Session`, …), for each shared definition, and for each `oneOf` variant (`SessionSync`, `IntentAddStroke`). |
 
 Shared schemas:
 
@@ -26,6 +28,17 @@ Shared schemas:
 | `send-bundle` | What one Send reads like to the Agent. |
 | `raw-send` | What a device writes when the person presses Send or fires a Behavior: strokes, words with times, handwriting hints, crops. The kernel freezes it and the Link turns it into a Send Bundle. |
 | `error` | What every tool returns on failure: stable codes, each error with a `fix`. |
+| `intent` | What a person's device writes through the kernel: strokes, moves, erasing, state (spec/operations.md §5). |
+
+Wire schemas, one `oneOf` tagged by `t`:
+
+| Schema | What |
+|---|---|
+| `handshake` | The plain frames that open every Path (spec/transports.md §3). |
+| `session` | The header of each encrypted session message (§4). |
+| `relay` | The Relay's JSON messages (§6). |
+| `viewer` | The viewer API's event stream (§7). |
+| `webhook` | The body of a Send pushed to a webhook (spec/send-bundles.md §6). |
 
 Element IDs: an Agent's own Elements appear to it under its own IDs, and to everyone else as `<agent>:<id>`.
 
@@ -38,6 +51,7 @@ The eleven tools are fixed (SPEC §11): `list_spaces`, `open_space`, `read`, `lo
 ```sh
 npm install                              # at the repo root
 npm run check -w @reflex/protocol        # schemas compile, rules hold, examples validate, generated/ is current
+node tests/conformance/run.ts --reflex   # every conformance profile, against Reflex's own implementations
 npm run build -w @reflex/protocol        # rewrite generated/ (including the kernel's Rust types) after a schema change
 npm run typecheck -w @reflex/protocol
 ```
@@ -66,7 +80,7 @@ Conventions the schemas can't express:
 
 ## Versioning
 
-Semver (ARCHITECTURE §11). A minor version adds optional fields, enum values or error codes; a major version changes meaning. Each Element type will carry its own schema version; extension Elements already carry `type_version`.
+Semver ([spec/versioning.md](spec/versioning.md)). A minor version adds optional fields, enum values, error codes or session messages; a major version changes meaning. Wire identifiers (`reflex-link/v0`, `reflex-relay/v0`, `v=0`) keep their spelling in v1. Each schema's `$id` is `https://reflex.eilmer.si/protocol/v1/<name>.schema.json`, where a Relay serves it (spec/transports.md §8). Extension Elements carry `type_version`.
 
 ## For the tickets building on this
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/open_space.output.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/open_space.output.schema.json",
   "title": "open_space result",
   "description": "Everything needed to start: who you are here, an outline of the scene, and pending Sends.",
   "type": "object",

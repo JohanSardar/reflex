@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/revert.input.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/revert.input.schema.json",
   "title": "revert input",
   "description": "Set batch or last, not both. Only your own batches can be reverted.",
   "type": "object",

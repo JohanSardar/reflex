@@ -1,0 +1,307 @@
+{
+  "scenario": 9,
+  "title": "Kanji / hanzi practice",
+  "spec": "SPEC §16.9: guide boxes, and feedback on stroke order and proportion. Each stroke comes back on its box, in the box's own terms, in the order it was drawn (extensions/guides/kanji.md).",
+  "space": "kanji-1",
+  "setup": [
+    {
+      "ops": [
+        {
+          "op": "add",
+          "id": "prompt",
+          "type": "text",
+          "text": "Write 永 (eternity): 5 strokes. Mind the stroke order.",
+          "at": {
+            "x": 0,
+            "y": 0
+          },
+          "w": 920
+        },
+        {
+          "op": "add",
+          "id": "practice",
+          "type": "region",
+          "title": "Practice",
+          "send_button": "Check",
+          "at": {
+            "x": 0,
+            "y": 60
+          },
+          "w": 690,
+          "h": 290
+        },
+        {
+          "op": "add",
+          "id": "box-1",
+          "type": "embed",
+          "template": "guide-box",
+          "params": {
+            "character": "永",
+            "show": "trace",
+            "label": "Box 1"
+          },
+          "at": {
+            "x": 40,
+            "y": 100
+          },
+          "w": 190,
+          "h": 190
+        }
+      ]
+    }
+  ],
+  "sends": [
+    {
+      "draw": [
+        {
+          "id": "k-1",
+          "points": [
+            [
+              133,
+              120
+            ],
+            [
+              137,
+              140
+            ]
+          ]
+        },
+        {
+          "id": "k-2",
+          "points": [
+            [
+              95,
+              160
+            ],
+            [
+              175,
+              160
+            ],
+            [
+              155,
+              190
+            ]
+          ],
+          "after_ms": 400
+        },
+        {
+          "id": "k-3",
+          "points": [
+            [
+              135,
+              160
+            ],
+            [
+              135,
+              280
+            ],
+            [
+              120,
+              270
+            ]
+          ],
+          "after_ms": 400
+        },
+        {
+          "id": "k-4",
+          "points": [
+            [
+              115,
+              210
+            ],
+            [
+              85,
+              255
+            ]
+          ],
+          "after_ms": 400
+        },
+        {
+          "id": "k-5",
+          "points": [
+            [
+              155,
+              200
+            ],
+            [
+              205,
+              275
+            ]
+          ],
+          "after_ms": 400
+        }
+      ],
+      "raw": {
+        "send": "s_kanji1",
+        "trigger": "region",
+        "region": "a_claude:practice",
+        "embed_anchors": [
+          {
+            "element": "a_claude:box-1",
+            "strokes": [
+              "k-1"
+            ],
+            "anchor": {
+              "kind": "box",
+              "surface": "writing",
+              "name": "Box 1",
+              "box": [
+                0.49,
+                0.1,
+                0.02,
+                0.11
+              ],
+              "start": [
+                0.49,
+                0.1
+              ],
+              "end": [
+                0.51,
+                0.21
+              ],
+              "label": "Box 1: stroke 1"
+            }
+          },
+          {
+            "element": "a_claude:box-1",
+            "strokes": [
+              "k-2"
+            ],
+            "anchor": {
+              "kind": "box",
+              "surface": "writing",
+              "name": "Box 1",
+              "box": [
+                0.29,
+                0.31,
+                0.42,
+                0.16
+              ],
+              "start": [
+                0.29,
+                0.31
+              ],
+              "end": [
+                0.71,
+                0.47
+              ],
+              "label": "Box 1: stroke 2"
+            }
+          },
+          {
+            "element": "a_claude:box-1",
+            "strokes": [
+              "k-3"
+            ],
+            "anchor": {
+              "kind": "box",
+              "surface": "writing",
+              "name": "Box 1",
+              "box": [
+                0.42,
+                0.31,
+                0.08,
+                0.63
+              ],
+              "start": [
+                0.42,
+                0.31
+              ],
+              "end": [
+                0.5,
+                0.94
+              ],
+              "label": "Box 1: stroke 3"
+            }
+          },
+          {
+            "element": "a_claude:box-1",
+            "strokes": [
+              "k-4"
+            ],
+            "anchor": {
+              "kind": "box",
+              "surface": "writing",
+              "name": "Box 1",
+              "box": [
+                0.24,
+                0.58,
+                0.16,
+                0.24
+              ],
+              "start": [
+                0.24,
+                0.58
+              ],
+              "end": [
+                0.4,
+                0.82
+              ],
+              "label": "Box 1: stroke 4"
+            }
+          },
+          {
+            "element": "a_claude:box-1",
+            "strokes": [
+              "k-5"
+            ],
+            "anchor": {
+              "kind": "box",
+              "surface": "writing",
+              "name": "Box 1",
+              "box": [
+                0.6,
+                0.53,
+                0.26,
+                0.39
+              ],
+              "start": [
+                0.6,
+                0.53
+              ],
+              "end": [
+                0.86,
+                0.92
+              ],
+              "label": "Box 1: stroke 5"
+            }
+          }
+        ]
+      },
+      "expect": {
+        "frozen": {
+          "trigger": "region",
+          "strokes": [
+            "k-1",
+            "k-2",
+            "k-3",
+            "k-4",
+            "k-5"
+          ]
+        },
+        "every": {
+          "kind": "ink",
+          "on": [
+            "box-1"
+          ],
+          "target": {
+            "kind": "box",
+            "name": "Box 1"
+          }
+        },
+        "strokes": [
+          "k-1",
+          "k-2",
+          "k-3",
+          "k-4",
+          "k-5"
+        ]
+      }
+    }
+  ],
+  "elements": [
+    "prompt",
+    "practice",
+    "box-1"
+  ]
+}

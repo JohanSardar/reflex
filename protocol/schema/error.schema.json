@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/error.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/error.schema.json",
   "title": "Error result",
   "description": "What any tool returns when it fails. Over MCP it is the result's text with isError set; on the CLI it is the single line on stderr. A rejected apply changes nothing and lists every failing op, not just the first. Every error says how to fix it.",
   "type": "object",

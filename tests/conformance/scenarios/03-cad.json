@@ -1,0 +1,26 @@
+{
+  "scenario": 3,
+  "title": "CAD / 3D",
+  "spec": "SPEC §16.3: a model next to its feature tree. The person redlines a pocket and writes \"offset 10 mm from outline\". The Mark names the part.",
+  "space": "bracket-cad",
+  "setup": [ { "ops": [
+    { "op": "add", "id": "model", "type": "embed", "model": "asset:4f9a1c0de0b8a3f1b2c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7081920", "at": { "x": 0, "y": 0 }, "w": 600, "h": 500 },
+    { "op": "add", "id": "tree", "type": "embed", "template": "feature-tree", "params": { "features": [ { "id": "pocket-1", "name": "Pocket 1" }, { "id": "rib-1", "name": "Rib" } ] }, "at": { "x": 640, "y": 0 }, "w": 300, "h": 500 }
+  ] } ],
+  "sends": [ {
+    "draw": [
+      { "id": "ink-1", "ellipse": [300, 250, 80, 50] },
+      { "ids": ["ink-2", "ink-3", "ink-4", "ink-5"], "letters": [400, 320] }
+    ],
+    "raw": { "send": "s_cad1", "trigger": "button",
+      "hints": [ { "strokes": ["ink-2", "ink-3", "ink-4", "ink-5"], "text": "offset 10 mm from outline", "confidence": 0.8 } ],
+      "embed_anchors": [ { "element": "a_claude:model", "strokes": ["ink-1"], "anchor": { "kind": "part", "part": "pocket-1", "label": "Pocket 1" } } ] },
+    "expect": {
+      "marks": [
+        { "kind": "circle", "on": ["model"], "target": { "kind": "part", "part": "pocket-1" } },
+        { "kind": "writing", "text_guess": "offset 10 mm from outline" }
+      ]
+    }
+  } ],
+  "elements": ["model", "tree"]
+}

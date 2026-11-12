@@ -1,14 +1,33 @@
 {
   "name": "@reflex/protocol",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
-  "description": "Reflex Protocol v0: JSON Schemas, examples and hand-written tool text.",
+  "description": "Reflex Protocol v1: JSON Schemas, examples, generated types, the written spec and hand-written tool text.",
   "type": "module",
+  "files": [
+    "schema/",
+    "examples/",
+    "generated/",
+    "spec/",
+    "tool-text/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "types": "./generated/ts/protocol.d.ts",
+  "exports": {
+    ".": { "types": "./generated/ts/protocol.d.ts" },
+    "./schema/*": "./schema/*",
+    "./generated/*": "./generated/*",
+    "./examples/*": "./examples/*",
+    "./tool-text/*": "./tool-text/*",
+    "./package.json": "./package.json"
+  },
   "scripts": {
-    "check": "node scripts/check.mjs && node scripts/gen-rust.mjs",
-    "build": "node scripts/check.mjs --write && node scripts/gen-rust.mjs --write",
+    "check": "node scripts/check.mjs && node scripts/gen-rust.mjs && node scripts/gen-ts.mjs",
+    "build": "node scripts/check.mjs --write && node scripts/gen-rust.mjs --write && node scripts/gen-ts.mjs --write",
     "typecheck": "tsc -p .",
-    "gen:rust": "node scripts/gen-rust.mjs"
+    "gen:rust": "node scripts/gen-rust.mjs",
+    "gen:ts": "node scripts/gen-ts.mjs"
   },
   "devDependencies": {
     "@types/node": "26.6.5",

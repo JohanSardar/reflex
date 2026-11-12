@@ -23,7 +23,11 @@ const write = process.argv.includes("--write");
 
 /** @type {Map<string, any>} */
 const schemas = new Map();
-for (const f of readdirSync(schemaDir).filter((f) => f.endsWith(".schema.json")).sort())
+// The wire schemas (device sessions, the Relay, the viewer API, webhooks) are spoken by the Link,
+// the Relay and devices, not by the kernel: no Rust types for them. User intents are parsed by hand
+// in kernel/core/src/ops.rs (parse_intent), which this schema describes.
+export const WIRE = new Set(["handshake.schema.json", "session.schema.json", "relay.schema.json", "viewer.schema.json", "webhook.schema.json", "intent.schema.json"]);
+for (const f of readdirSync(schemaDir).filter((f) => f.endsWith(".schema.json") && !WIRE.has(f)).sort())
   schemas.set(f, JSON.parse(readFileSync(join(schemaDir, f), "utf8")));
 
 const KEYWORDS = new Set(

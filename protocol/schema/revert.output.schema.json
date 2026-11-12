@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/revert.output.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/revert.output.schema.json",
   "title": "revert result",
   "description": "A revert is itself a new batch. Changes a person made since are kept; what they touched is listed in kept.",
   "type": "object",

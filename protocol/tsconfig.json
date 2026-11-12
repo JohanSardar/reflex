@@ -7,7 +7,12 @@
     "checkJs": true,
     "noEmit": true,
     "strict": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["scripts/**/*.mjs"]
+  "include": [
+    "scripts/**/*.mjs",
+    "generated/ts/*.d.ts"
+  ]
 }

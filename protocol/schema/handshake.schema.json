@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://reflex.eilmer.si/protocol/v1/handshake.schema.json",
+  "title": "Device handshake",
+  "description": "The four frames that turn a Path into an authenticated, encrypted session between two devices (protocol/spec/transports.md §3). They are the only plain-text frames on a Path; each is one UTF-8 JSON document. The initiator sends hello, the responder answers hello, then each sends auth. Either side may send refused instead and close.",
+  "oneOf": [
+    {
+      "title": "hello",
+      "description": "Who this device is and its fresh X25519 key. The transcript hashes both hellos byte for byte as sent.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "hello"
+        },
+        "v": {
+          "const": 0
+        },
+        "protocol": {
+          "const": "reflex-link/v0"
+        },
+        "device": {
+          "$ref": "#/$defs/device"
+        },
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "eph": {
+          "description": "A fresh X25519 public key for this connection, base64url.",
+          "$ref": "#/$defs/key"
+        },
+        "person": {
+          "$ref": "#/$defs/person"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "The device's display name."
+        },
+        "kind": {
+          "description": "ipad for a drawing or viewing device, link for a Link (which hosts Agents). Absent means link.",
+          "enum": [
+            "ipad",
+            "link"
+          ]
+        },
+        "pair": {
+          "description": "Initiator only: the offer ID from a pairing code it scanned.",
+          "type": "string",
+          "pattern": "^o_[0-9a-f]{12}$"
+        },
+        "invite": {
+          "description": "Initiator only: the invite ID from an invite to a shared Space.",
+          "type": "string",
+          "pattern": "^i_[0-9a-f]{1,40}$"
+        }
+      },
+      "required": [
+        "t",
+        "v",
+        "protocol",
+        "device",
+        "key",
+        "eph",
+        "person",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "auth",
+      "description": "Proof of the device key, and of the pairing or invite secret when one is used. sig = Ed25519(\"reflex-link/v0 auth <i|r> \" || transcript); mac = HMAC-SHA256(secret, \"reflex-link/v0 pair <i|r> \" || transcript).",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "auth"
+        },
+        "sig": {
+          "$ref": "#/$defs/sig"
+        },
+        "mac": {
+          "$ref": "#/$defs/sig"
+        }
+      },
+      "required": [
+        "t",
+        "sig"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "refused",
+      "description": "Why a device ended the handshake. It reveals nothing secret.",
+      "type": "object",
+      "properties": {
+        "t": {
+          "const": "refused"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 400
+        }
+      },
+      "required": [
+        "t",
+        "reason"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "device": {
+      "description": "A device ID: dev- and the first 8 bytes of SHA-256 of its Ed25519 public key, in hex.",
+      "type": "string",
+      "pattern": "^dev-[0-9a-f]{16}$"
+    },
+    "key": {
+      "description": "A raw 32-byte public key, base64url without padding.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "person": {
+      "description": "A person by ID and display name, as devices exchange them.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/person_id"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "sig": {
+      "description": "An Ed25519 signature or an HMAC-SHA256, base64url without padding.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43,86}$"
+    }
+  }
+}

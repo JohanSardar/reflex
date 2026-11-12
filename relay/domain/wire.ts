@@ -34,7 +34,7 @@
 //   {t:"log.read",   req, log, token, after, limit?}      → {entries:[{seq, data}], last}
 //   {t:"log.watch",  req, log, token}                    → {last}; later {t:"log.new", log, last}
 //   {t:"log.assets", req, log, token, ids}               → {have:[ids]}
-//   {t:"auth.lookup", req, code}                          → {client, scope}
+//   {t:"auth.lookup", req, code}                          → {client, client_uri, scope}
 //   {t:"grant.issue", req, code, log, token, grant, key}  → {grant}
 //   {t:"grant.revoke", req, log, token, grant}            → {}
 //

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/raw-send.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/raw-send.schema.json",
   "title": "Raw Send",
   "description": "What a device captures when the person sends, or when a Behavior fires, and hands to the kernel's freeze_send (ARCHITECTURE §7.4, §8.2). The kernel adds who sent it, the frontier, the strokes and the changes it claims, and stores it immutably. Mark grouping, Anchors and the transcript's Mark placement are computed later from it, where the Agent is. Times are the device's milliseconds since the Unix epoch, the same clock it passes as now_ms with each stroke, so words and strokes line up. IDs are as the device sees them: its own strokes by their stroke ID, an Agent's Elements as <agent>:<id>.",
   "type": "object",

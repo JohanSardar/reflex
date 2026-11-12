@@ -1,0 +1,26 @@
+{
+  "scenario": 4,
+  "title": "Chart markup",
+  "spec": "SPEC §16.4: a grid of exploratory charts. The person lassoes outliers and asks \"what are these?\", and crosses out a chart. Marks map to data coordinates.",
+  "space": "explore",
+  "setup": [ { "ops": [
+    { "op": "add", "id": "chart-1", "type": "embed", "template": "chart", "params": { "title": "latency vs load" }, "at": { "x": 0, "y": 0 }, "w": 400, "h": 300 },
+    { "op": "add", "id": "chart-2", "type": "embed", "template": "chart", "params": { "title": "errors by hour" }, "at": { "x": 450, "y": 0 }, "w": 400, "h": 300 }
+  ] } ],
+  "sends": [ {
+    "draw": [
+      { "id": "ink-1", "ellipse": [300, 80, 40, 30] },
+      { "id": "ink-2", "points": [[480, 30], [650, 150], [820, 270]] },
+      { "id": "ink-3", "points": [[820, 30], [650, 150], [480, 270]], "after_ms": 300 }
+    ],
+    "raw": { "send": "s_chart1", "trigger": "voice", "said": "what are these?",
+      "embed_anchors": [ { "element": "a_claude:chart-1", "strokes": ["ink-1"], "anchor": { "kind": "data", "rows": ["r17", "r22"], "label": "2 points" } } ] },
+    "expect": {
+      "marks": [
+        { "kind": "circle", "on": ["chart-1"], "target": { "kind": "data", "rows": ["r17", "r22"] } },
+        { "kind": "cross", "on": ["chart-2"] }
+      ]
+    }
+  } ],
+  "elements": ["chart-1", "chart-2"]
+}

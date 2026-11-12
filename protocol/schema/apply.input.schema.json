@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v0/apply.input.schema.json",
+  "$id": "https://reflex.eilmer.si/protocol/v1/apply.input.schema.json",
   "title": "apply input",
   "description": "One batch of operations on one Space. The batch is atomic: all ops apply or none do, and it is one revert unit.",
   "type": "object",
