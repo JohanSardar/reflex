@@ -258,7 +258,7 @@ export class Core {
         next: here
           ? `${plural(here, "Send")} waiting. Call wait_for_user(timeout_s: 0) to read ${here === 1 ? "it" : "them"}.`
           : created
-            ? `Draw with apply(space: '${entry.name}', ops: [...]), then wait_for_user for ${this.#who()} reply.`
+            ? `read_me("index") lists Guides, Recipes and Embed Templates for common tasks. Draw with apply(space: '${entry.name}', ops: [...]), then wait_for_user for ${this.#who()} reply.`
             : `Change it with apply, or wait_for_user for ${this.#who()} next Send.`,
       },
       images: [],

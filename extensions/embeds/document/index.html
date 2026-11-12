@@ -28,8 +28,11 @@
   if (marginShare === 0) margin.remove();
   const changed = new Set(Array.isArray(p.changed) ? p.changed.map(String) : []);
 
-  /** Sentences, split after . ! ? (and a closing quote or bracket) followed by a space. */
-  const sentences = (t) => (String(t).match(/[^.!?]+(?:[.!?]+["'”’)\]]*|$)\s*/g) || [String(t)]).filter((s) => s.trim());
+  /** Sentences, split after . ! ? (and a closing quote or bracket) followed by a space, so "1.3B" stays whole. */
+  const sentences = (t) => {
+    const parts = String(t).split(/(?<=[.!?]["'”’)\]]*)\s+/).filter((s) => s.trim());
+    return parts.map((s, i) => (i < parts.length - 1 ? `${s} ` : s));
+  };
   const paras = (Array.isArray(p.paragraphs) ? p.paragraphs : []).map((q, i) => ({ id: String(q.id ?? `p${i + 1}`), text: String(q.text ?? ""), heading: Boolean(q.heading) }));
 
   if (p.title) {
@@ -143,9 +146,16 @@
       if (!hit.length) return { kind: "local", bounds: region.bounds.map(Math.round), label: "the page, away from the text" };
       const left = pts.reduce((a, q) => (q[0] < a[0] ? q : a)), right = pts.reduce((a, q) => (q[0] > a[0] ? q : a));
       const lineH = parseFloat(getComputedStyle(text).lineHeight) || 27;
-      const quote = bh < lineH * 1.2 ? between([left[0], left[1] - lineH * 0.3], [right[0], right[1] - lineH * 0.3]) : hit.map((s) => s.textContent).join("").trim();
-      const out = describe(hit, { quote: quote || undefined });
-      return { ...out, label: `${bh < lineH * 1.2 ? "line under or through" : "mark over"} ${quote ? `"${quote.slice(0, 60)}"` : out.sentences.join(", ")}`.slice(0, 200) };
+      const flat = bh < lineH * 1.2;
+      // A flat line through the middle of a line of text strikes it; one along its bottom underlines it.
+      const midY = by + bh / 2;
+      const row = flat ? hit.flatMap(rectsOf).find((r) => midY >= r.top - 4 && midY <= r.bottom + 6) : null;
+      const line = row ? ((midY - row.top) / row.height < 0.72 ? "strike" : "underline") : undefined;
+      const lift = row ? Math.max(0, midY - (row.top + row.height / 2)) : lineH * 0.3;
+      const quote = flat ? between([left[0], left[1] - lift], [right[0], right[1] - lift]) : hit.map((s) => s.textContent).join("").trim();
+      const out = describe(hit, { quote: quote || undefined, ...(line ? { line } : {}) });
+      const what = line === "strike" ? "struck through" : line === "underline" ? "underlined" : flat ? "line under or through" : "mark over";
+      return { ...out, label: `${what} ${quote ? `"${quote.slice(0, 60)}"` : out.sentences.join(", ")}`.slice(0, 200) };
     },
   });
 })();
