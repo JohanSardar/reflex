@@ -2,7 +2,7 @@
 // where Spaces live, where Sends wait, and where assets are. The Link (T5)
 // implements them with its journal, its durable Inbox and its asset store
 // (link/agent-host.ts); the Agent layer never touches storage itself.
-import type { Space } from "@reflex/kernel/node";
+type Space = never;
 
 export type Bounds = [number, number, number, number];
 

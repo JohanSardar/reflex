@@ -21,7 +21,7 @@ struct ReflexApp: App {
             CanvasScreen(incomingCode: $code)
                 .onOpenURL { url in
                     // A pairing code, or an invite to someone's shared Space.
-                    if url.scheme == "reflex", url.host == "pair" || url.host == "invite" { code = url.absoluteString }
+                    if url.scheme == "reflex", url.host == "pair" { code = url.absoluteString }
                     #if DEBUG
                     if url.scheme == "reflex", url.host == "debug" { NotificationCenter.default.post(name: .debugInk, object: url) }
                     #endif
