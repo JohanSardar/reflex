@@ -91,10 +91,12 @@ enum ConnectorGeometry {
             let s = 1 / sqrt((dx * dx) / (a * a) + (dy * dy) / (b * b))
             return CGPoint(x: c.x + dx * s, y: c.y + dy * s)
         }
-        let sx = dx == 0 ? .infinity : (r.width / 2 + 6) / abs(dx)
-        let sy = dy == 0 ? .infinity : (r.height / 2 + 6) / abs(dy)
-        let s = min(sx, sy)
-        return CGPoint(x: c.x + dx * s, y: c.y + dy * s)
+        // Snap to the middle of the side that faces the point, like Freeform, so
+        // lines meet boxes squarely and elbows stay tidy.
+        if abs(dx) * r.height >= abs(dy) * r.width {
+            return CGPoint(x: dx > 0 ? r.maxX + 6 : r.minX - 6, y: c.y)
+        }
+        return CGPoint(x: c.x, y: dy > 0 ? r.maxY + 6 : r.minY - 6)
     }
 
     static func path(_ o: BoardObject) -> Path {
