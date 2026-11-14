@@ -702,6 +702,71 @@ Someone tried to connect a real iPad (TestFlight "Reflex Canvas", bundle si.eilm
 From a fresh Link home and a fresh iPad app in the Simulator: run setup, pair, approve, and have a real Claude Code session open a Space and draw a box. Report the time and the steps. Also show that an Allow tapped while the Link connection is dropped (`reflex link fault "lan:drop=1"`, then clear) still lands, and that an iPad paired with an older Link identity shows "scan again" while the Link's log stays quiet.
 ```
 
+## Step 11 tickets (the new shape: no agent writing)
+
+The person is cutting Reflex down to a native iPad writing app. You write with the Pencil, prompt by voice, and send the current screen to an agent. Agents no longer write on the canvas. T24 and T25 run at the same time. Steps 3 (a UI and UX redesign from the Freeform and Goodnotes research in `docs/research/`) and 4 (a better voice prompt and Send) come after them, in later tickets.
+
+# T24: Strip everything that only served agent writing (Mac side)
+
+## Goal
+Cut everything outside the iPad app that existed for agents writing on the canvas or for syncing Spaces. When this is done, the repo holds only what the new product needs. The Link does one job: it receives Sends from the paired iPad and hands them to Claude Code or Codex (`wait_for_user`, Claude Code channel push, webhook). Pairing, agent approval and `reflex setup` (T23) keep working.
+
+Why: in the first version the agent was slow and didn't know how to use the canvas. In the person's words: "everything looks shit and bland. it doesn't understand it at all... it's just way too much freedom it can't control itself." What worked was the input side: the person's marks, words and screen reaching the agent. The person: "i want to totally strip down as much as possible hard. bc with no agent writing a whole part of this is taken out." Less code means the next steps (native ink, the redesign, voice and Send) move fast.
+
+## Context
+- First, save today's full version on a branch, `archive/canvas-v0`, pushed to GitLab, so nothing is lost.
+- From the plan the person approved, these are removed:
+  - every way for the agent to write on the canvas: drawing, editing, undo, Recipes, Behaviors, Regions, Embeds, 3D and math layout;
+  - shared Spaces and invites;
+  - the web viewer and the author kit;
+  - the protocol package, the conformance tests and the 13 scenarios;
+  - the Relay's encrypted log and cloud agents (claude.ai through the Relay).
+- These are kept: pairing, agent approval, a connection to the Mac, and a small Link.
+- The person didn't decide whether the Relay stays as a way for the iPad to reach the Mac off the same network. Keep that path working as it does now.
+- T25 runs at the same time. It owns everything under `apps/ipad/`. It also removes the Rust kernel and Automerge everywhere, and replaces how a Send travels from the iPad to the Link, which today rides on the kernel's synced document.
+  - Leave the kernel and today's Send path in place, so Sends keep arriving from today's iPad app while you work.
+  - Both tickets edit `link/` and `agent/`. Whoever merges second rebases onto the other.
+- Update README, ARCHITECTURE, SPEC and the package READMEs so they describe the new shape, not the old one.
+
+## Constraints
+- Don't edit anything under `apps/ipad/` (T25).
+- Nothing public beyond the GitLab repo: no npm publish, tags or releases. Redeploying the Relay at reflex.eilmer.si needs the person's OK. If your change needs a redeploy, say so in the MR and don't deploy.
+- Never touch the relay.eilmer.si DNS record.
+- Don't run anything that prompts for a password or a keychain approval, and don't turn off the Mac's network.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output. Follow the `agent-testing` skill for all testing.
+
+# T25: Native ink, and the iPad cut down to write, speak and Send
+
+## Goal
+Make writing on the iPad feel like Apple's own apps, and cut the iPad app down to the new product. When this is done:
+- Strokes stay on the iPad in PencilKit, saved locally the way Apple's own apps do it, and nothing streams. The Pencil only talks to the screen.
+- Ink leaves the iPad only inside a Send.
+- The iPad no longer uses the Rust kernel or Automerge. They're removed from the repo, along with anything on the Link side that only fed them.
+- A Send still reaches the agent over the paired connection with what it carries today: what the person marked, their words, and images of the screen. It goes to Claude Code or Codex through the Link (`wait_for_user`, channel push, webhook).
+- Everything on the iPad that showed or handled what agents wrote is gone: agent elements, Recipes, Behaviors, Regions, Embeds, 3D, math layout, and shared Spaces and invites.
+- Pairing and agent approval work as T23 left them.
+
+Why: the person's first complaint about the TestFlight build: "it is a bit laggy sometimes i draw with pencil and the pencil drawing comes in too late. a bit unsmooth." Their direction: "fix the pencil lag by making it native local like regular apple apps instead of trying to stream it through a server." Ink that feels instant is the base of the whole product, because the person writes and then sends what they wrote to an agent.
+
+## Context
+- The plan promised measured numbers, not "feels better": profile ink on the person's real iPad (iPad13,6, iPadOS 27.2, connected to this Mac) before and after.
+  - You can't use an Apple Pencil, so draw with a finger. The person can draw with the Pencil for a final check if you ask.
+  - Two research agents drive that iPad through `agent-device`, Freeform now and Goodnotes next, one session at a time. Take your turn, and don't take the device over.
+- T24 runs at the same time and strips everything else outside `apps/ipad/`: the agent writing tools, shared Spaces on the Link, the web viewer, the protocol package, the conformance suite, the scenarios, and the Relay's log.
+  - You own `apps/ipad/`, removing the kernel and Automerge, and the new way a Send travels from the iPad to the Link.
+  - Both tickets edit `link/` and `agent/`. Whoever merges second rebases onto the other.
+- The person's current TestFlight build is 202611121334 (app "Reflex Canvas", bundle si.eilmer.reflex). People's existing pages on the iPad were made under the old storage.
+
+## Constraints
+- Steps 3 and 4 come later: don't redesign the UI, and don't rework voice or the Send flow beyond what removing the kernel needs.
+- Don't build or upload to TestFlight; the parent does that.
+- Don't run anything that prompts for a password or a keychain approval, and don't turn off the Mac's network.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output. Follow the `agent-testing` skill for all testing.
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
