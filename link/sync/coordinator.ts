@@ -23,13 +23,8 @@
 //   approver_decision { device, allow }         the answer, from an approving iPad
 //   refused       { space, reason }             the changes it sent to that Space were refused
 //
-// Changes a peer sends are taken only if they were its to make: an iPad
-// writes for its person, another Link for its person and the Agents it hosts,
-// and in a shared Space only as its role allows (link/sharing.ts; the kernel
-// checks every record they touch). A peer whose changes to a Space are refused
-// stops syncing that Space until it connects again. Another person's Link
-// (met through an invite) syncs only the Spaces it shares with this one, and
-// gets only the assets those Spaces refer to.
+// The retained document bridge accepts only this person's paired devices.
+// Peers may write only as their paired person. T25 replaces this with native Sends.
 //
 // A peer can be connected over several transports at once (LAN, Apple
 // peer-to-peer). Every path stays open and whatever arrives on any of them is
@@ -138,8 +133,6 @@ export class Coordinator {
   #transports: Transport[];
   #log: Log;
   #peers = new Map<string, Peer>();
-  /** Other people's Agents, named by the Links of the people who shared Spaces with this one, by the device that said so. */
-  #theirAgents = new Map<string, { id: string; name: string; color: string; from: string }>();
   #candidates = new Map<string, Candidate[]>();
   #dialing = new Set<string>();
   #timer: NodeJS.Timeout | null = null;
@@ -159,7 +152,7 @@ export class Coordinator {
   grantsApproval: (source: "terminal" | "admin") => boolean = () => false;
   /** What to do so an iPad may approve, for logs and for the iPad (link.ts). */
   approvalHint: () => string = () => "";
-  /** Messages the coordinator itself doesn't handle (the Relay's `relay_keys`, link/relay/sync.ts). */
+  /** Session extension point, including T25's send/send_ack messages. */
   onMessage: (p: Peer, h: Record<string, unknown>, body: Uint8Array) => void = () => {};
   constructor(opts: {
     me: Me;
@@ -514,7 +507,6 @@ export class Coordinator {
     this.#sendSpaces(peer);
     this.#send(peer, { t: "assets_have", hashes: this.#assets.list().filter((h) => this.#assetOk(peer, h)) });
     for (const id of this.#store.ids()) this.#pump(id, peer);
-    if (!this.#own(peer)) return this.#nameAgents(peer); // another person's Link: the shared Spaces, and who its Agents are
     if (mayApprove(this.#catalog.device(peer.device), this.#me.person.id))
       for (const a of this.pendingAgents()) this.#send(peer, { t: "agent_request", ...a });
     this.#sendAgents(peer);
@@ -540,16 +532,14 @@ export class Coordinator {
   /** Every Agent's name and color, so iPads can label Agent changes (their chips and history). */
   announceAgents(): void {
     for (const p of this.#peers.values()) if (this.#own(p)) this.#sendAgents(p);
-    else this.#nameAgents(p);
   }
 
   #sendAgents(p: Peer): void {
     const agents = this.#catalog.agents().map(({ id, name, color, status, requested_at }) => ({ id, name, color, status, requested_at }));
-    for (const a of this.#theirAgents.values()) if (!agents.some((x) => x.id === a.id)) agents.push({ id: a.id, name: a.name, color: a.color, status: "approved", requested_at: 0 });
     this.#send(p, { t: "agents", agents, approver: mayApprove(this.#catalog.device(p.device), this.#me.person.id) });
   }
 
-  /** Sends a control message to a peer on its active path (for link.ts's and shared.ts's own messages). */
+  /** Sends a control message to a peer on its active path (for session extensions). */
   send(p: Peer, h: Message["h"]): void {
     this.#send(p, h);
   }
@@ -562,15 +552,6 @@ export class Coordinator {
     const active = p.paths.active();
     const to = this.#everyPath && h.t === "sync" ? p.paths.all().map((e) => e.session) : active ? [active] : [];
     for (const s of to) void s.send(h, body, priority).catch((e: Error) => this.#log(`could not send ${h.t} to ${p.name} over ${s.path.transport}: ${e.message}`));
-  }
-
-  /** The names of this person's approved Agents, for the Links of people a Space is shared with: their iPads label those Agents' changes. */
-  #nameAgents(p: Peer): void {
-    const agents = this.#catalog
-      .agents()
-      .filter((a) => a.status === "approved")
-      .map(({ id, name, color }) => ({ id, name, color }));
-    this.#send(p, { t: "agent_names", agents });
   }
 
   /** Asks every connected iPad about an Agent waiting for approval. */
@@ -715,16 +696,6 @@ export class Coordinator {
         p.incoming.delete(key);
         if (this.#assets.putVerified(hash, Buffer.concat(inc.parts))) this.announceAsset(hash);
         else this.#log(`rejected asset ${hash} from ${p.name}: bytes do not match the hash`);
-        return;
-      }
-      case "agent_names": {
-        if (this.#own(p)) return;
-        for (const [id, a] of [...this.#theirAgents]) if (a.from === p.device) this.#theirAgents.delete(id);
-        for (const a of ((h.agents as { id?: unknown; name?: unknown; color?: unknown }[]) ?? []).slice(0, 100)) {
-          if (typeof a?.id !== "string" || !a.id.startsWith("a_") || this.#catalog.agent(a.id)) continue;
-          this.#theirAgents.set(a.id, { id: a.id, name: String(a.name ?? a.id).slice(0, 80), color: String(a.color ?? "violet").slice(0, 20), from: p.device });
-        }
-        for (const q of this.#peers.values()) if (this.#own(q)) this.#sendAgents(q);
         return;
       }
       case "agent_decision": {

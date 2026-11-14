@@ -69,4 +69,3 @@ function sock(ws: WebSocket): Sock {
     },
   };
 }
-

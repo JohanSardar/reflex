@@ -167,7 +167,6 @@ export interface AgentHostOptions {
   person: { id: string; name: string };
   socket: string;
   token: string;
-  devPerson: boolean;
   /** Spaces this person's Agents can't see: ones someone else shared with them (link/sharing.ts). */
   hidden?: (space: string) => boolean;
   /** How many of the person's devices are connected (not other Links), and the Spaces on their screens. */
@@ -196,6 +195,15 @@ const reaskMs = () => Number(process.env.REFLEX_REASK_S ?? 600) * 1000;
 export async function startAgentHost(o: AgentHostOptions) {
   const spaces = new LinkSpaces(o.store, o.db, o.inbox, o.hidden);
   o.inbox.recipientsFor = (space, send) => route(o.db, o.store, space, send);
+  // open_space no longer exists: approved receivers attach to iPad-created documents.
+  const attach = (agent: string) => {
+    for (const entry of spaces.list()) if (entry.kind === "space") spaces.attach(entry, agent);
+  };
+  o.store.onChange((space, origin) => {
+    if (origin !== "create") return;
+    const entry = spaces.get(space);
+    if (entry?.kind === "space") for (const agent of o.catalog.agents()) if (agent.status === "approved") spaces.attach(entry, agent.id);
+  });
   const names = Object.fromEntries(o.catalog.agents().map((a) => [a.id, a.name]));
   const inbox = new LinkInbox(o.inbox, o.store);
   const core = new Core({
@@ -268,6 +276,7 @@ export async function startAgentHost(o: AgentHostOptions) {
       );
     }
     if (a.status !== "approved") throw notApproved(a, `The person ${a.status} ${a.name}.`, "Call again to ask the person once more, and tell them to expect the question on their iPad or in the Link's terminal.");
+    attach(a.id);
     return { agent: a.id, name: a.name, color: a.color };
   }
 
@@ -339,6 +348,6 @@ export async function startAgentHost(o: AgentHostOptions) {
     return { ok: true, ...shown(pushes.get(t.id)!), secret, next: "Keep the secret in your receiver to check each request's reflex-signature. It is not shown again; adding the same URL again makes a new one." };
   };
 
-  const server = await serveHost({ core, socket: o.socket, token: o.token, authorize, devPerson: o.devPerson, listen, adapters: manage, log: o.log });
+  const server = await serveHost({ core, socket: o.socket, token: o.token, authorize, listen, adapters: manage, log: o.log });
   return { core, server, pushes, dispatcher, live: (t: PushTarget) => adapters.some((a) => a.name === t.adapter && a.liveSince(t) !== undefined) };
 }

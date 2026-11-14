@@ -29,4 +29,3 @@ export function unframe(b: Uint8Array): { device: string; ch: number; payload: U
   const ch = new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(1 + n);
   return { device, ch, payload: b.subarray(5 + n) };
 }
-

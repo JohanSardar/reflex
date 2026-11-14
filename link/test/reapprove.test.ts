@@ -72,7 +72,6 @@ test("a revoked Agent is asked about again, and the person can let it back in", 
     person: { id: "p_me", name: "Me" },
     socket: join(dir, "agent.sock"),
     token: "t".repeat(32),
-    devPerson: false,
     // The person, answering on the iPad or in the terminal.
     announce: (a) => {
       asked.push(a);

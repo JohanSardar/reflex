@@ -44,7 +44,6 @@ export type Who = { name: string; credential: string };
 export type ClientFrame =
   | { t: "hello"; token: string; client: string }
   | { t: "call"; id: number; tool: string; args: unknown; who: Who }
-  | { t: "person"; id: number; action: string; args: Record<string, any> }
   | { t: "cancel"; id: number }
   /** Opens a push target for this Agent (a Send Adapter on this connection), held until the connection closes. */
   | { t: "listen"; id: number; who: Who; adapter: string; config: Record<string, unknown> }

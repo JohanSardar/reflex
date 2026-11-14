@@ -105,10 +105,8 @@ class RelayPath implements Path {
   }
 }
 
-type Pending = { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
-
 export class RelayTransport implements Transport {
-  /** "relay" for this person's own room; another name for a room shared with someone else (link/sharing.ts). */
+  /** The live paired-device forwarding transport. */
   readonly name: string;
   readonly url: string;
   #key: DeviceKey;
@@ -124,14 +122,10 @@ export class RelayTransport implements Transport {
   #paths = new Map<string, RelayPath>();
   #online = new Set<string>();
   #nextCh = 1;
-  #req = 0;
-  #pending = new Map<number, Pending>();
   #watched = "";
   #timer: NodeJS.Timeout | null = null;
   /** Called each time the relay welcomes this device (on every reconnect). */
   onReady: () => void = () => {};
-  /** A log this device watches has new entries. */
-  onLogNew: (log: string, last: number) => void = () => {};
 
   constructor(o: { url: string; key: DeviceKey; room: () => string; watch: () => string[]; log: (m: string) => void; name?: string }) {
     this.name = o.name ?? "relay";
@@ -144,11 +138,6 @@ export class RelayTransport implements Transport {
 
   get connected(): boolean {
     return this.#ready;
-  }
-
-  /** The relay's HTTP origin (for assets). */
-  get httpUrl(): string {
-    return this.url.replace(/^ws/, "http");
   }
 
   async listen(onPath: (p: Path) => void): Promise<{ port: number }> {
@@ -181,21 +170,6 @@ export class RelayTransport implements Transport {
     this.#ws?.close(1000, "link stopping");
   }
 
-  // ---------- requests (logs, grants, sign-ins) ----------
-
-  request(msg: Record<string, unknown>, ms = 20_000): Promise<Record<string, unknown>> {
-    if (!this.#ready) return Promise.reject(new Error(`not connected to the relay at ${this.url}`));
-    const req = ++this.#req;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.#pending.delete(req);
-        reject(new Error(`the relay did not answer ${String(msg.t)}`));
-      }, ms);
-      this.#pending.set(req, { resolve, reject, timer });
-      this.control({ ...msg, req });
-    });
-  }
-
   // ---------- the socket ----------
 
   #connect(): void {
@@ -213,11 +187,6 @@ export class RelayTransport implements Transport {
       this.#ready = false;
       this.#watched = "";
       for (const p of [...this.#paths.values()]) p.finish("relay connection closed");
-      for (const [, r] of this.#pending) {
-        clearTimeout(r.timer);
-        r.reject(new Error("relay connection closed"));
-      }
-      this.#pending.clear();
       this.#online.clear();
       if (was && this.name === "relay") this.#log(`relay: disconnected from ${this.url} (${ev.code}${ev.reason ? ` ${ev.reason}` : ""})`);
       if (this.#stopped) return;
@@ -263,18 +232,7 @@ export class RelayTransport implements Transport {
         p?.finish(m.t === "close" ? "closed by the other device" : `${m.device} is not reachable on the relay`);
         return;
       }
-      case "result": {
-        const r = this.#pending.get(m.req);
-        if (!r) return;
-        this.#pending.delete(m.req);
-        clearTimeout(r.timer);
-        if (m.ok) r.resolve(m);
-        else r.reject(new Error(String(m.error)));
-        return;
-      }
-      case "log.new":
-        this.onLogNew(String(m.log), Number(m.last));
-        return;
+
     }
   }
 

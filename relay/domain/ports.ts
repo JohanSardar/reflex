@@ -11,4 +11,3 @@ export interface SockState {
   device?: string;
   watch: string[];
 }
-

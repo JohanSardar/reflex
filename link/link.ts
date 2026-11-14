@@ -39,7 +39,6 @@ import { SpaceStore } from "./storage/journal.ts";
 import { Coordinator, type Peer } from "./sync/coordinator.ts";
 import { startAgentHost } from "./agent-host.ts";
 import { route } from "./routing.ts";
-import { Presence } from "./presence.ts";
 import { socketPath as agentSocketPath } from "../agent/src/host/rpc.ts";
 import { FaultTransport, parseFaults } from "./transports/fault.ts";
 import { LanTransport } from "./transports/lan.ts";
@@ -68,8 +67,6 @@ export interface LinkOptions {
   port?: number;
   /** Use this terminal: show a pairing code on start and on Enter, and ask about new Agents. */
   prompt?: boolean;
-  /** Allow acting as the person without an iPad (`dev` commands, `reflex dev person`). */
-  dev?: boolean;
   /** A Reflex Relay to connect paired devices through (ws:// or wss://). */
   relay?: string;
   /** Listen and discover on the local network (default true). */
@@ -230,8 +227,6 @@ export class Link {
       person: this.#id.person,
       socket: agentSocketPath(this.dir),
       token: this.#keys.rpc,
-      devPerson: Boolean(this.#opts.dev),
-      // Someone else's Space shared with this person: this person's own Agents don't see it.
       announce: (a) => this.#announce(a),
       remind: (a) => this.#coord.askAboutAgent({ id: a.id, name: a.name, color: a.color, requested_at: a.requested_at }),
       decision: (id, ms, signal) => this.#waitDecision(id, ms, signal),
@@ -281,10 +276,8 @@ export class Link {
       void this.showPairingCode();
     });
     if (this.#ports.lan !== undefined) void this.showPairingCode();
-    process.stdout.write("To share a Space with someone: invite <space> [editor|viewer]. Then role <space> <person> <editor|viewer>, remove <space> <person>, shares.\n");
   }
 
-  /** The person shares a Space from this terminal: invite, role, remove, shares. */
   async showPairingCode(): Promise<void> {
     const uri = this.pairingCode("terminal");
     const qr = await qrText(uri);
@@ -338,8 +331,8 @@ export class Link {
     const ipads = this.#approvers().map((d) => d.name);
     process.stdout.write(
       ipads.length
-        ? `\n>>> "${a.name}" (${a.id}) asks to use your Spaces. Tap Allow on your iPad (${ipads.join(", ")}). Type n and Enter here to refuse.\n`
-        : `\n>>> Allow "${a.name}" (${a.id}) to use your Spaces? Type y and Enter here, or tap Allow on your iPad. [y/N]\n`,
+        ? `\n>>> "${a.name}" (${a.id}) asks to receive your Sends. Tap Allow on your iPad (${ipads.join(", ")}). Type n and Enter here to refuse.\n`
+        : `\n>>> Allow "${a.name}" (${a.id}) to receive your Sends? Type y and Enter here, or tap Allow on your iPad. [y/N]\n`,
     );
   }
 
@@ -519,7 +512,7 @@ export class Link {
 
   /** Asks the person about a new Agent: on every connected iPad, and on this terminal. */
   #announce(a: AgentRecord): void {
-    this.#log(`new Agent "${a.name}" (${a.id}) wants to use your Spaces. Allow it on your iPad or answer here.`);
+    this.#log(`new Agent "${a.name}" (${a.id}) wants to receive your Sends. Allow it on your iPad or answer here.`);
     this.#coord.askAboutAgent({ id: a.id, name: a.name, color: a.color, requested_at: a.requested_at });
     if (!this.#rl) return;
     this.#questions.push(a);

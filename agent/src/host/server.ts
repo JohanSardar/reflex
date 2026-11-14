@@ -25,8 +25,6 @@ export type HostOptions = {
   token: string;
   /** Who a caller is, once the person approved it; throws a ReflexError otherwise. */
   authorize: (who: Who, signal: AbortSignal, progress?: (p: { elapsed_s: number; timeout_s: number; message: string }) => void) => Promise<Identity>;
-  /** `reflex dev person`: only on a Link started with --dev. */
-  devPerson: boolean;
   /** Registers a push target; returns its ID, or throws a ReflexError when it isn't accepted. */
   listen?: (l: Listener) => string;
   /** Adds, lists or removes the caller's push targets that need no connection (`reflex adapters`). */
@@ -127,6 +125,8 @@ export function serveHost(o: HostOptions): Promise<Server> {
           log("adapters", { client, who: who.name, action: f.action });
           send({ t: "result", id: f.id, json, images: [], isError: false });
 
+        } else {
+          throw new ReflexError("invalid_input", [{ code: "invalid_input", msg: "Unknown receiver request.", fix: "Use wait_for_user or a Send adapter." }]);
         }
       } catch (e) {
         if (e instanceof ReflexError) send({ t: "result", id: f.id, json: { ok: false, ...e.body }, images: [], isError: true });

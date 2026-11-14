@@ -18,4 +18,3 @@ export async function verifyEd25519(publicRaw: Uint8Array, msg: Uint8Array | str
 export function deviceIdFor(publicRaw: Uint8Array): string {
   return "dev-" + hex(sha256(publicRaw)).slice(0, 16);
 }
-

@@ -26,7 +26,7 @@ export interface PushTarget {
   /** The adapter's settings, checked against its `config` schema. No secrets. */
   config: Record<string, unknown>;
   /**
-   * How the receiving side answers. Every adapter's receiver replies with Reflex tools (`apply(in_reply_to)`,
+   * How the receiving side answers. Every adapter's receiver acknowledges with Reflex tools (
    * `wait_for_user(after)`), over MCP or the CLI: `mcp` for a session or view on an MCP connection, `tools`
    * for a webhook receiver that calls them itself.
    */

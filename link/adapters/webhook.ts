@@ -5,7 +5,7 @@
 // target's own secret (kept by the Link, link/adapters/store.ts). A 2xx answer
 // is the receiver's acknowledgement that it took the Send: the push counts as
 // one delivery, and the Agent then answers it with Reflex tools as usual
-// (`apply(in_reply_to)`, `wait_for_user(after)`). A network error, a timeout
+// ( `wait_for_user(after)`). A network error, a timeout
 // or a 5xx/429 is tried again after 1 s and 5 s; any other answer, or the last
 // failure, leaves the Send in the Inbox for wait_for_user.
 //
