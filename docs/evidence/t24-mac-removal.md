@@ -38,3 +38,11 @@ The MCP check used the SDK's stdio client against `node agent/bin/reflex.mjs mcp
 Ran the real `reflex setup --home <temporary-profile> --bin <temporary-bin> --no-claude --no-codex --no-wait`. Existing personal harness settings were not modified. It exited zero, built the Apple peer-to-peer helper, started the background Link, and displayed the iPad pairing instructions. `reflex link status --json` showed LAN port 7420, zero paired devices/agents and Relay disabled for this isolated profile. `reflex link stop` stopped it successfully. Temporary profiles and receivers were cleaned up.
 
 No iPad application UI was driven: the iPad app belongs to T25. Its real wire/client behavior was exercised by the program above. No Relay deployment, DNS changes, tags, releases or npm publishing occurred.
+
+## Sol review ledger
+
+One round with GPT-6.1 Sol, medium effort, in a separate checkout. Verdict: APPROVE on behavior commit `f8a126ac631a998f97d217a3dfccd01498c54c3c`. No blocker, should-fix or nit findings; no fixes or tests added. No declined findings. Usage was not exposed.
+
+The reviewer independently passed the kernel WASM build, typecheck, all seven focused approval/reapproval/stop/terminal checks, and real kernel peer sync → RPC Send delivery → redelivery → acknowledgement. Removed `apply` was rejected.
+
+Behavior diff before and after review: 418 files, 347 insertions, 40,684 deletions. This review record is the only post-review change. The reviewed implementation was pushed; no MR watch or merge was performed.
