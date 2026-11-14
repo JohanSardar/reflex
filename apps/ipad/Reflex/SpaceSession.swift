@@ -167,6 +167,18 @@ final class BoardSession {
         refreshUndo()
         updateMeta { $0.modified = Date(); $0.hasContent = true }
         scheduleSave()
+        scheduleHistorySave()
+    }
+
+    /// Undo history is kept with the board as it changes, so it survives a relaunch (or a crash).
+    @ObservationIgnored private var historyTask: Task<Void, Never>?
+    private func scheduleHistorySave() {
+        historyTask?.cancel()
+        historyTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let self else { return }
+            self.saveHistory()
+        }
     }
 
     private var current: Snapshot { Snapshot(drawing: ink.drawing, objects: objects) }
@@ -196,6 +208,7 @@ final class BoardSession {
         refreshUndo()
         updateMeta { $0.modified = Date() }
         scheduleSave()
+        scheduleHistorySave()
     }
 
     private func refreshUndo() {
@@ -229,10 +242,21 @@ final class BoardSession {
         }
     }
 
+    /// The history only applies to the ink it was saved with. PencilKit doesn't re-encode a
+    /// drawing to the same bytes, so the strokes are compared instead.
+    private static func sameInk(_ data: Data, _ drawing: PKDrawing) -> Bool {
+        if data == drawing.dataRepresentation() { return true }
+        guard let saved = try? PKDrawing(data: data), saved.strokes.count == drawing.strokes.count else { return false }
+        return zip(saved.strokes, drawing.strokes).allSatisfy { a, b in
+            a.path.count == b.path.count && abs(a.renderBounds.minX - b.renderBounds.minX) < 0.5 && abs(a.renderBounds.minY - b.renderBounds.minY) < 0.5
+                && abs(a.renderBounds.width - b.renderBounds.width) < 0.5
+        }
+    }
+
     private func loadHistory() {
         guard let data = try? Data(contentsOf: files.history),
               let saved = try? BoardFiles.decoder.decode(SavedHistory.self, from: data),
-              saved.current == ink.drawing.dataRepresentation() else { return }
+              Self.sameInk(saved.current, ink.drawing) else { return }
         let decode = { (steps: [SavedStep]) in
             steps.compactMap { s in (try? PKDrawing(data: s.drawing)).map { (name: s.name, state: Snapshot(drawing: $0, objects: s.objects)) } }
         }
@@ -284,58 +308,70 @@ final class BoardSession {
     func newFrame(_ base: CGSize, at point: CGPoint? = nil) -> CGRect {
         // Zoomed out, new things come in big enough to see and type into.
         let k = 1 / min(max(ink.zoomScale, 0.35), 1)
-        let size = CGSize(width: base.width * k, height: base.height * k)
-        let r = ink.visibleRect
-        let c = point ?? freeSpot(for: size, near: CGPoint(x: r.midX, y: r.midY), in: r)
+        var size = CGSize(width: base.width * k, height: base.height * k)
+        let usable = usableRect
+        // Never bigger than the free part of the screen (a tall photo would run under the chrome).
+        let fit = min(1, usable.width * 0.8 / max(size.width, 1), usable.height * 0.8 / max(size.height, 1))
+        size = CGSize(width: size.width * fit, height: size.height * fit)
+        let c = point ?? freeSpot(for: size, in: usable)
         return CGRect(x: c.x - size.width / 2, y: c.y - size.height / 2, width: size.width, height: size.height).integral
     }
 
-    /// The centre of a free spot for a new object: the middle of the view if nothing is there,
-    /// else the nearest clear place around it, else a step down and right from the last insert.
-    private func freeSpot(for size: CGSize, near c: CGPoint, in view: CGRect) -> CGPoint {
-        let gap: CGFloat = 24
-        func clear(_ p: CGPoint) -> Bool {
-            let f = CGRect(x: p.x - size.width / 2, y: p.y - size.height / 2, width: size.width, height: size.height)
-            guard view.insetBy(dx: 20, dy: 60).contains(f) else { return false }
-            let padded = f.insetBy(dx: -gap / 2, dy: -gap / 2)
-            return !objects.contains { !$0.isConnector && $0.frame.intersects(padded) }
+    /// The part of the view not under the chrome (top bar, bottom capsules, the palette), in Space points.
+    private var usableRect: CGRect {
+        let z = ink.zoomScale, o = ink.contentOffset, size = ink.canvasView.bounds.size
+        let top: CGFloat = 96
+        var bottom: CGFloat = 92
+        let pal = ink.pickerObscured
+        if ink.pickerVisible, !pal.isNull, pal.width > size.width * 0.4, pal.minY > size.height * 0.5 {
+            bottom = max(bottom, size.height - pal.minY + 80)
         }
-        if clear(c) { return c }
-        let dx = size.width + gap, dy = size.height + gap
-        for ring in 1 ... 3 {
-            var spots: [CGPoint] = []
-            for i in -ring ... ring {
-                for j in -ring ... ring where max(abs(i), abs(j)) == ring {
-                    spots.append(CGPoint(x: c.x + CGFloat(i) * dx, y: c.y + CGFloat(j) * dy))
-                }
-            }
-            if let best = spots.filter(clear).min(by: { hypot($0.x - c.x, $0.y - c.y) < hypot($1.x - c.x, $1.y - c.y) }) { return best }
+        var right: CGFloat = 20
+        if ink.pickerVisible, !pal.isNull, pal.minX > size.width * 0.6, pal.height > size.height * 0.4 {
+            right = max(right, size.width - pal.minX + 12)
         }
-        // Nothing fully clear (a big image, a crowded view): take the visible spot that covers least.
+        let screen = CGRect(x: 20, y: top, width: max(size.width - 20 - right, 100), height: max(size.height - top - bottom, 100))
+        return CGRect(x: (screen.minX + o.x) / z, y: (screen.minY + o.y) / z, width: screen.width / z, height: screen.height / z)
+    }
+
+    /// The centre of a free spot for a new object. Objects and ink count as taken; the spot nearest
+    /// the middle of the free view wins. With no room in view, the board pans to the nearest
+    /// clear place; with none there either, the least-covered spot in view is used.
+    private func freeSpot(for size: CGSize, in view: CGRect) -> CGPoint {
+        let gap: CGFloat = 24 / max(ink.zoomScale, 0.1)
+        let c = CGPoint(x: view.midX, y: view.midY)
+        let search = view.insetBy(dx: -view.width * 1.5, dy: -view.height * 1.5)
+        var taken = objects.filter { !$0.isConnector }.map(\.frame)
+        taken += ink.strokes.map(\.bounds)
+        taken = taken.filter { $0.intersects(search) }.map { $0.insetBy(dx: -gap / 2, dy: -gap / 2) }
+        func rect(_ p: CGPoint) -> CGRect { CGRect(x: p.x - size.width / 2, y: p.y - size.height / 2, width: size.width, height: size.height) }
         func covered(_ p: CGPoint) -> CGFloat {
-            let f = CGRect(x: p.x - size.width / 2, y: p.y - size.height / 2, width: size.width, height: size.height)
-            return objects.filter { !$0.isConnector }.reduce(0) { sum, o in
-                let i = o.frame.intersection(f)
+            let f = rect(p)
+            return taken.reduce(0) { sum, t in
+                let i = t.intersection(f)
                 return sum + (i.isNull ? 0 : i.width * i.height)
             }
         }
-        let step = max(min(size.width, size.height) / 2, 60)
-        var candidates: [CGPoint] = []
-        var y = view.minY + 60 + size.height / 2
-        while y <= view.maxY - 90 - size.height / 2 {
-            var x = view.minX + 20 + size.width / 2
-            while x <= view.maxX - 20 - size.width / 2 { candidates.append(CGPoint(x: x, y: y)); x += step }
-            y += step
+        func grid(_ area: CGRect) -> [CGPoint] {
+            let step = max(min(size.width, size.height) / 3, 24 / max(ink.zoomScale, 0.1))
+            var out: [CGPoint] = []
+            var y = area.minY + size.height / 2
+            while y <= area.maxY - size.height / 2 + 0.5 {
+                var x = area.minX + size.width / 2
+                while x <= area.maxX - size.width / 2 + 0.5 { out.append(CGPoint(x: x, y: y)); x += step }
+                y += step
+            }
+            return out.isEmpty ? [c] : out
         }
-        if let best = candidates.min(by: { (covered($0), hypot($0.x - c.x, $0.y - c.y)) < (covered($1), hypot($1.x - c.x, $1.y - c.y)) }),
-           covered(best) < covered(c) {
-            return best
+        let near = { (a: CGPoint, b: CGPoint) in hypot(a.x - c.x, a.y - c.y) < hypot(b.x - c.x, b.y - c.y) }
+        let inView = grid(view)
+        if let best = inView.filter({ covered($0) == 0 }).min(by: near) { return best }
+        // Nothing free in view: the nearest free place around it, brought into view.
+        if let away = grid(search).filter({ !view.contains(rect($0)) && covered($0) == 0 }).min(by: near) {
+            ink.show(center: away, zoom: ink.zoomScale, animated: true)
+            return away
         }
-        if let last = lastInsertCenter, view.contains(last) {
-            lastInsertCenter = CGPoint(x: last.x + gap, y: last.y + gap)
-            return lastInsertCenter!
-        }
-        return c
+        return inView.min { (covered($0), hypot($0.x - c.x, $0.y - c.y)) < (covered($1), hypot($1.x - c.x, $1.y - c.y)) } ?? c
     }
 
     func addSticky(at point: CGPoint? = nil) {
@@ -923,6 +959,8 @@ final class BoardSession {
 
     /// When the last Send was saved, for the button's checkmark.
     var lastSendOK: Date?
+    /// The palette was open when a sticky or text box was placed from it: reopen it after typing.
+    var paletteAfterEditing = false
     /// Sends being put together (handwriting hints, crop) before they're saved.
     var preparingSends = 0
 }

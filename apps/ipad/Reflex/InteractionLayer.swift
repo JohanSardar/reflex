@@ -209,6 +209,8 @@ struct InteractionLayer: View {
             .contentShape(Rectangle())
             .onTapGesture(coordinateSpace: .local) { loc in
                 let p = toSpace(loc)
+                // Typing hides the palette; it comes back, with the last pen, when typing ends.
+                session.paletteAfterEditing = tool != "reflex.shape"
                 switch tool {
                 case "reflex.sticky": session.addSticky(at: p)
                 case "reflex.text": session.addText(at: p)

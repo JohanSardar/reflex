@@ -65,7 +65,16 @@ struct BoardScreen: View {
             keepEditingAboveKeyboard()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardTop = .infinity }
-        .onChange(of: session.editing) { keepEditingAboveKeyboard() }
+        .onChange(of: session.editing) { old, new in
+            keepEditingAboveKeyboard()
+            if new == nil, old != nil, session.paletteAfterEditing {
+                session.paletteAfterEditing = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    ink.setPickerVisible(true)
+                    ink.pickInkTool()
+                }
+            }
+        }
         .onAppear {
             ink.fingerDraws = fingerDraws
             applyPaperStyle()
