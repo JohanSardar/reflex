@@ -1,0 +1,16 @@
+{
+  "tools": [
+    "wait_for_user"
+  ],
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"kind\":\"send\",\"send\":\"s_7ba112083b6c4a9ba697d856babb8f9c\",\"space\":\"page_49aecc25efdc4f0792caa3ad42461465\",\"from\":{\"person\":\"p_fb5867011117\",\"name\":\"johansardar\"},\"trigger\":\"button\",\"marks\":[{\"id\":\"m1\",\"kind\":\"ink\",\"strokes\":[\"ink_647765f4b93d\"],\"bounds\":[158,308,164,17],\"at\":1794640511713,\"end\":1794640511737,\"image\":1}],\"strokes\":[{\"points\":[[160,310,0,1],[240,330,12,1],[320,310,24,1]],\"id\":\"ink_647765f4b93d\",\"at\":1794640511713,\"width\":3,\"bounds\":[158,308,164,17],\"color\":\"black\"}],\"scene\":[{\"id\":\"ink_786e6d9b8e27\",\"bounds\":[158,158,164,30]},{\"id\":\"ink_647765f4b93d\",\"bounds\":[158,308,164,17]}],\"changes\":[],\"viewport\":[-40,-140,1032,1376],\"images\":[{\"n\":1,\"shows\":\"What the person saw when they pressed Send\",\"bounds\":[98,248,284,137]}],\"also_sent_to\":[],\"redelivered\":false,\"pending_after\":2,\"next\":\"Acknowledge with wait_for_user(after: 's_7ba112083b6c4a9ba697d856babb8f9c').\"}"
+    },
+    {
+      "type": "image",
+      "mimeType": "image/png",
+      "bytes": 14628
+    }
+  ]
+}

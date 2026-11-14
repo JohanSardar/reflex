@@ -199,7 +199,7 @@ public final class LinkSync {
         return id
     }
 
-    /// Where a replica is saved: Spaces/<id>, or LocalOnly/<id> for one kept from an earlier pairing.
+    /// Where a local page is saved: Spaces/<id>, or LocalOnly/<id> for one kept from an earlier pairing.
     private static func folder(_ key: String) -> URL {
         key.hasPrefix(localPrefix)
             ? localOnlyDir.appending(path: String(key.dropFirst(localPrefix.count)), directoryHint: .isDirectory)
@@ -591,8 +591,7 @@ public final class LinkSync {
         activeTransport = paths.active?.transport
     }
 
-    /// A new path. The first one starts anti-entropy from scratch for every Space; a second one
-    /// (the other transport) joins as another way to reach the same Link.
+    /// A new authenticated path to the paired Link.
     private func bind(_ s: Session) {
         if let old = paths.on(s.transport) {
             old.close()
@@ -607,7 +606,7 @@ public final class LinkSync {
         Task { await loop(s) }
     }
 
-    /// Starts over on the path changes go out on: anti-entropy for every Space, and assets.
+    /// Replay outstanding Sends and approval decisions over a fresh path.
     private func fresh(_ s: Session) {
         deliverPending(s)
         // Answers the Link hasn't confirmed: every new path carries them again.

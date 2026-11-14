@@ -6,8 +6,7 @@ import SwiftUI
 
 private let log = Logger(subsystem: "si.eilmer.reflex", category: "canvas")
 
-/// The app: the open Space (its Elements, the person's Ink on top, the toolbar
-/// and the Send button), the Space picker, pairing, and Agent approval.
+/// The local ink page, tools, voice and Send, page picker, pairing and Agent approval.
 struct CanvasScreen: View {
     @State private var link = LinkSync(deviceName: UIDevice.current.name)
     @State private var open: SpaceSession?

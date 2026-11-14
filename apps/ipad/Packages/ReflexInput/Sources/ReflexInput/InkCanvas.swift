@@ -34,8 +34,7 @@ public final class InkCanvasController: NSObject {
     public var penColor: UIColor = .black { didSet { applyTool() } }
     public private(set) var canUndo = false
     public private(set) var canRedo = false
-    /// Where the canvas is scrolled to and its zoom, so Elements drawn under the
-    /// Ink can follow it.
+    /// The viewport used to capture a Send and position the stroke-ID overlay.
     public private(set) var contentOffset: CGPoint = .zero
     public private(set) var zoomScale: CGFloat = 1
     public private(set) var strokes: [InkStrokeInfo] = []
@@ -78,7 +77,7 @@ public final class InkCanvasController: NSObject {
         canvasView.minimumZoomScale = 0.25
         canvasView.maximumZoomScale = 4
         canvasView.contentInsetAdjustmentBehavior = .never
-        // Room above and left of the Space's origin, so what Agents place at (0, 0) isn't under the toolbar.
+        // Room above and left of the page origin for the toolbar.
         canvasView.contentInset = UIEdgeInsets(top: Self.margin.height, left: Self.margin.width, bottom: 0, right: 0)
         canvasView.contentOffset = CGPoint(x: -Self.margin.width, y: -Self.margin.height)
         contentOffset = canvasView.contentOffset

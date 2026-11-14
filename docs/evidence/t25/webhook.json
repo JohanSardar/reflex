@@ -1,0 +1,182 @@
+{
+  "signatureValid": true,
+  "bundle": {
+    "kind": "send",
+    "send": "s_5c3444bf5970419390a62096691f6ab8",
+    "space": "page_49aecc25efdc4f0792caa3ad42461465",
+    "from": {
+      "person": "p_fb5867011117",
+      "name": "johansardar"
+    },
+    "trigger": "button",
+    "marks": [
+      {
+        "id": "m1",
+        "kind": "ink",
+        "strokes": [
+          "ink_f6eee6aa5ba8"
+        ],
+        "bounds": [
+          198,
+          588,
+          232,
+          23
+        ],
+        "at": 1794640667099,
+        "end": 1794640667282,
+        "image": 1
+      }
+    ],
+    "strokes": [
+      {
+        "points": [
+          [
+            200,
+            590,
+            0,
+            0.5
+          ],
+          [
+            216,
+            591.5,
+            17,
+            0.5
+          ],
+          [
+            235.5,
+            593,
+            33,
+            0.5
+          ],
+          [
+            256.5,
+            594.5,
+            50,
+            0.5
+          ],
+          [
+            278.5,
+            596.5,
+            67,
+            0.5
+          ],
+          [
+            301.5,
+            598.5,
+            83,
+            0.5
+          ],
+          [
+            324,
+            600.5,
+            100,
+            0.5
+          ],
+          [
+            347,
+            602,
+            117,
+            0.5
+          ],
+          [
+            369,
+            604,
+            133,
+            0.5
+          ],
+          [
+            390.5,
+            606,
+            150,
+            0.5
+          ],
+          [
+            410,
+            607.5,
+            167,
+            0.5
+          ],
+          [
+            427.5,
+            609,
+            183,
+            0.5
+          ]
+        ],
+        "at": 1794640667099,
+        "id": "ink_f6eee6aa5ba8",
+        "width": 3.4339520931243896,
+        "bounds": [
+          198,
+          588,
+          232,
+          23
+        ],
+        "color": "black"
+      }
+    ],
+    "scene": [
+      {
+        "id": "ink_786e6d9b8e27",
+        "bounds": [
+          158,
+          158,
+          164,
+          30
+        ]
+      },
+      {
+        "id": "ink_647765f4b93d",
+        "bounds": [
+          158,
+          308,
+          164,
+          17
+        ]
+      },
+      {
+        "id": "ink_47cab9c6f671",
+        "bounds": [
+          198,
+          458,
+          232,
+          23
+        ]
+      },
+      {
+        "id": "ink_f6eee6aa5ba8",
+        "bounds": [
+          198,
+          588,
+          232,
+          23
+        ]
+      }
+    ],
+    "changes": [],
+    "viewport": [
+      -40,
+      -140,
+      1032,
+      1376
+    ],
+    "images": [
+      {
+        "n": 1,
+        "shows": "What the person saw when they pressed Send",
+        "bounds": [
+          138,
+          528,
+          352,
+          143
+        ],
+        "mime": "image/png",
+        "bytes": 19891
+      }
+    ],
+    "also_sent_to": [],
+    "redelivered": false,
+    "pending_after": 3,
+    "next": "Acknowledge with wait_for_user(after: 's_5c3444bf5970419390a62096691f6ab8', timeout_s: 0). Then end your turn; the next Send is pushed to you."
+  }
+}
