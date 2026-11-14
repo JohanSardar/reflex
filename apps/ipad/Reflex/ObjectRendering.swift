@@ -81,10 +81,16 @@ struct BoardShape: Shape {
 
 enum ConnectorGeometry {
     /// Where the line from a rectangle's middle toward a point leaves the rectangle.
-    static func edgePoint(of r: CGRect, toward p: CGPoint) -> CGPoint {
+    static func edgePoint(of r: CGRect, toward p: CGPoint, oval: Bool = false) -> CGPoint {
         let c = CGPoint(x: r.midX, y: r.midY)
         let dx = p.x - c.x, dy = p.y - c.y
         guard dx != 0 || dy != 0 else { return c }
+        if oval {
+            // Where the ray meets the ellipse, plus a small gap.
+            let a = r.width / 2 + 6, b = r.height / 2 + 6
+            let s = 1 / sqrt((dx * dx) / (a * a) + (dy * dy) / (b * b))
+            return CGPoint(x: c.x + dx * s, y: c.y + dy * s)
+        }
         let sx = dx == 0 ? .infinity : (r.width / 2 + 6) / abs(dx)
         let sy = dy == 0 ? .infinity : (r.height / 2 + 6) / abs(dy)
         let s = min(sx, sy)

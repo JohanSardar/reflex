@@ -38,10 +38,23 @@ public final class ReflexCanvasView: PKCanvasView {
     public let boardUndo = BoardUndoManager()
     override public var undoManager: UndoManager? { boardUndo }
     public var onLayout: (() -> Void)?
+    /// PencilKit's own edit menu (Select All, Insert Space) would sit on top of Reflex's
+    /// canvas menu and lasso, which cover ink and objects together.
+    override public func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool { false }
     override public func layoutSubviews() {
         super.layoutSubviews()
+        removeEditMenus(self)
         onLayout?()
     }
+
+    private func removeEditMenus(_ view: UIView) {
+        for i in view.interactions where i is UIEditMenuInteraction { view.removeInteraction(i) }
+        for g in view.gestureRecognizers ?? [] where String(describing: type(of: g)).contains("EditMenu") || String(describing: type(of: g)).contains("InsertSpace") {
+            g.isEnabled = false
+        }
+        for v in view.subviews { removeEditMenus(v) }
+    }
+
 }
 
 /// Owns the PencilKit canvas for one board: Apple's tool picker, stroke
@@ -89,6 +102,7 @@ public final class InkCanvasController: NSObject {
     @ObservationIgnored private var ledger: StrokeLedger
     @ObservationIgnored private var portableCache: [String: PortableStroke] = [:]
     @ObservationIgnored private var undoGestures: [UIGestureRecognizer] = []
+    @ObservationIgnored private var paletteWatch: Task<Void, Never>?
 
     public init(space: String, customItems: [PKToolPickerCustomItem] = []) {
         store = InkStore(space: space)
@@ -150,6 +164,44 @@ public final class InkCanvasController: NSObject {
         if visible { canvasView.becomeFirstResponder() } else { canvasView.resignFirstResponder() }
         pickerVisible = visible
         applyPolicy()
+        refreshObscured()
+        // The person can drag the palette to another edge; follow it while it's open.
+        paletteWatch?.cancel()
+        if visible {
+            paletteWatch = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(700))
+                    guard let self, self.pickerVisible else { return }
+                    self.refreshObscured()
+                }
+            }
+        }
+    }
+
+    /// The palette animates in, so its frame is read again once it has settled. The floating
+    /// palette of iPadOS 26 reports no obscured frame, so its view is found in the windows.
+    private func refreshObscured() {
+        for delay in [0.05, 0.45] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, let window = self.canvasView.window else { return }
+                var r = self.toolPicker.isVisible ? self.toolPicker.frameObscured(in: window) : .null
+                if self.toolPicker.isVisible, r.isNull { r = Self.paletteFrame(in: window) }
+                if r != self.pickerObscured { self.pickerObscured = r }
+            }
+        }
+    }
+
+    private static func paletteFrame(in window: UIWindow) -> CGRect {
+        func find(_ v: UIView) -> UIView? {
+            if String(describing: type(of: v)) == "PKDrawingPaletteView" { return v }
+            for s in v.subviews { if let f = find(s) { return f } }
+            return nil
+        }
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        for w in windows {
+            if let v = find(w), !v.isHidden, v.alpha > 0.01 { return v.convert(v.bounds, to: nil) }
+        }
+        return .null
     }
 
     /// Picks an ink tool again after a Reflex tool has been used.
@@ -506,11 +558,11 @@ extension InkCanvasController: PKToolPickerObserver {
             pickerVisible = toolPicker.isVisible
             applyPolicy()
         }
+        refreshObscured()
     }
 
     public func toolPickerFramesObscuredDidChange(_ toolPicker: PKToolPicker) {
-        guard let window = canvasView.window else { return }
-        pickerObscured = toolPicker.frameObscured(in: window)
+        refreshObscured()
     }
 }
 

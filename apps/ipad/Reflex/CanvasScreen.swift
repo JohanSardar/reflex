@@ -27,6 +27,7 @@ struct CanvasScreen: View {
                 BrowserView(library: library, link: link, open: openBoard, onStatus: { pairing = true })
                     .opacity(open == nil ? 1 : 0)
                     .allowsHitTesting(open == nil)
+                    .accessibilityHidden(open != nil)
                 if let open {
                     BoardScreen(session: open, link: link, voice: voice, library: library, onBack: closeBoard, onStatus: { pairing = true })
                         .id(open.id)
@@ -35,6 +36,14 @@ struct CanvasScreen: View {
             }
         }
         .animation(.smooth(duration: 0.3), value: open?.id)
+        // A board with a chosen paper colour sets the chrome and status bar to match it.
+        .preferredColorScheme(open.flatMap { b in
+            switch b.meta.paper.tint {
+            case .automatic: nil
+            case .dark: .dark
+            default: .light
+            }
+        })
         .overlay(alignment: .top) {
             // The Mac's Link was reset: this iPad stopped dialing it, and says what to do.
             if case .linkChanged = link.state {

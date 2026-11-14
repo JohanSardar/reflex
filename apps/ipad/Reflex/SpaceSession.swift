@@ -61,6 +61,7 @@ final class BoardSession {
         files = library.files(id)
         ink = InkCanvasController(space: id, customItems: customItems)
         objects = files.loadObjects()
+        reflowConnectors()
         loadHistory()
         ink.onFinishedChange = { [weak self] before in
             guard let self, !self.quiet else { return }
@@ -278,7 +279,10 @@ final class BoardSession {
     }
 
     /// Where a new object goes: the middle of the view, nudged so repeats don't stack exactly.
-    func newFrame(_ size: CGSize, at point: CGPoint? = nil) -> CGRect {
+    func newFrame(_ base: CGSize, at point: CGPoint? = nil) -> CGRect {
+        // Zoomed out, new things come in big enough to see and type into.
+        let k = 1 / min(max(ink.zoomScale, 0.35), 1)
+        let size = CGSize(width: base.width * k, height: base.height * k)
         let r = ink.visibleRect
         var c = point ?? CGPoint(x: r.midX, y: r.midY)
         if point == nil {
@@ -289,11 +293,13 @@ final class BoardSession {
     }
 
     func addSticky(at point: CGPoint? = nil) {
-        insert(BoardObject(kind: .sticky, frame: newFrame(CGSize(width: 220, height: 220), at: point), fill: Palette.sticky[0], fontSize: 22), edit: true)
+        let f = newFrame(CGSize(width: 220, height: 220), at: point)
+        insert(BoardObject(kind: .sticky, frame: f, fill: Palette.sticky[0], fontSize: 22 * f.width / 220), edit: true)
     }
 
     func addText(at point: CGPoint? = nil) {
-        insert(BoardObject(kind: .text, frame: newFrame(CGSize(width: 260, height: 60), at: point), fontSize: 28, align: .leading, shadow: false), edit: true)
+        let f = newFrame(CGSize(width: 260, height: 60), at: point)
+        insert(BoardObject(kind: .text, frame: f, fontSize: (28 * f.width / 260).rounded(), align: .leading, shadow: false), edit: true)
     }
 
     func addShape(_ kind: ShapeKind, at point: CGPoint? = nil) {
@@ -558,7 +564,7 @@ final class BoardSession {
     func beginConnector(from object: String, at p: CGPoint) -> String {
         undoStack.append(("Connector", current))
         redoStack.removeAll()
-        var o = BoardObject(kind: .connector, frame: CGRect(origin: p, size: .zero), lineWidth: 2.5)
+        var o = BoardObject(kind: .connector, frame: CGRect(origin: p, size: .zero), lineWidth: 3)
         o.from = ConnectorEnd(object: object, point: p)
         o.to = ConnectorEnd(object: nil, point: p)
         objects.append(o)
@@ -580,10 +586,11 @@ final class BoardSession {
     /// Keeps connector frames and stuck ends up to date.
     private func reflowConnectors() {
         let frames = Dictionary(objects.map { ($0.id, $0.frame) }, uniquingKeysWith: { a, _ in a })
+        let ovals = Set(objects.filter { $0.kind == .shape && $0.shape == .circle }.map(\.id))
         for i in objects.indices where objects[i].isConnector {
             var o = objects[i]
-            if let f = o.from?.object, let r = frames[f] { o.from?.point = ConnectorGeometry.edgePoint(of: r, toward: o.to.map { pointFor($0, frames) } ?? CGPoint(x: r.midX, y: r.midY)) }
-            if let t = o.to?.object, let r = frames[t] { o.to?.point = ConnectorGeometry.edgePoint(of: r, toward: o.from.map { pointFor($0, frames) } ?? CGPoint(x: r.midX, y: r.midY)) }
+            if let f = o.from?.object, let r = frames[f] { o.from?.point = ConnectorGeometry.edgePoint(of: r, toward: o.to.map { pointFor($0, frames) } ?? CGPoint(x: r.midX, y: r.midY), oval: ovals.contains(f)) }
+            if let t = o.to?.object, let r = frames[t] { o.to?.point = ConnectorGeometry.edgePoint(of: r, toward: o.from.map { pointFor($0, frames) } ?? CGPoint(x: r.midX, y: r.midY), oval: ovals.contains(t)) }
             if let a = o.from?.point, let b = o.to?.point {
                 o.frame = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
             }

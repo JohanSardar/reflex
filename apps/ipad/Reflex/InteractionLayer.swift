@@ -49,6 +49,7 @@ struct InteractionLayer: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .animation(.easeOut(duration: 0.15), value: session.selection)
+        .onChange(of: ink.pickerVisible) { _, _ in canvasMenu = nil }
         .onAppear {
             ink.onTap = { p in tapCanvas(p) }
             ink.onLongPress = { p in
@@ -177,9 +178,17 @@ struct InteractionLayer: View {
                     .onEnded { _ in
                         defer { lasso = [] }
                         guard lasso.count > 3 else { return }
+                        let pts = lasso.map(toSpace)
                         let path = CGMutablePath()
-                        path.addLines(between: lasso.map(toSpace))
-                        path.closeSubpath()
+                        // A drag that encloses almost nothing selects the rectangle it spans, like a marquee.
+                        let box = CGRect(x: pts.map(\.x).min()!, y: pts.map(\.y).min()!, width: 0, height: 0)
+                            .union(CGRect(x: pts.map(\.x).max()!, y: pts.map(\.y).max()!, width: 0, height: 0))
+                        var area: CGFloat = 0
+                        for i in pts.indices { let a = pts[i], b = pts[(i + 1) % pts.count]; area += a.x * b.y - b.x * a.y }
+                        if abs(area) / 2 < box.width * box.height * 0.15 { path.addRect(box) } else {
+                            path.addLines(between: pts)
+                            path.closeSubpath()
+                        }
                         session.select(lasso: path, adding: session.selecting)
                     }
             )
@@ -443,8 +452,8 @@ struct InteractionLayer: View {
     private func toolbarPosition(for r: CGRect) -> CGPoint {
         let half: CGFloat = 200
         let x = min(max(r.midX, half + 12), max(screen.width - half - 12, half + 12))
-        let above = r.minY - 40
-        let y = above > 120 ? above : min(r.maxY + 40, screen.height - 120)
+        let above = r.minY - 74
+        let y = above > 120 ? above : min(r.maxY + 74, screen.height - 120)
         return CGPoint(x: x, y: y)
     }
 }
@@ -481,12 +490,6 @@ struct ObjectTextEditor: View {
             .onKeyPress(.escape) {
                 onDone()
                 return .handled
-            }
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done", action: onDone)
-                }
             }
             .accessibilityIdentifier("object-editor")
     }

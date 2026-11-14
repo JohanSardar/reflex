@@ -306,15 +306,28 @@ struct MiniToolbar: View {
             .disabled(objects.count < 2)
         }
         .padding()
-        .frame(width: 340)
+        .frame(width: 420)
     }
 
     private func alignButton(_ symbol: String, _ edge: BoardSession.AlignEdge) -> some View {
         Button { session.align(edge) } label: {
-            Image(systemName: symbol).font(.title3).frame(width: 40, height: 40)
-                .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            Image(systemName: symbol).font(.title3).frame(width: 28, height: 30)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.roundedRectangle(radius: 10))
+        .tint(.primary)
+        .accessibilityLabel(alignName(edge))
+    }
+
+    private func alignName(_ edge: BoardSession.AlignEdge) -> String {
+        switch edge {
+        case .left: "Align Left Edges"
+        case .centerX: "Align Centers"
+        case .right: "Align Right Edges"
+        case .top: "Align Top Edges"
+        case .centerY: "Align Middles"
+        case .bottom: "Align Bottom Edges"
+        }
     }
 }
 

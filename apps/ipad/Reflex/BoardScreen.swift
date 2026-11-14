@@ -5,14 +5,6 @@ import ReflexLink
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Alignment and drawing switches, kept for every board.
-struct BoardSettings {
-    @AppStorage("snapToGrid") var snapToGrid = false
-    @AppStorage("centerGuides") var centerGuides = true
-    @AppStorage("edgeGuides") var edgeGuides = true
-    @AppStorage("spacingGuides") var spacingGuides = true
-}
-
 /// One board: paper, objects, ink and the chrome around them.
 struct BoardScreen: View {
     let session: BoardSession
@@ -41,6 +33,7 @@ struct BoardScreen: View {
     @State private var draftTitle = ""
     @State private var exportURL: URL?
     @State private var screen: CGSize = .zero
+    @State private var frame: CGRect = .zero
     @FocusState private var titleFocused: Bool
 
     private var ink: InkCanvasController { session.ink }
@@ -59,7 +52,8 @@ struct BoardScreen: View {
             InkCanvas(controller: ink).ignoresSafeArea()
             InteractionLayer(session: session, darkPaper: darkPaper, guides: guideSettings, screen: screen).ignoresSafeArea()
         }
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { screen = $0 }
+        .ignoresSafeArea(.keyboard)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { screen = $0.size; frame = $0 }
         .overlay(alignment: .top) { topBar }
         .overlay(alignment: .bottomLeading) { zoomCapsule.padding(.leading, 16).padding(.bottom, bottomLift + 16) }
         .overlay(alignment: .bottomTrailing) { bottomRight.padding(.trailing, 16 + trailingLift).padding(.bottom, bottomLift + 16) }
@@ -111,14 +105,14 @@ struct BoardScreen: View {
 
     private var bottomLift: CGFloat {
         let r = ink.pickerObscured
-        guard ink.pickerVisible, !r.isNull, screen.height > 0, r.width > screen.width * 0.4, r.minY > screen.height * 0.55 else { return 0 }
-        return max(0, screen.height - r.minY - 8)
+        guard ink.pickerVisible, !r.isNull, screen.height > 0, r.width > screen.width * 0.4, r.minY > frame.height * 0.55 else { return 0 }
+        return max(0, frame.maxY - r.minY + 4)
     }
 
     private var trailingLift: CGFloat {
         let r = ink.pickerObscured
         guard ink.pickerVisible, !r.isNull, screen.width > 0, r.minX > screen.width * 0.6, r.maxY > screen.height - 110 else { return 0 }
-        return max(0, screen.width - r.minX)
+        return max(0, frame.maxX - r.minX)
     }
 
     // MARK: Top bar
@@ -143,7 +137,7 @@ struct BoardScreen: View {
             if foldInsertTools { plusMenu } else { insertCapsule }
             Spacer(minLength: 8)
             undoCapsule
-            StatusCapsule(link: link, compact: screen.width < 900, action: onStatus)
+            StatusCapsule(link: link, compact: screen.width < 1150, action: onStatus)
         }
         .padding(.horizontal, 16)
         .padding(.top, 6)
@@ -489,7 +483,8 @@ struct ObjectsLayer: View {
     var body: some View {
         let ink = session.ink
         let z = ink.zoomScale, o = ink.contentOffset
-        let visible = ink.visibleRect.insetBy(dx: -300, dy: -300)
+        let size = ink.viewSize == .zero ? CGSize(width: 2000, height: 2000) : ink.viewSize
+        let visible = CGRect(x: o.x / z, y: o.y / z, width: size.width / z, height: size.height / z).insetBy(dx: -300, dy: -300)
         ZStack(alignment: .topLeading) {
             Canvas { ctx, _ in
                 var c = ctx
