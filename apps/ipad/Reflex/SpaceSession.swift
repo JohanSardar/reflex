@@ -88,4 +88,3 @@ enum Crop {
         return image.pngData().map { ($0, rect) }
     }
 }
-

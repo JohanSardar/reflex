@@ -163,11 +163,15 @@ public final class LinkSync {
         // A question still open when the app last ran is asked again at once, before the Link is back.
         refreshRequests()
         loadPages()
-        if paired != nil {
-            state = .connecting
-            browse()
-            reconnectSoon(after: 0)
-        }
+        if paired != nil { state = .connecting }
+    }
+
+    /// Start only after SwiftUI has installed its State. View construction can
+    /// make discarded instances; those must never compete for the device session.
+    public func start() {
+        guard paired != nil, browser == nil else { return }
+        browse()
+        reconnectSoon(after: 0)
     }
 
     // MARK: Spaces
@@ -257,10 +261,16 @@ public final class LinkSync {
     }
 
     private func deliverPending(_ s: Session) {
-        for file in ((try? FileManager.default.contentsOfDirectory(at: Self.outboxDir, includingPropertiesForKeys: nil)) ?? []).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            guard let data = try? Data(contentsOf: file), let item = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-            deliver(item, s)
+        let files = (try? FileManager.default.contentsOfDirectory(at: Self.outboxDir, includingPropertiesForKeys: nil)) ?? []
+        let items = files.compactMap { file -> [String: Any]? in
+            guard let data = try? Data(contentsOf: file) else { return nil }
+            return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        }.sorted { a, b in
+            let sa = a["send"] as? [String: Any] ?? [:], sb = b["send"] as? [String: Any] ?? [:]
+            let ta = sa["at"] as? Double ?? 0, tb = sb["at"] as? Double ?? 0
+            return ta == tb ? (sa["send"] as? String ?? "") < (sb["send"] as? String ?? "") : ta < tb
         }
+        for item in items { deliver(item, s) }
     }
 
     // MARK: Assets

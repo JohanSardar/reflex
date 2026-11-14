@@ -163,6 +163,7 @@ struct CanvasScreen: View {
         }
         .onChange(of: incomingCode) { _, code in if code != nil { pairing = true } }
         .task {
+            link.start()
             link.beforeChangingPerson = { open?.ink.flush(); InkCanvasController.finishSaving() }
             if open == nil, let id = link.spaces.first { open = SpaceSession(id: id, link: link) }
         }
