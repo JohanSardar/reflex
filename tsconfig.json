@@ -17,8 +17,6 @@
     ]
   },
   "include": [
-    "kernel/wasm/js/**/*.ts",
-    "kernel/proof/**/*.ts",
     "link/**/*.ts"
   ]
 }

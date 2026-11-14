@@ -5,7 +5,7 @@
 //   identity.json   device key, person, actor (0600)
 //   rpc.key         the per-profile credential local Agent connections present (0600)
 //   admin.key       the credential `reflex-link` commands present (0600)
-//   link.db         journal, checkpoints, Inbox, control catalog
+//   link.db         Sends, Inbox, control catalog
 //   assets/         content-addressed asset store
 //   link.json       where the running Link listens (socket, LAN port, pid)
 import { createHash, randomBytes } from "node:crypto";

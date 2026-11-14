@@ -2,22 +2,20 @@
 // running on the Link's durable Spaces, Inbox and assets, served to the MCP
 // and CLI surfaces on `agent.sock`.
 //
-// Every write an Agent makes is journaled before its result is returned, and
+// Every Send is durable before it is delivered, and
 // every Send is indexed in the durable Inbox in the same transaction that
 // makes it durable, so a Link that is killed and restarted still delivers it.
-import type { Space } from "@reflex/kernel/node";
-import { SvgRenderer } from "../agent/src/render.ts";
 import { Core, ReflexError, type Identity } from "../agent/src/capabilities/index.ts";
 import { serveHost, type Listener } from "../agent/src/host/server.ts";
 import type { Who } from "../agent/src/host/rpc.ts";
-import type { Assets, Bounds, Delivery, FrozenSend, Inbox as AgentInbox, SpaceEntry, SpaceStore as AgentSpaces, WaitFilter, WriteOrigin } from "../agent/src/store.ts";
+import type { Assets, Delivery, FrozenSend, Inbox as AgentInbox, WaitFilter } from "../agent/src/store.ts";
 import type { Catalog, AgentRecord } from "./pairing/catalog.ts";
 import type { AssetStore } from "./storage/assets.ts";
 import type { DatabaseSync } from "node:sqlite";
 import type { Inbox } from "./storage/inbox.ts";
-import type { SpaceStore } from "./storage/journal.ts";
+import type { SendStore } from "./storage/sends.ts";
 
-import { recipient, route } from "./routing.ts";
+import { recipient } from "./routing.ts";
 import { ClaudeChannel } from "./adapters/claude-channel.ts";
 import { Webhook } from "./adapters/webhook.ts";
 import { Dispatcher } from "./adapters/dispatch.ts";
@@ -26,84 +24,26 @@ import type { PushTarget } from "./adapters/contract.ts";
 import { randomBytes } from "node:crypto";
 import { Ajv2020 } from "ajv/dist/2020.js";
 
-/** The Agent layer's view of the Link's Spaces. */
-class LinkSpaces implements AgentSpaces {
-  #store: SpaceStore;
-  #db: DatabaseSync;
-  #inbox: Inbox;
-  #hidden: (space: string) => boolean;
-
-  constructor(store: SpaceStore, db: DatabaseSync, inbox: Inbox, hidden: (space: string) => boolean = () => false) {
-    this.#store = store;
-    this.#db = db;
-    this.#inbox = inbox;
-    this.#hidden = hidden;
-  }
-
-  #entry(id: string): SpaceEntry {
-    const store = this.#store;
-    const meta = this.#db.prepare("SELECT title, size, width, viewport FROM space_meta WHERE space = ?").get(id) as
-      | { title: string | null; size: string; width: number | null; viewport: string }
-      | undefined;
-    const agents = new Set(this.agents(id));
-    return {
-      name: id,
-      kind: store.kind(id) as SpaceEntry["kind"],
-      ...(meta?.title ? { title: meta.title } : {}),
-      size: (meta?.size ?? "infinite") as SpaceEntry["size"],
-      ...(meta?.width ? { width: meta.width } : {}),
-      viewport: meta ? (JSON.parse(meta.viewport) as Bounds) : [0, 0, 1366, 1024],
-      // A getter: the store reloads a replica from disk when a write fails.
-      get space() {
-        return store.read(id, (s) => s);
-      },
-      agents,
-    };
-  }
-
-  agents(space: string): string[] {
-    return (this.#db.prepare("SELECT agent FROM space_agents WHERE space = ? ORDER BY at").all(space) as { agent: string }[]).map((r) => r.agent);
-  }
-
-  get(name: string) {
-    return this.#store.has(name) && !this.#hidden(name) ? this.#entry(name) : undefined;
-  }
-
-  list() {
-    return this.#store.ids().filter((id) => !this.#hidden(id)).map((id) => this.#entry(id));
-  }
-
-  attach(entry: SpaceEntry, agent: string) {
-    this.#db.prepare("INSERT INTO space_agents (space, agent, at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING").run(entry.name, agent, Date.now());
-    this.#inbox.adopt(entry.name, recipient(agent));
-  }
-}
-
 /** The Agent layer's view of the Link's durable Inbox. */
 class LinkInbox implements AgentInbox {
   #inbox: Inbox;
-  #store: SpaceStore;
+  #store: SendStore;
   inFlight: (space: string, send: string, recipient: string) => boolean = () => false;
 
-  constructor(inbox: Inbox, store: SpaceStore) {
+  constructor(inbox: Inbox, store: SendStore) {
     this.#inbox = inbox;
     this.#store = store;
   }
 
   #frozen(space: string, send: string): FrozenSend | undefined {
-    const v = JSON.parse(this.#store.read(space, (s) => s.send(send)));
-    return v ?? undefined;
+    const v = this.#store.get(send);
+    return v?.space === space ? v : undefined;
   }
 
   take(agent: string, f: WaitFilter): Delivery | undefined {
     for (const e of this.#inbox.pending(recipient(agent), f.space)) {
       const send = this.#frozen(e.space, e.send);
       if (!send) continue;
-      // Sends store keys (`<agent>/<id>`); the Agent filters by its own IDs.
-      const local = (k?: string) => (k?.startsWith(`${agent}/`) ? k.slice(agent.length + 1) : k);
-      if (f.region && local(send.region) !== f.region) continue;
-      // A tap on that Element, whether its Behavior notifies or Sends.
-      if (f.element && local(send.element) !== f.element) continue;
       // A push of this Send is under way; it is delivered there, or comes back here if the push fails.
       if (this.inFlight(e.space, e.send, recipient(agent))) continue;
       this.#inbox.mark(e.space, e.send, recipient(agent), "delivered");
@@ -135,16 +75,7 @@ class LinkInbox implements AgentInbox {
 
 class LinkAssets implements Assets {
   #assets: AssetStore;
-  #added?: (hash: string) => void;
-  constructor(assets: AssetStore, added?: (hash: string) => void) {
-    this.#assets = assets;
-    this.#added = added;
-  }
-  put(bytes: Buffer) {
-    const hash = this.#assets.put(bytes);
-    this.#added?.(hash);
-    return hash;
-  }
+  constructor(assets: AssetStore) { this.#assets = assets; }
   get(hash: string) {
     try {
       return this.#assets.has(hash) ? this.#assets.get(hash) : undefined;
@@ -158,23 +89,13 @@ export interface AgentHostOptions {
   db: DatabaseSync;
   /** The Link's profile folder, where push targets' secrets are kept. */
   home: string;
-  store: SpaceStore;
+  store: SendStore;
   inbox: Inbox;
   assets: AssetStore;
-  /** An Agent stored an asset (a model or picture it placed): offer it to connected devices now. */
-  assetAdded?: (hash: string) => void;
   catalog: Catalog;
   person: { id: string; name: string };
   socket: string;
   token: string;
-  /** Spaces this person's Agents can't see: ones someone else shared with them (link/sharing.ts). */
-  hidden?: (space: string) => boolean;
-  /** How many of the person's devices are connected (not other Links), and the Spaces on their screens. */
-  presence?: () => { devices: number; viewing?: string[] };
-  /** Whether the person is writing in a Space now, from a device's live pen signal; undefined when no device shows it. */
-  writing?: (space: string) => boolean | undefined;
-  /** The devices' recognized handwriting lines for one watched Region. */
-  deviceHints?: (space: string, region: string) => { strokes: string[]; text: string; confidence: number }[];
   /** Asks the person to approve a new Agent (on the Link's terminal and on paired iPads). */
   announce: (a: AgentRecord) => void;
   /** Asks connected iPads again about an Agent still waiting (one may have missed the question). */
@@ -193,24 +114,13 @@ const approvalWaitMs = () => Number(process.env.REFLEX_APPROVAL_WAIT_S ?? 50) * 
 const reaskMs = () => Number(process.env.REFLEX_REASK_S ?? 600) * 1000;
 
 export async function startAgentHost(o: AgentHostOptions) {
-  const spaces = new LinkSpaces(o.store, o.db, o.inbox, o.hidden);
-  o.inbox.recipientsFor = (space, send) => route(o.db, o.store, space, send);
-  // open_space no longer exists: approved receivers attach to iPad-created documents.
-  const attach = (agent: string) => {
-    for (const entry of spaces.list()) if (entry.kind === "space") spaces.attach(entry, agent);
-  };
-  o.store.onChange((space, origin) => {
-    if (origin !== "create") return;
-    const entry = spaces.get(space);
-    if (entry?.kind === "space") for (const agent of o.catalog.agents()) if (agent.status === "approved") spaces.attach(entry, agent.id);
-  });
+  o.inbox.recipientsFor = () => o.catalog.agents().filter((a) => a.status === "approved").map((a) => recipient(a.id));
   const names = Object.fromEntries(o.catalog.agents().map((a) => [a.id, a.name]));
   const inbox = new LinkInbox(o.inbox, o.store);
   const core = new Core({
-    spaces,
-    renderer: new SvgRenderer(),
+    getSend: (id) => o.store.get(id),
     inbox,
-    assets: new LinkAssets(o.assets, o.assetAdded),
+    assets: new LinkAssets(o.assets),
     person: { person: o.person.id, name: o.person.name },
     names,
     progressEvery: Number(process.env.REFLEX_PROGRESS_S ?? 15),
@@ -276,7 +186,7 @@ export async function startAgentHost(o: AgentHostOptions) {
       );
     }
     if (a.status !== "approved") throw notApproved(a, `The person ${a.status} ${a.name}.`, "Call again to ask the person once more, and tell them to expect the question on their iPad or in the Link's terminal.");
-    attach(a.id);
+    for (const send of o.store.list()) o.inbox.adopt(send.space, recipient(a.id));
     return { agent: a.id, name: a.name, color: a.color };
   }
 

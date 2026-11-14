@@ -9,7 +9,7 @@ if (cmd === "link") {
   await import("../../link/bin/reflex-link.ts");
 } else if (cmd === "setup" || cmd === "pair") {
   // First-time setup and a fresh pairing code (link/bin/setup.ts). A fresh clone has no packages and no
-  // kernel build yet: get them first, so this one command is all it takes.
+  // dependencies yet: get them first, so this one command is all it takes.
   if (cmd === "setup") await prepare();
   process.argv = [process.argv[0], `reflex ${cmd}`, cmd, ...rest];
   await import("../../link/bin/setup.ts");
@@ -19,7 +19,7 @@ if (cmd === "link") {
   if (code >= 0) process.exitCode = code;
 }
 
-/** Installs the packages and builds the kernel's WASM if this checkout doesn't have them yet. */
+/** Installs packages and the optional peer-to-peer helper if this checkout doesn't have them yet. */
 async function prepare() {
   const { existsSync } = await import("node:fs");
   const { execFileSync } = await import("node:child_process");
@@ -35,21 +35,6 @@ async function prepare() {
     }
   };
   if (!existsSync(at("node_modules/qrcode"))) run("installing packages (npm install)", "npm", ["install", "--no-audit", "--no-fund"]);
-  if (!existsSync(at("kernel/wasm/pkg/reflex_kernel_wasm_bg.wasm"))) {
-    const has = (bin) => {
-      try {
-        execFileSync(bin, ["--version"], { stdio: "ignore" });
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    if (!has("cargo") || !has("wasm-bindgen")) {
-      console.error("Error: the Reflex kernel isn't built, and building it needs Rust: install it from https://rustup.rs, then run `rustup target add wasm32-unknown-unknown` and `cargo install wasm-bindgen-cli`, and `reflex setup` again.");
-      process.exit(1);
-    }
-    run("building the kernel (once, about a minute)", "sh", ["kernel/wasm/build.sh"]);
-  }
   // Apple peer-to-peer Wi-Fi: the iPad reaches this Mac even on a network that keeps devices apart (campus, hotel).
   if (process.platform === "darwin" && !existsSync(at("link/transports/p2p/.build/release/reflex-p2p"))) {
     try {

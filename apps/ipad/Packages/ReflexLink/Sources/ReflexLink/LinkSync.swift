@@ -4,7 +4,6 @@ import Foundation
 import Network
 import Observation
 import OSLog
-import ReflexKernel
 
 let linkLog = Logger(subsystem: "si.eilmer.reflex", category: "link")
 
@@ -40,59 +39,7 @@ public struct AgentInfo: Codable, Identifiable, Sendable, Equatable {
     public var requestedAt: Int64?
 }
 
-/// A shared Space (ADR-0008): who owns it, who is in it, and this person's role.
-public struct ShareInfo: Sendable, Equatable {
-    public struct Member: Sendable, Equatable, Identifiable {
-        public var person: Person
-        public var role: String
-        public var id: String { person.id }
-    }
-    public var space: String
-    public var owner: Person
-    /// "owner", "editor", "viewer", or nil once the owner removed this person.
-    public var role: String?
-    public var members: [Member]
-    public var epoch: Int
-}
-
-/// Someone else's device in a Space right now: its person, cursor and selection (link/here.ts).
-/// Short-lived, never part of the Space.
-public struct HereEntry: Sendable, Equatable, Identifiable {
-    public var device: String
-    public var space: String
-    public var person: Person
-    public var name: String
-    /// In Space coordinates.
-    public var cursor: CGPoint?
-    public var selection: [String]
-    public var at: Date
-    public var id: String { device }
-}
-
-/// The iPad's replicas of every Space, kept in the Rust kernel (through
-/// UniFFI), saved on this iPad, and in sync with the paired Link over the
-/// local network and Apple peer-to-peer Wi-Fi (ARCHITECTURE §1, §6, §8).
-///
-/// Both paths stay open when both are up; changes go over the faster one
-/// (`PathSet`), and when it drops the other takes over at once, with
-/// anti-entropy from scratch. Anything arriving on either path is taken: the
-/// same change arriving twice changes nothing.
-///
-/// Messages after the handshake are the Link coordinator's
-/// (`link/sync/coordinator.ts`): `spaces`, `sync` (one Automerge sync
-/// conversation per Space), `assets_have` / `asset_want` / `asset`,
-/// `ping` / `pong`, `agent_request` / `agent_decision`, and `agents` (each
-/// Agent's name and color, for the chips). The iPad also sends `presence`
-/// (which Space is on screen and whether the pen is down) and `hints` (its
-/// handwriting recognizer's lines for the person's Ink in a watched Region).
-///
-/// Shared Spaces: the Link sends `shares` (each shared Space, its people and
-/// this person's role) and `here` (other devices' cursors, names and
-/// selections). The iPad asks it for an invite (`invite_create`, answered by
-/// `invite`), to change someone's role or remove them (`member_set`), and to
-/// join with an invite (`join_invite`, answered by `joined`). When the Link
-/// refuses this iPad's changes to a Space (`refused`, a viewer drew), the iPad
-/// starts that Space over from the Link and says so (`reset`).
+/// Paired transport, approval, local page discovery and durable Send delivery.
 @MainActor @Observable
 public final class LinkSync {
     public enum State: Equatable {
@@ -136,17 +83,8 @@ public final class LinkSync {
     /// Bumps each time an asset arrives from the Link, so images waiting for it draw.
     public private(set) var assetRevision = 0
     public private(set) var person: Person?
+    @ObservationIgnored public var beforeChangingPerson: (() -> Void)?
     public var deviceID: String { identity.device }
-    /// Shared Spaces, by Space.
-    public private(set) var shares: [String: ShareInfo] = [:]
-    /// Other devices in each Space now, by device.
-    public private(set) var here: [String: HereEntry] = [:]
-    /// The latest invite the Link made for this iPad, and anything it said went wrong with sharing.
-    public private(set) var invite: (space: String, role: String, uri: String)?
-    public var shareError: String?
-    /// Bumps each time the Link refused this iPad's changes to a Space and it started over, with why.
-    public private(set) var resets: [String: Int] = [:]
-    public private(set) var refusal: (space: String, reason: String)?
     /// The live paths to the Link ("lan", "p2p"), and the one changes go out on.
     public private(set) var transports: [String] = []
     public private(set) var activeTransport: String?
@@ -154,7 +92,6 @@ public final class LinkSync {
     @ObservationIgnored private var identity: DeviceIdentity
     @ObservationIgnored private var actor: String
     @ObservationIgnored private var paired: Paired?
-    @ObservationIgnored private var replicas: [String: Space] = [:]
     @ObservationIgnored private var paths = PathSet()
     /// The path changes go out on.
     private var session: Session? { paths.active }
@@ -165,12 +102,8 @@ public final class LinkSync {
     @ObservationIgnored private var dialingP2P = false
     @ObservationIgnored private var ticker: Task<Void, Never>?
     @ObservationIgnored private var pings = 0
-    @ObservationIgnored private var assetsWritten: Set<String> = []
     /// The Relay the Link said to use when the local network can't reach it (RelayConnection.swift).
     @ObservationIgnored private var relay: RelayInfo?
-    /// Assets arriving in parts from the Link, by hash.
-    @ObservationIgnored private var incoming: [String: (size: Int, data: Data)] = [:]
-    @ObservationIgnored private var joining: CheckedContinuation<String, Error>?
     /// Addresses that answered with another key (a Link reset there, or another computer has that address now):
     /// not dialed again, so that Link's log stays quiet, until the network changes, Bonjour finds the paired Link,
     /// or the person scans again. Other addresses, peer-to-peer and the Relay are still tried.
@@ -229,33 +162,44 @@ public final class LinkSync {
         saveLocalOnly()
         // A question still open when the app last ran is asked again at once, before the Link is back.
         refreshRequests()
-        loadReplicas()
-        if paired != nil {
-            state = .connecting
-            browse()
-            reconnectSoon(after: 0)
-        }
+        loadPages()
+        if paired != nil { state = .connecting }
+    }
+
+    /// Start only after SwiftUI has installed its State. View construction can
+    /// make discarded instances; those must never compete for the device session.
+    public func start() {
+        guard paired != nil, browser == nil else { return }
+        browse()
+        reconnectSoon(after: 0)
     }
 
     // MARK: Spaces
 
-    private func loadReplicas() {
+    private func loadPages() {
+        var found: [String] = []
         for (root, prefix) in [(Self.spacesDir, ""), (Self.localOnlyDir, Self.localPrefix)] {
-            let dirs = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
-            for dir in dirs {
-                let file = dir.appending(path: "space.automerge")
-                guard let bytes = try? Data(contentsOf: file) else { continue }
-                do {
-                    replicas[prefix + dir.lastPathComponent] = try Space.load(bytes: bytes, actorHex: actor)
-                } catch {
-                    linkLog.error("Could not load Space \(dir.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                }
+            for dir in (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? [] {
+                guard (try? dir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
+                      dir.lastPathComponent != "library" else { continue }
+                found.append(prefix + dir.lastPathComponent)
             }
         }
-        publishSpaces()
+        spaces = found.sorted()
+        if spaces.isEmpty { _ = createPage() }
     }
 
-    /// Where a replica is saved: Spaces/<id>, or LocalOnly/<id> for one kept from an earlier pairing.
+    @discardableResult
+    public func createPage() -> String {
+        let id = "page_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+        do {
+            try FileManager.default.createDirectory(at: Self.folder(id), withIntermediateDirectories: true)
+            spaces.append(id)
+        } catch { linkLog.error("Could not create page: \(error.localizedDescription)") }
+        return id
+    }
+
+    /// Where a local page is saved: Spaces/<id>, or LocalOnly/<id> for one kept from an earlier pairing.
     private static func folder(_ key: String) -> URL {
         key.hasPrefix(localPrefix)
             ? localOnlyDir.appending(path: String(key.dropFirst(localPrefix.count)), directoryHint: .isDirectory)
@@ -280,141 +224,64 @@ public final class LinkSync {
         key.hasPrefix(Self.localPrefix) ? String(key.dropFirst(Self.localPrefix.count)) : key
     }
 
-    private func publishSpaces() {
-        spaces = replicas.filter { $0.value.kind() == "space" }.keys.sorted()
-    }
+    // MARK: Send outbox
 
-    /// Writes a Space to disk before anything reads it as done: atomic, so a crash leaves the old or the new copy.
-    private func persist(_ id: String) {
-        guard let space = replicas[id] else { return }
-        let dir = Self.folder(id)
-        do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try space.save().write(to: dir.appending(path: "space.automerge"), options: [.atomic, .completeFileProtection])
-        } catch {
-            linkLog.error("Could not save Space \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+    private static var outboxDir: URL { root.appending(path: "Sends", directoryHint: .isDirectory) }
+
+    /// Save before returning. Only a Send may export ink or screen images.
+    public var destinationKey: String? { paired?.key }
+
+    public func enqueueSend(_ space: String, raw: [String: Any], destination: String?) throws -> [String: Any] {
+        guard let paired, let person, paired.key == destination, spaces.contains(space), localOnly[space] == nil, !space.hasPrefix(Self.localPrefix) else {
+            throw LinkError.protocolError("Connect this page to your Link before sending.")
         }
+        guard let id = raw["send"] as? String, Self.safeID(id) else { throw LinkError.protocolError("Invalid Send ID") }
+        var send = raw
+        send["space"] = space
+        send["by"] = ["person": person.id, "device": identity.device]
+        send["at"] = Self.now()
+        let item: [String: Any] = ["link": paired.key, "space": space, "send": send]
+        try FileManager.default.createDirectory(at: Self.outboxDir, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: item).write(to: Self.outboxDir.appending(path: id + ".json"), options: [.atomic, .completeFileProtection])
+        if let session { deliver(item, session) }
+        return send
     }
 
-    private func changed(_ id: String) {
-        persist(id)
-        revision[id, default: 0] += 1
-        if let session { pump(id, session) }
+    private static func safeID(_ id: String) -> Bool {
+        !id.isEmpty && id.count <= 200 && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
     }
 
-    /// The kernel's scene for this person, as JSON.
-    public func scene(_ id: String) -> String? {
-        guard let space = replicas[id] else { return nil }
-        let q: [String: Any] = ["detail": "full", "viewer": ["person": person?.id ?? identity.person.id]]
-        return try? space.scene(queryJson: Self.json(q))
-    }
-
-    /// The person's Library (the Space of kind `library`): its ID and revision, so a view can tell when it changed.
-    public var library: (id: String, revision: Int)? {
-        guard let id = replicas.first(where: { $0.value.kind() == "library" && localOnly[$0.key] == nil })?.key else { return nil }
-        return (id, revision[id] ?? 0)
-    }
-
-    /// The Embed Templates saved in the person's Library: name, HTML, extra hosts and, for an MCP App view, its `ui://` source.
-    public func embedTemplates() -> [(name: String, html: String, allow: [String], source: String?)] {
-        guard let id = library?.id, let space = replicas[id],
-              let out = try? space.scene(queryJson: Self.json(["detail": "full", "ids": [String]()])),
-              let entries = Self.object(out)?["library"] as? [[String: Any]] else { return [] }
-        return entries.compactMap { e in
-            guard e["kind"] as? String == "embed", let name = e["name"] as? String, let html = e["template"] as? String else { return nil }
-            return (name, html, e["allow"] as? [String] ?? [], e["source"] as? String)
+    private func deliver(_ item: [String: Any], _ s: Session) {
+        guard item["link"] as? String == paired?.key, let send = item["send"] as? [String: Any], let space = item["space"] as? String else { return }
+        for crop in send["crops"] as? [[String: Any]] ?? [] {
+            guard let hash = crop["asset"] as? String, let bytes = asset(hash) else { return }
+            sendAsset(hash, bytes, s)
         }
+        s.send(["t": "send", "space": space, "send": send])
     }
 
-    /// Raw strokes (`scene({detail: "strokes"})`) for these Ink IDs: ID -> `[x, y, t, pressure]` points.
-    public func strokes(_ id: String, ids: [String]) -> [String: [[Double]]] {
-        guard let space = replicas[id], !ids.isEmpty else { return [:] }
-        let q: [String: Any] = ["detail": "strokes", "ids": ids, "viewer": ["person": person?.id ?? identity.person.id]]
-        guard let out = try? space.scene(queryJson: Self.json(q)), let r = Self.object(out) else { return [:] }
-        var points: [String: [[Double]]] = [:]
-        for s in r["elements"] as? [[String: Any]] ?? [] {
-            if let sid = s["id"] as? String, let p = s["points"] as? [[Double]] { points[sid] = p }
+    private func deliverPending(_ s: Session) {
+        let files = (try? FileManager.default.contentsOfDirectory(at: Self.outboxDir, includingPropertiesForKeys: nil)) ?? []
+        let items = files.compactMap { file -> [String: Any]? in
+            guard let data = try? Data(contentsOf: file) else { return nil }
+            return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        }.sorted { a, b in
+            let sa = a["send"] as? [String: Any] ?? [:], sb = b["send"] as? [String: Any] ?? [:]
+            let ta = sa["at"] as? Double ?? 0, tb = sb["at"] as? Double ?? 0
+            return ta == tb ? (sa["send"] as? String ?? "") < (sb["send"] as? String ?? "") : ta < tb
         }
-        return points
-    }
-
-    /// Every Agent batch and person's action in this Space, oldest first (the kernel's `timeline`).
-    public func timeline(_ id: String) -> [[String: Any]] {
-        guard let space = replicas[id] else { return [] }
-        let q: [String: Any] = ["viewer": ["person": person?.id ?? identity.person.id], "limit": 300, "names": agents.mapValues(\.name)]
-        guard let out = try? space.timeline(queryJson: Self.json(q)) else { return [] }
-        return Self.object(out)?["entries"] as? [[String: Any]] ?? []
-    }
-
-    /// The person reverts an Agent's latest change. It is the person's own action, so their undo brings it back.
-    @discardableResult
-    /// The person reverts an Agent's latest batch here (the kernel's `revert`).
-    /// It goes into the person's history, so undo brings the batch back.
-    public func revert(_ space: String, agent: String) -> [String: Any]? {
-        guard let replica = replicas[space], let person else { return nil }
-        do {
-            let by = Self.json(["person": person.id, "device": identity.device])
-            let names = Self.json(["agent": agent, "last": 1, "names": agents.mapValues(\.name)])
-            let out = try replica.revert(byJson: by, requestId: "r_" + UUID().uuidString.prefix(12).lowercased(), selectorJson: names, nowMs: Self.now())
-            let r = Self.object(out)
-            if r?["ok"] as? Bool == false { linkLog.error("Revert rejected: \(out, privacy: .public)") }
-            changed(space)
-            return r
-        } catch {
-            linkLog.error("Revert failed: \(error.localizedDescription, privacy: .public)")
-            return nil
-        }
-    }
-
-    /// One finished user action (`apply_user_intent`), made durable and synced.
-    @discardableResult
-    public func intent(_ space: String, _ intent: [String: Any]) -> [String: Any]? {
-        guard let replica = replicas[space], let person else { return nil }
-        do {
-            let out = try replica.applyUserIntent(person: person.id, device: identity.device, intentJson: Self.json(intent), nowMs: Self.now())
-            let r = Self.object(out)
-            if r?["ok"] as? Bool == false { linkLog.error("Intent rejected: \(out, privacy: .public)") }
-            changed(space)
-            return r
-        } catch {
-            linkLog.error("Intent failed: \(error.localizedDescription, privacy: .public)")
-            return nil
-        }
-    }
-
-    public func undo(_ space: String) {
-        guard let replica = replicas[space], let person else { return }
-        _ = try? replica.undo(person: person.id, device: identity.device, nowMs: Self.now())
-        changed(space)
-    }
-
-    public func redo(_ space: String) {
-        guard let replica = replicas[space], let person else { return }
-        _ = try? replica.redo(person: person.id, device: identity.device, nowMs: Self.now())
-        changed(space)
-    }
-
-    /// Freezes a Send (`freeze_send`): pins the frontier and claims this person's
-    /// unsent strokes and changes. It is saved on this iPad before this returns.
-    public func freezeSend(_ space: String, raw: [String: Any]) throws -> [String: Any] {
-        guard let replica = replicas[space], let person else { throw LinkError.protocolError("This iPad is not paired with a Link yet.") }
-        let out = try replica.freezeSend(person: person.id, device: identity.device, rawJson: Self.json(raw), nowMs: Self.now())
-        guard let r = Self.object(out), r["ok"] as? Bool != false else { throw LinkError.protocolError("The Send was rejected: \(out)") }
-        changed(space)
-        return r
+        for item in items { deliver(item, s) }
     }
 
     // MARK: Assets
 
-    /// Stores bytes as an asset, durably, before anything refers to them, and offers them to the Link.
+    /// Stores bytes locally before a Send refers to them. Delivery exports them only with that Send.
     public func storeAsset(_ bytes: Data) throws -> String {
         let hash = sha256(bytes).hex
         let url = Self.assetsDir.appending(path: hash)
         if !FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) {
             try bytes.write(to: url, options: [.atomic, .completeFileProtection])
         }
-        // Pushed now, ahead of the Send that refers to it, on the same ordered connection.
-        if let session { sendAsset(hash, bytes, session) }
         return hash
     }
 
@@ -427,166 +294,10 @@ public final class LinkSync {
         } while off < bytes.count
     }
 
-    /// An asset's bytes, if this iPad has them. The Link offers every asset it holds (`assets_have`), and the iPad fetches the ones it lacks.
     public func asset(_ hash: String) -> Data? {
         guard hash.count == 64, hash.allSatisfy(\.isHexDigit) else { return nil }
-        if let bytes = try? Data(contentsOf: Self.assetsDir.appending(path: hash)) { return bytes }
-        return nil
+        return try? Data(contentsOf: Self.assetsDir.appending(path: hash))
     }
-
-    private func receiveAsset(_ h: [String: Any], _ body: Data) {
-        guard let hash = h["hash"] as? String, hash.count == 64, hash.allSatisfy(\.isHexDigit),
-              let off = h["off"] as? Int, let size = h["size"] as? Int, size >= 0, size <= 512 * 1024 * 1024 else { return }
-        let url = Self.assetsDir.appending(path: hash)
-        if FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) { return }
-        if off == 0 { incoming[hash] = (size, Data()) }
-        guard var inc = incoming[hash], inc.data.count == off, inc.size == size, off + body.count <= size else {
-            incoming[hash] = nil
-            linkLog.error("Dropped a malformed part of asset \(hash, privacy: .public)")
-            return
-        }
-        inc.data.append(body)
-        guard inc.data.count == size else {
-            incoming[hash] = inc
-            return
-        }
-        incoming[hash] = nil
-        guard sha256(inc.data).hex == hash else {
-            linkLog.error("Asset \(hash, privacy: .public) does not match its hash")
-            return
-        }
-        try? inc.data.write(to: url, options: [.atomic, .completeFileProtection])
-        assetRevision += 1
-    }
-
-    private func assetHashes() -> [String] {
-        ((try? FileManager.default.contentsOfDirectory(atPath: Self.assetsDir.path(percentEncoded: false))) ?? []).filter { $0.count == 64 }
-    }
-
-    // MARK: Presence and handwriting
-
-    /// What this iPad shows and does now, sent again on every new session.
-    @ObservationIgnored private var presence: (space: String?, pen: Bool) = (nil, false)
-    /// Where the person's pen or finger is, in Space coordinates, and what they picked.
-    @ObservationIgnored private var cursor: CGPoint?
-    @ObservationIgnored private var selection: [String] = []
-    @ObservationIgnored private var cursorSent = Date.distantPast
-    @ObservationIgnored private var cursorTimer: Task<Void, Never>?
-    /// The latest recognized lines per watched Region, by Space and Region.
-    @ObservationIgnored private var watchHints: [String: [String: [[String: Any]]]] = [:]
-
-    /// The Space on screen (nil when none is, or the app is in the background) and
-    /// whether the pen is down, for `request_attention` and watch mode's `user_still_writing`.
-    public func reportPresence(space: String?, pen: Bool) {
-        guard presence.space != space || presence.pen != pen else { return }
-        presence = (space, pen)
-        if let session { sendPresence(session) }
-    }
-
-    private func sendPresence(_ s: Session) {
-        var m: [String: Any] = ["t": "presence", "space": presence.space ?? NSNull(), "pen": presence.pen, "selection": selection]
-        m["cursor"] = cursor.map { [($0.x * 10).rounded() / 10, ($0.y * 10).rounded() / 10] } ?? NSNull()
-        s.send(m)
-    }
-
-    /// Where the pen or finger is now (nil when it left), and what the person picked, for the
-    /// other people in a shared Space. At most ten updates a second; the last one always goes.
-    public func reportCursor(_ point: CGPoint?, selection: [String]? = nil) {
-        cursor = point
-        if let selection { self.selection = selection }
-        cursorTimer?.cancel()
-        let wait = 0.1 - Date().timeIntervalSince(cursorSent)
-        guard wait > 0 else {
-            cursorSent = Date()
-            if let session { sendPresence(session) }
-            return
-        }
-        cursorTimer = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(wait))
-            guard let self, !Task.isCancelled else { return }
-            self.cursorSent = Date()
-            if let session = self.session { self.sendPresence(session) }
-        }
-    }
-
-    // MARK: Shared Spaces
-
-    /// This person's role in a Space: "owner" for one nobody shared with them, nil once removed.
-    public func role(_ space: String) -> String? {
-        shares[space].map(\.role) ?? "owner"
-    }
-
-    /// Asks the Link for a single-use invite to a Space this person owns; it arrives as `invite`.
-    public func createInvite(_ space: String, role: String) {
-        invite = nil
-        shareError = nil
-        session?.send(["t": "invite_create", "space": space, "role": role])
-    }
-
-    /// Makes someone an editor or a viewer, or removes them ("remove").
-    public func setMember(_ space: String, person: String, role: String) {
-        shareError = nil
-        session?.send(["t": "member_set", "space": space, "person": person, "role": role])
-    }
-
-    /// Joins someone's Space with the invite they sent: the Link presents it to theirs. Returns the Space.
-    public func join(invite code: String) async throws -> String {
-        guard let session else { throw LinkError.unreachable("This iPad isn't connected to its Link.") }
-        joining?.resume(throwing: LinkError.refused("Replaced by a newer invite."))
-        return try await withCheckedThrowingContinuation { c in
-            joining = c
-            session.send(["t": "join_invite", "uri": code.trimmingCharacters(in: .whitespacesAndNewlines)])
-        }
-    }
-
-    /// The Link refused this iPad's changes to a Space: start it over from the Link, dropping them.
-    private func startOver(_ id: String, reason: String, _ s: Session) {
-        guard let old = replicas[id], let fresh = try? Space.create(spaceId: id, kind: old.kind(), actorHex: actor) else { return }
-        replicas[id] = fresh
-        persist(id)
-        revision[id, default: 0] += 1
-        resets[id, default: 0] += 1
-        refusal = (id, reason)
-        linkLog.error("The Link refused changes to \(id, privacy: .public): \(reason, privacy: .public)")
-        s.send(["t": "reset", "space": id])
-        if let a = paths.active { pump(id, a) }
-    }
-
-    private func readShares(_ list: [[String: Any]]) {
-        var next: [String: ShareInfo] = [:]
-        for x in list {
-            guard let space = x["space"] as? String, let o = x["owner"] as? [String: Any], let oid = o["id"] as? String else { continue }
-            let members = (x["members"] as? [[String: Any]] ?? []).compactMap { m -> ShareInfo.Member? in
-                guard let p = m["person"] as? [String: Any], let id = p["id"] as? String else { return nil }
-                return .init(person: Person(id: id, name: p["name"] as? String ?? id), role: m["role"] as? String ?? "viewer")
-            }
-            next[space] = ShareInfo(space: space, owner: Person(id: oid, name: o["name"] as? String ?? oid), role: x["role"] as? String, members: members, epoch: x["epoch"] as? Int ?? 0)
-        }
-        shares = next
-    }
-
-    private func readHere(_ h: [String: Any]) {
-        guard let device = h["device"] as? String, device != identity.device else { return }
-        if h["gone"] as? Bool == true {
-            here[device] = nil
-            return
-        }
-        guard let space = h["space"] as? String, let p = h["person"] as? [String: Any], let pid = p["id"] as? String else { return }
-        let c = h["cursor"] as? [Double]
-        here[device] = HereEntry(
-            device: device, space: space, person: Person(id: pid, name: p["name"] as? String ?? pid), name: h["name"] as? String ?? "",
-            cursor: c.flatMap { $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil }, selection: h["selection"] as? [String] ?? [], at: Date()
-        )
-    }
-
-    /// The recognizer's lines for the person's Ink in a watched Region, so the
-    /// Link's watch snapshots carry real recognized text. Replaces what was sent before for that Region.
-    public func reportHints(space: String, region: String, hints: [[String: Any]]) {
-        watchHints[space, default: [:]][region] = hints
-        session?.send(["t": "hints", "space": space, "region": region, "hints": hints])
-    }
-
-    // MARK: Agent approval
 
     /// The person's answer. It is kept until the Link's `agents` list shows it, and sent on every live
     /// path now and on every new one, so an answer given while the connection is down or switching lands.
@@ -638,13 +349,12 @@ public final class LinkSync {
     /// Deletes the Spaces kept from an earlier pairing, from this iPad.
     public func deleteLocalOnly() {
         for id in localOnly.keys {
-            replicas[id] = nil
             try? FileManager.default.removeItem(at: Self.folder(id))
         }
         localOnly = [:]
         saveLocalOnly()
         localOnlyNotice = nil
-        publishSpaces()
+        loadPages()
     }
 
     public func dismissLocalOnlyNotice() { localOnlyNotice = nil }
@@ -670,18 +380,17 @@ public final class LinkSync {
                 // Spaces made under another person (an earlier Link) aren't this person's to sync: the new Link
                 // would refuse every change in them. They stay here, offered to no Link.
                 if let old = person, old.id != offer.person.id {
+                    beforeChangingPerson?()
                     // Moved to their own folder and key: the new Link's Library ("library") and any Space of its with
                     // the same ID get fresh replicas, and these are never offered to it.
                     var shown = 0
-                    for id in replicas.keys.filter({ localOnly[$0] == nil }) {
-                        guard let space = replicas.removeValue(forKey: id) else { continue }
+                    for id in spaces.filter({ localOnly[$0] == nil }) {
                         let key = Self.keep(id)
-                        replicas[key] = space
                         localOnly[key] = old.name.isEmpty ? old.id : old.name
-                        if space.kind() == "space" { shown += 1 }
+                        shown += 1
                     }
                     saveLocalOnly()
-                    publishSpaces()
+                    loadPages()
                     if shown > 0 { localOnlyNotice = (shown, old.name.isEmpty ? "an earlier pairing" : old.name) }
                     decisions = [:]
                     saveDecisions()
@@ -874,6 +583,7 @@ public final class LinkSync {
             s.send(["t": "ping", "n": pings, "at": Self.now()])
         }
         if paths.on("p2p") == nil { dialPeerToPeer() }
+        if let session { deliverPending(session) }
     }
 
     private func publishPaths() {
@@ -881,8 +591,7 @@ public final class LinkSync {
         activeTransport = paths.active?.transport
     }
 
-    /// A new path. The first one starts anti-entropy from scratch for every Space; a second one
-    /// (the other transport) joins as another way to reach the same Link.
+    /// A new authenticated path to the paired Link.
     private func bind(_ s: Session) {
         if let old = paths.on(s.transport) {
             old.close()
@@ -897,19 +606,12 @@ public final class LinkSync {
         Task { await loop(s) }
     }
 
-    /// Starts over on the path changes go out on: anti-entropy for every Space, and assets.
+    /// Replay outstanding Sends and approval decisions over a fresh path.
     private func fresh(_ s: Session) {
-        incoming = [:] // parts of an asset from an earlier path never complete
-        for (_, space) in replicas { space.resetSync(peer: s.peer.device) }
-        s.send(["t": "spaces", "spaces": replicas.filter { localOnly[$0.key] == nil }.map { ["id": $0.key, "kind": $0.value.kind()] }])
-        s.send(["t": "assets_have", "hashes": assetHashes()])
-        for id in replicas.keys { pump(id, s) }
-        sendPresence(s)
+        deliverPending(s)
         // Answers the Link hasn't confirmed: every new path carries them again.
         sendDecisions(s)
-        for (space, regions) in watchHints {
-            for (region, hints) in regions { s.send(["t": "hints", "space": space, "region": region, "hints": hints]) }
-        }
+
     }
 
     private func loop(_ s: Session) async {
@@ -922,8 +624,6 @@ public final class LinkSync {
         let wasActive = paths.remove(s)
         publishPaths()
         if paths.isEmpty {
-            here = [:] // who is here comes again with the next session
-            for (_, space) in replicas { space.resetSync(peer: s.peer.device) }
             state = .offline("Reconnecting to \(s.peer.name)")
         } else if wasActive, let next = paths.active {
             // What was in flight on the lost path may be gone: start over on the one that is left.
@@ -934,45 +634,13 @@ public final class LinkSync {
         if s.transport != "p2p" { reconnectSoon(after: 1) }
     }
 
-    private func pump(_ id: String, _ s: Session) {
-        guard paths.active === s, localOnly[id] == nil, let space = replicas[id], let msg = space.syncMessage(peer: s.peer.device) else { return }
-        s.send(["t": "sync", "space": id], msg)
-    }
-
     private func handle(_ h: [String: Any], _ body: Data, _ s: Session) {
         switch h["t"] as? String {
-        case "spaces":
-            for item in h["spaces"] as? [[String: Any]] ?? [] {
-                // A Space of this Link's with the name of one kept from an earlier pairing: the old one stays as it is.
-                guard let id = item["id"] as? String, let kind = item["kind"] as? String, localOnly[id] == nil else { continue }
-                if replicas[id] == nil, let space = try? Space.create(spaceId: id, kind: kind, actorHex: actor) {
-                    replicas[id] = space
-                    persist(id)
-                    publishSpaces()
-                }
-                if let a = paths.active { pump(id, a) }
-            }
-        case "sync":
-            guard let id = h["space"] as? String, let space = replicas[id], localOnly[id] == nil else { return }
-            let before = space.heads()
-            do {
-                // The Link is trusted for every principal: it hosts the Agents and relays this person's other devices.
-                try space.receiveSyncMessage(peer: s.peer.device, msg: body)
-            } catch {
-                linkLog.error("Bad sync message for \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                return
-            }
-            if space.heads() != before {
-                persist(id)
-                revision[id, default: 0] += 1
-            }
-            if let a = paths.active { pump(id, a) }
-        case "assets_have":
-            let have = Set(assetHashes())
-            let want = (h["hashes"] as? [String] ?? []).filter { $0.count == 64 && !have.contains($0) && incoming[$0] == nil }
-            if !want.isEmpty { s.send(["t": "asset_want", "hashes": want]) }
-        case "asset":
-            receiveAsset(h, body)
+        case "send_ack":
+            guard let id = h["send"] as? String, Self.safeID(id) else { return }
+            let file = Self.outboxDir.appending(path: id + ".json")
+            guard let data = try? Data(contentsOf: file), let item = try? JSONSerialization.jsonObject(with: data) as? [String: Any], item["link"] as? String == paired?.key else { return }
+            try? FileManager.default.removeItem(at: file)
         case "agents":
             var known: [String: AgentInfo] = [:]
             for a in h["agents"] as? [[String: Any]] ?? [] {
@@ -993,10 +661,6 @@ public final class LinkSync {
                 saveDecisions()
             }
             refreshRequests()
-        case "asset_want":
-            for hash in h["hashes"] as? [String] ?? [] {
-                if let bytes = try? Data(contentsOf: Self.assetsDir.appending(path: hash)), let a = paths.active { sendAsset(hash, bytes, a) }
-            }
         case "ping":
             // Answered on the path it came on, so each path's RTT is its own.
             s.send(["t": "pong", "n": h["n"] ?? 0, "at": h["at"] ?? 0])
@@ -1008,31 +672,6 @@ public final class LinkSync {
                 Self.writeSecret(info, to: Self.linkDir.appending(path: "relay.json"))
                 linkLog.info("The Link syncs through the Relay at \(url, privacy: .public)")
             }
-        case "shares":
-            readShares(h["shares"] as? [[String: Any]] ?? [])
-            // An invite is single use: once someone joined with it, it is no longer worth showing.
-            if let live = h["invites"] as? [String], let inv = invite,
-               let id = URLComponents(string: inv.uri)?.queryItems?.first(where: { $0.name == "i" })?.value, !live.contains(id) {
-                invite = nil
-            }
-        case "here":
-            readHere(h)
-        case "invite":
-            if let space = h["space"] as? String, let uri = h["uri"] as? String { invite = (space, h["role"] as? String ?? "editor", uri) }
-        case "share_error":
-            let message = h["message"] as? String ?? "The Link could not do that."
-            if let j = joining {
-                joining = nil
-                j.resume(throwing: LinkError.refused(message))
-            } else {
-                shareError = message
-            }
-        case "joined":
-            joining?.resume(returning: h["space"] as? String ?? "")
-            joining = nil
-        case "refused":
-            guard let id = h["space"] as? String, localOnly[id] == nil else { return }
-            startOver(id, reason: h["reason"] as? String ?? "", s)
         case "pong":
             guard let at = (h["at"] as? NSNumber)?.int64Value else { return }
             s.recordRtt(Double(Self.now() - at))
