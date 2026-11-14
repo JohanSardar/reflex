@@ -71,7 +71,6 @@ export interface Peer {
   /** Assets arriving from this peer, part by part, per path. */
   incoming: Map<string, { size: number; parts: Buffer[]; got: number }>;
   /** Asset parts go out one at a time, each after the Path drains; control and sync frames don't wait behind them. */
-  assetOut: Promise<void>;
   device: string;
   name: string;
   /** Every live path to this peer; changes go out on `paths.active()`. */
@@ -449,7 +448,7 @@ export class Coordinator {
       void this.#loop(known, session);
       return;
     }
-    const peer: Peer = { incoming: new Map(), assetOut: Promise.resolve(), device, name, paths: new PathSet(), since: Date.now(), refused: new Set() };
+    const peer: Peer = { incoming: new Map(), device, name, paths: new PathSet(), since: Date.now(), refused: new Set() };
     peer.paths.add(session, initiator);
     this.#peers.set(device, peer);
     this.#log(`connected to ${name} (${device}) over ${transport} ${session.path.remote}`);
@@ -457,7 +456,7 @@ export class Coordinator {
     this.#fresh(peer);
   }
 
-  /** Starts over with a peer on its active path: anti-entropy for every Space, assets, open questions. */
+  /** Restores approvals and device news on a fresh authenticated path. */
   #fresh(peer: Peer): void {
     this.onBound(peer);
     if (mayApprove(this.#catalog.device(peer.device), this.#me.person.id))
@@ -471,7 +470,6 @@ export class Coordinator {
     return this.#catalog.device(p.device)?.person.id === this.#me.person.id;
   }
 
-  #assetOk(p: Peer, _hash: string): boolean { return this.#own(p); }
 
   /** Every Agent's name and color, so iPads can label Agent changes (their chips and history). */
   announceAgents(): void {
