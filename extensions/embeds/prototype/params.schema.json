@@ -1,9 +1,0 @@
-{
-  "type": "object",
-  "properties": {
-    "html": { "type": "string", "minLength": 1, "maxLength": 150000, "description": "The page's body markup. Shown as it is; scripts in it don't run. Give the parts you expect feedback on an id or data-id." },
-    "css": { "type": "string", "maxLength": 40000, "description": "Styles for the page." }
-  },
-  "required": ["html"],
-  "additionalProperties": false
-}

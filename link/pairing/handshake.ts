@@ -43,7 +43,6 @@ export interface Hello {
   /** What this device is: an iPad, or a Link (which hosts Agents). */
   kind?: "ipad" | "link";
   pair?: string; // offer ID, when pairing
-  invite?: string; // invite ID, when joining a shared Space
 }
 
 export interface PeerInfo {
@@ -61,7 +60,6 @@ export interface Trust {
   /** The secret of a live pairing offer, if `offer` names one (responder side). */
   offerSecret(offer: string): Uint8Array | undefined;
   /** The secret of a live invite, if `invite` names one (responder side). */
-  inviteSecret?(invite: string): Uint8Array | undefined;
 }
 
 /** A pairing offer read from a QR code (initiator side). */
@@ -71,7 +69,6 @@ export interface ScannedOffer {
   key: string;
   secret: Uint8Array;
   /** An invite to a shared Space rather than a pairing code. */
-  invite?: boolean;
 }
 
 export interface Me {
@@ -114,7 +111,6 @@ export interface HandshakeResult {
   paired: boolean;
   offer?: string;
   /** The invite this connection presented (responder) or used (initiator). */
-  invite?: string;
 }
 
 /** A failed handshake, with what the other side said about itself if its hello arrived (for a log line that names it). */
@@ -148,7 +144,7 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
     person: me.person,
     name: me.name,
     kind: me.kind,
-    ...(scanned && role === "i" ? (scanned.invite ? { invite: scanned.offer } : { pair: scanned.offer }) : {}),
+    ...(scanned && role === "i" ? { pair: scanned.offer } : {}),
   };
   const mine = enc(hello);
   let theirsRaw: Uint8Array;
@@ -172,21 +168,16 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
   // Which secret, if any, this connection pairs with.
   let secret: Uint8Array | undefined;
   let offer: string | undefined;
-  let invite: string | undefined;
   if (role === "i" && scanned) {
     if (theirs.device !== scanned.device || theirs.key !== scanned.key)
-      throw new Error(`the device that answered is not the one in the ${scanned.invite ? "invite" : "pairing code"}`);
+      throw new Error("the device that answered is not the one in the pairing code");
     secret = scanned.secret;
-    if (scanned.invite) invite = scanned.offer;
-    else offer = scanned.offer;
+    offer = scanned.offer;
   } else if (role === "r" && typeof theirs.pair === "string") {
     secret = trust.offerSecret(theirs.pair);
     if (!secret) throw new Error("unknown or expired pairing offer");
     offer = theirs.pair;
-  } else if (role === "r" && typeof theirs.invite === "string") {
-    secret = trust.inviteSecret?.(theirs.invite);
-    if (!secret) throw new Error("unknown, used or expired invite");
-    invite = theirs.invite;
+
   }
 
   const auth = {
@@ -206,7 +197,7 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
     const want = mac(secret, Buffer.concat([Buffer.from(`${PROTOCOL} pair ${other} `), transcript]));
     if (typeof a.mac !== "string" || !macEqual(a.mac, want)) throw new Error("peer does not know the pairing secret");
     if (known && known !== theirs.key) throw new Error(`device ${theirs.device} is already paired with another key`);
-    paired = !known && !invite;
+    paired = !known;
   } else if (known !== theirs.key) {
     throw new Error(`device ${theirs.device} is not paired`);
   }
@@ -218,7 +209,7 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
     new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript),
   );
   const kind = theirs.kind === "ipad" ? "ipad" : "link";
-  return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind }, paired, offer, invite };
+  return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind }, paired, offer };
 }
 
 export interface Message {

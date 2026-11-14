@@ -1,6 +1,0 @@
-{
-  "topic": "index",
-  "text": "# Reflex index\n\n## Element types\n- text, note, math, shape, connector, image, frame, region, embed: built in. `read_me(\"<type>\")` for fields and examples.\n- ink, file: made by people only.\n\n## Recipes\n- check-my-work: a problem, a writing Region and a \"Check my work\" button.\n- review-graph (Library, saved by Claude Code · reflex repo): a dependency graph with a legend.\n\n## Embed Templates\n- chart: a Vega-Lite chart whose Marks resolve to data rows.\n\n## Guides\n- code-maps, math-tutoring, grading, charts, 3d\n",
-  "source": "builtin",
-  "pending_sends": 0
-}

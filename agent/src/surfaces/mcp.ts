@@ -12,7 +12,6 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { TOOLS, description, inputSchema, instructions } from "../protocol.ts";
 import { Client } from "../host/client.ts";
 import { credential, logPath, NoLink } from "../host/rpc.ts";
-import { hostShowsApps, serveApp, toolMeta } from "./app.ts";
 
 const KNOWN: Record<string, string> = { "claude-code": "Claude Code", "codex-mcp-client": "Codex", codex: "Codex" };
 // Longest wait_for_user the surface holds, a little under the harness's default hard tool timeout, so a long
@@ -27,7 +26,7 @@ const CHANNEL = "claude/channel";
 const CHANNEL_HARNESSES = new Set(["Claude Code"]);
 const CHANNEL_INSTRUCTIONS = `
 
-Sends are also pushed to you: when the person presses Send while you are not in wait_for_user, the Send Bundle arrives on its own as a <channel source="reflex" ...> message. Treat it exactly like a Bundle wait_for_user returned, and follow its next: answer with apply(in_reply_to), or acknowledge it with wait_for_user(after, timeout_s: 0), then end your turn. Its images are PNG files: read the paths in images[].file. You don't need to sit in wait_for_user to hear from the person.`;
+Sends are also pushed to you: when the person presses Send while you are not in wait_for_user, the Send Bundle arrives on its own as a <channel source="reflex" ...> message. Treat it exactly like a Bundle wait_for_user returned, and follow its next: answer in your session and acknowledge it with wait_for_user(after, timeout_s: 0). Its images are PNG files: read the paths in images[].file. You don't need to sit in wait_for_user to hear from the person.`;
 
 /**
  * Whether the Claude Code session that started this server turned channels on. Claude Code drops channel
@@ -79,7 +78,7 @@ export async function runMcp(o: { channel?: boolean } = {}) {
   const session = o.channel ? sessionHasChannels() : { on: false, why: "" };
   const server = new Server(
     { name: "reflex", version: "0.1.0" },
-    { capabilities: { tools: {}, resources: {}, ...(o.channel ? { experimental: { [CHANNEL]: {} } } : {}) }, instructions: instructions + (session.on ? CHANNEL_INSTRUCTIONS : "") },
+    { capabilities: { tools: {}, ...(o.channel ? { experimental: { [CHANNEL]: {} } } : {}) }, instructions: instructions + (session.on ? CHANNEL_INSTRUCTIONS : "") },
   );
   const who = () => {
     const c = server.getClientVersion();
@@ -88,15 +87,8 @@ export async function runMcp(o: { channel?: boolean } = {}) {
   };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOLS.map((t) => ({ name: t, description: description(t), inputSchema: inputSchema(t), ...(toolMeta(t) ? { _meta: toolMeta(t) } : {}) })),
+    tools: TOOLS.map((t) => ({ name: t, description: description(t), inputSchema: inputSchema(t) })),
   }));
-  // The MCP App view (app.ts), for hosts that render MCP Apps.
-  serveApp(server);
-
-  // Sends the Link pushed to this session's MCP App target while no wait_for_user was held, kept for the
-  // view's next wait_for_user until their deadline (link/adapters/mcp-app.ts).
-  const held: { json: Record<string, any>; images: string[]; taken: (ok: boolean) => void }[] = [];
-
   server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
     const tool = req.params.name;
     const progressToken = req.params._meta?.progressToken;
@@ -109,22 +101,6 @@ export async function runMcp(o: { channel?: boolean } = {}) {
     if (tool === "wait_for_user" && cap && typeof args.timeout_s === "number" && args.timeout_s > cap) {
       log("wait_capped", { asked: args.timeout_s, cap });
       args = { ...args, timeout_s: cap };
-    }
-    // A wait with no Region or Element filter takes a Send the Link pushed for the view first. The view's
-    // next wait carries `after` (the Send it just posted), so that acknowledgement still goes to the Link,
-    // with an Element filter no Send has, so the call takes nothing else.
-    if (tool === "wait_for_user" && held.length && !args.region && !args.element) {
-      const i = held.findIndex((h) => !args.space || h.json.space === args.space);
-      if (i >= 0) {
-        const [h] = held.splice(i, 1);
-        if (args.after) {
-          const r = await (await link()).call("wait_for_user", { after: args.after, timeout_s: 0, element: "reflex-ack-only" }, who());
-          if (r.isError) log("app_ack_failed", { after: args.after, error: r.json });
-        }
-        h.taken(true);
-        log("app_push_taken", { send: h.json.send, request: extra.requestId });
-        return { content: [{ type: "text", text: JSON.stringify(h.json) }, ...h.images.map((data) => ({ type: "image", data, mimeType: "image/png" }))] };
-      }
     }
     try {
       let client: Client;
@@ -184,9 +160,6 @@ export async function runMcp(o: { channel?: boolean } = {}) {
   server.oninitialized = () => {
     log("initialized", { negotiated: (transport as any)._protocolVersion ?? null, client: server.getClientVersion(), capabilities: server.getClientCapabilities() });
     const harness = KNOWN[server.getClientVersion()?.name ?? ""] ?? server.getClientVersion()?.name ?? "MCP client";
-    // A host that renders MCP Apps gets an mcp-app push target, which feeds the view between its waits.
-    if (hostShowsApps(server.getClientCapabilities()))
-      void openTarget("app", "mcp-app", () => ({ host: harness, version: server.getClientVersion()?.version ?? "", protocol: asked, pid: process.pid }), appPush);
     if (!o.channel) return;
     // Only Claude Code has channels. Elsewhere Sends reach the Agent the guaranteed way, through wait_for_user.
     if (!CHANNEL_HARNESSES.has(harness)) return log("channel_unsupported", { harness });
@@ -218,29 +191,6 @@ export async function runMcp(o: { channel?: boolean } = {}) {
       }
       await new Promise((r) => setTimeout(r, 3000));
     }
-  }
-
-  // A Send for the view: kept until its next wait_for_user takes it, or the deadline passes and it stays in
-  // the Inbox.
-  function appPush(p: { json: Record<string, any>; images: string[]; deadline: number }): Promise<{ ok: boolean; reason?: string }> {
-    return new Promise((resolve) => {
-      const h = {
-        json: p.json,
-        images: p.images,
-        taken: (ok: boolean) => {
-          clearTimeout(timer);
-          resolve(ok ? { ok } : { ok, reason: "no view asked for it in time" });
-        },
-      };
-      const timer = setTimeout(() => {
-        const i = held.indexOf(h);
-        if (i >= 0) held.splice(i, 1);
-        log("app_push_expired", { send: p.json.send });
-        h.taken(false);
-      }, Math.max(0, p.deadline - Date.now()));
-      held.push(h);
-      log("app_push_held", { send: p.json.send });
-    });
   }
 
   async function push(p: { json: Record<string, any>; images: string[]; deadline: number }) {

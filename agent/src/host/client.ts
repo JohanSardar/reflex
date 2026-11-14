@@ -114,10 +114,6 @@ export class Client {
     return this.#request((id) => ({ t: "adapters", id, who, action, args }));
   }
 
-  person(action: string, args: Record<string, any>) {
-    return this.#request((id) => ({ t: "person", id, action, args }));
-  }
-
   close() {
     this.#sock.end();
   }

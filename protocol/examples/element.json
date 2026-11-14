@@ -1,6 +1,0 @@
-{
-  "id": "n-auth", "type": "shape", "owner": { "agent": "a_cc7", "name": "Claude Code · reflex repo" },
-  "bounds": [420, 200, 160, 80], "shape": "rect", "text": "Auth service", "color": "violet", "fill": "tint",
-  "data": { "ticket": "AUTH-142" },
-  "behaviors": [ { "on": "tap", "do": "open_panel", "panel": { "title": "Auth service", "components": [ { "kind": "text", "text": "Issues JWTs." } ] } } ]
-}

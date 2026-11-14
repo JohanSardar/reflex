@@ -5,5 +5,5 @@
 
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../protocol/generated/rust/protocol.rs"
+    "/src/protocol_generated.rs"
 ));

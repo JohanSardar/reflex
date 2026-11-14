@@ -4,7 +4,6 @@
 // Markdown keeps its headings and lists.
 import { existsSync } from "node:fs";
 import { Resvg } from "@resvg/resvg-js";
-import { modelSvg } from "./model.ts";
 import type { Bounds } from "./store.ts";
 
 // Scanning every system font costs about a second per render, so load only the faces the SVG names
@@ -289,16 +288,6 @@ function elementSvg(e: SceneElement, byId: Map<string, SceneElement>, strokes: R
         textBlock([e.name ?? "file", [e.mime, kb].filter(Boolean).join(", ")].filter(Boolean).join("\n"), [b[0] + 56, b[1], b[2] - 60, b[3]], 15, COLORS.black, false)
       );
     }
-    case "embed": {
-      // A 3D Embed: a snapshot of its model from its camera, with the parts as the Agent and the person left them.
-      const hash = typeof e.model === "string" && e.model.startsWith("asset:") ? e.model.slice(6) : undefined;
-      const bytes = hash ? asset?.(hash) : undefined;
-      const drawn = bytes ? modelSvg(bytes, b, { params: e.params, state: e.state }) : undefined;
-      const frame = `<rect x="${b[0]}" y="${b[1]}" width="${b[2]}" height="${b[3]}" rx="6" fill="#ffffff" stroke="${COLORS.grey}" stroke-opacity="0.4"/>`;
-      if (drawn !== undefined) return frame + drawn;
-      if (hash) return frame + textBlock(bytes ? "3D model (USDZ): open it on the iPad to see it" : "3D model: not on this Link yet", b, 15, COLORS.grey, true);
-    }
-    // falls through
     default: {
       const label = e.type === "embed" ? `embed: ${e.template ?? e.url ?? "html"}` : `${e.type}`;
       return `<rect x="${b[0]}" y="${b[1]}" width="${b[2]}" height="${b[3]}" fill="#f4f4f6" stroke="${COLORS.grey}" stroke-dasharray="6 4"/>` + textBlock(label, b, 15, COLORS.grey, true);

@@ -61,7 +61,7 @@ async function decide(ipad: { session: Session; got: Record<string, any>[] }, a:
 
 async function withLink(fn: (link: Link, dir: string, admin: LinkClient, log: string[]) => Promise<void>, dir = mkdtempSync(join(tmpdir(), "reflex-approve-"))): Promise<void> {
   const log: string[] = [];
-  const link = new Link({ dir, port: 0, prompt: false, p2p: false, webPort: null, log: (m) => log.push(m) });
+  const link = new Link({ dir, port: 0, prompt: false, p2p: false, log: (m) => log.push(m) });
   await link.start();
   const admin = await LinkClient.connect(dir, "admin");
   try {
@@ -170,7 +170,7 @@ test("an Agent that stops the Link and runs `reflex link` in its own terminal ca
     ptyPy,
     "import os, pty, sys, select\npid, fd = pty.fork()\nif pid == 0:\n    os.execvp(sys.argv[1], sys.argv[1:])\nwhile True:\n    r, _, _ = select.select([fd, 0], [], [])\n    if fd in r:\n        try: d = os.read(fd, 65536)\n        except OSError: break\n        if not d: break\n        os.write(1, d)\n    if 0 in r:\n        d = os.read(0, 65536)\n        if not d: break\n        os.write(fd, d)\n",
   );
-  const fg = spawn("python3", ["-I", ptyPy, process.execPath, BIN, "--home", dir, "--no-p2p", "--no-web", "--relay", "off", "--port", "0"], { stdio: ["pipe", "pipe", "pipe"] });
+  const fg = spawn("python3", ["-I", ptyPy, process.execPath, BIN, "--home", dir, "--no-p2p", "--relay", "off", "--port", "0"], { stdio: ["pipe", "pipe", "pipe"] });
   let out = "";
   fg.stdout.on("data", (b) => (out += b));
   fg.stderr.on("data", (b) => (out += b));
