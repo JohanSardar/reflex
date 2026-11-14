@@ -19,7 +19,7 @@ Live use:
 
 Check changes: asset synchronization tests removed because Link-to-Link asset replication is removed by this ticket. Self-approval subprocess fixture dropped removed --no-web argument. No approval checks weakened. Rust/kernel tests disappear with removed kernel.
 
-Pending: before/after xctrace profile on iPad13,6 iPadOS27.2 and person's final Pencil check. Parent explicitly permits MR before exclusive device turn. Voice implementation is retained; microphone transcription wasn't exercised in this simulator session.
+Follow-up: [physical iPad before/after profile completed](physical-ipad-profile.md). The person's final Pencil check remains pending. The implementation MR was filed before the exclusive device turn, as authorized. Voice implementation is retained; microphone transcription wasn't exercised in this simulator session.
 
 Sol ledger: two rounds, GPT-6.1 Sol (codex provider), medium reasoning. S1 (should) offline replay ordering fixed, reviewer regression retained. Round 2 APPROVE, no open or declined findings. Additional own lifecycle fix reviewed and live-proved. Diff before review: 103 files, +557/-20115. After behavior fixes: 104 files, +636/-20122. Usage not returned by review delegates.
 

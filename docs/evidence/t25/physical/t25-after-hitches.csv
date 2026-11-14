@@ -1,0 +1,3 @@
+start_ns,duration_ms,phase,stroke,reason
+18760694666,8.336916,drawing,5,Potentially expensive app update(s)
+21095007125,8.336666,end,6,"Potentially expensive render, 23 offscreen passes)"
