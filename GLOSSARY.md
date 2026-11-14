@@ -20,9 +20,9 @@ _Avoid_: change, sync event
 A group of the person's ink strokes, such as a circle, arrow or handwritten note.
 _Avoid_: element, shape
 
-**Space**:
-A named working surface on the person's iPad from which they send input to an agent.
-_Avoid_: shared workspace, room
+**Board**:
+An endless canvas on the person's iPad where they write, draw and place things, and from which they send input to an agent.
+_Avoid_: Space, notebook, page, room
 
 **Link**:
 The Mac companion that connects the paired iPad to approved local agents.
