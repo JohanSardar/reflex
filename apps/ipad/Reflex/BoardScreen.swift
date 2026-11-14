@@ -60,6 +60,12 @@ struct BoardScreen: View {
         .overlay(alignment: .bottom) { messages.padding(.bottom, bottomLift + 92) }
         // The keyboard covers the bottom chrome instead of pushing it up.
         .ignoresSafeArea(.keyboard)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            keyboardTop = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect)?.minY ?? .infinity
+            keepEditingAboveKeyboard()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardTop = .infinity }
+        .onChange(of: session.editing) { keepEditingAboveKeyboard() }
         .onAppear {
             ink.fingerDraws = fingerDraws
             applyPaperStyle()
@@ -101,6 +107,27 @@ struct BoardScreen: View {
     private func applyPaperStyle() {
         ink.canvasView.overrideUserInterfaceStyle = darkPaper ? .dark : .light
         ink.toolPicker.colorUserInterfaceStyle = darkPaper ? .dark : .light
+    }
+
+    // MARK: Typing above the keyboard
+
+    @State private var keyboardTop: CGFloat = .infinity
+
+    /// Scrolls the board so the text being typed sits above the keyboard, as Freeform does.
+    private func keepEditingAboveKeyboard() {
+        guard keyboardTop.isFinite, let id = session.editing, let obj = session.object(id) else { return }
+        let z = ink.zoomScale, o = ink.contentOffset
+        var r = CGRect(x: obj.frame.minX * z - o.x, y: obj.frame.minY * z - o.y, width: obj.frame.width * z, height: obj.frame.height * z)
+        if obj.kind == .table, let cell = session.editingCell, let t = obj.table, t.rows > 0 {
+            let rh = r.height / CGFloat(t.rows)
+            r = CGRect(x: r.minX, y: r.minY + CGFloat(cell.row) * rh, width: r.width, height: rh)
+        }
+        // The keyboard's top in this view's space (the board fills the screen).
+        let limit = keyboardTop - 24
+        guard r.maxY > limit else { return }
+        // Bring the bottom above the keyboard, but never push the top under the top bar.
+        let dy = min(r.maxY - limit, max(0, r.minY - 100))
+        if dy > 1 { ink.scroll(by: CGPoint(x: 0, y: dy)) }
     }
 
     // MARK: Lifting the chrome above the docked palette
@@ -508,7 +535,8 @@ struct ObjectsLayer: View {
                 }
             }
             ForEach(session.objects.filter { !$0.isConnector && $0.isAboveInk == above && $0.frame.intersects(visible) }) { obj in
-                ObjectContent(object: obj, files: session.files, darkPaper: darkPaper, hideText: session.editing == obj.id)
+                ObjectContent(object: obj, files: session.files, darkPaper: darkPaper, hideText: session.editing == obj.id,
+                              editingCell: session.editing == obj.id ? session.editingCell.map { [$0.row, $0.col] } : nil)
                     .frame(width: obj.frame.width, height: obj.frame.height)
                     .scaleEffect(z)
                     .position(x: obj.frame.midX * z - o.x, y: obj.frame.midY * z - o.y)

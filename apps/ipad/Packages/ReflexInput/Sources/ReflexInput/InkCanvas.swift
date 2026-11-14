@@ -148,7 +148,9 @@ public final class InkCanvasController: NSObject {
         canvasView.minimumZoomScale = 0.1
         canvasView.maximumZoomScale = 4
         canvasView.contentInsetAdjustmentBehavior = .never
-        canvasView.contentInset = .zero
+        // Room above and left of the Space's edge, so ink drawn at its very top-left (boards from
+        // before the redesign) can scroll out from under the top bar. Strokes never move.
+        canvasView.contentInset = Self.edgeInset
         canvasView.showsVerticalScrollIndicator = false
         canvasView.showsHorizontalScrollIndicator = false
         canvasView.decelerationRate = .normal
@@ -332,6 +334,15 @@ public final class InkCanvasController: NSObject {
         return CGRect(x: o.x / z, y: o.y / z, width: s.width / z, height: s.height / z)
     }
 
+    /// Scrolls the view by screen points (keeps text being typed above the keyboard).
+    public func scroll(by delta: CGPoint) {
+        let o = canvasView.contentOffset
+        let target = clamp(CGPoint(x: o.x + delta.x, y: o.y + delta.y), zoom: canvasView.zoomScale, size: canvasView.bounds.size)
+        UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
+            self.canvasView.contentOffset = target
+        } completion: { _ in self.syncViewport() }
+    }
+
     /// Centers the view on a Space point at a zoom.
     public func show(center: CGPoint, zoom: CGFloat, animated: Bool) {
         let size = canvasView.bounds.size == .zero ? UIScreen.main.bounds.size : canvasView.bounds.size
@@ -365,9 +376,11 @@ public final class InkCanvasController: NSObject {
         show(center: CGPoint(x: r.midX, y: r.midY), zoom: zoom, animated: animated)
     }
 
+    static let edgeInset = UIEdgeInsets(top: 110, left: 40, bottom: 0, right: 0)
+
     private func clamp(_ offset: CGPoint, zoom: CGFloat, size: CGSize) -> CGPoint {
-        CGPoint(x: min(max(offset.x, 0), Self.spaceSize.width * zoom - size.width),
-                y: min(max(offset.y, 0), Self.spaceSize.height * zoom - size.height))
+        CGPoint(x: min(max(offset.x, -Self.edgeInset.left), Self.spaceSize.width * zoom - size.width),
+                y: min(max(offset.y, -Self.edgeInset.top), Self.spaceSize.height * zoom - size.height))
     }
 
     private func syncViewport() {

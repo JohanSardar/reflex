@@ -481,7 +481,16 @@ struct ObjectTextEditor: View {
         let color = object.textColor.map { Color(hex: $0) } ?? (object.kind == .sticky || (object.kind == .table && !object.autoTableColors) ? Color(red: 0.11, green: 0.11, blue: 0.12) : (darkPaper ? .white : Color(red: 0.11, green: 0.11, blue: 0.12)))
         var font = Font.system(size: object.fontSize * zoom, weight: object.bold ? .bold : header ? .semibold : .regular)
         if object.italic { font = font.italic() }
-        return TextField("", text: $text, prompt: Text(prompt).foregroundStyle(color.opacity(0.35)), axis: .vertical)
+        // The on-screen keyboard's Tab key types a tab: in a table it moves to the next cell instead.
+        let typed = Binding<String>(get: { text }, set: { new in
+            if let onTab, new.contains("\t") {
+                text = new.replacingOccurrences(of: "\t", with: "")
+                onTab()
+            } else {
+                text = new
+            }
+        })
+        return TextField("", text: typed, prompt: Text(prompt).foregroundStyle(color.opacity(0.35)), axis: .vertical)
             .font(font)
             .underline(object.underline)
             .foregroundStyle(color)

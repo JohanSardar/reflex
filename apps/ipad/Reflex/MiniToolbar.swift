@@ -582,6 +582,29 @@ struct ShapeLibrary: View {
 
 // MARK: Scenes
 
+/// A small picture of the part of the board a Scene shows.
+struct SceneThumbnail: View {
+    let session: BoardSession
+    let rect: CGRect
+    @Environment(\.colorScheme) private var scheme
+    @State private var image: UIImage?
+
+    var body: some View {
+        let aspect = rect.height > 0 ? rect.width / rect.height : 4 / 3
+        Group {
+            if let image { Image(uiImage: image).resizable().scaledToFill() } else { Color(.tertiarySystemFill) }
+        }
+        .frame(width: 72, height: 72 / max(0.6, min(aspect, 2.2)))
+        .frame(width: 72, height: 54)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator, lineWidth: 0.5))
+        .task(id: rect) {
+            image = BoardRenderer.image(of: rect, drawing: session.ink.drawing, objects: session.objects, files: session.files,
+                                        paper: session.meta.paper, maxSide: 200, dark: scheme == .dark)
+        }
+    }
+}
+
 struct ScenesList: View {
     let session: BoardSession
     let export: () -> Void
@@ -597,7 +620,10 @@ struct ScenesList: View {
                 }
                 ForEach(session.meta.scenes) { scene in
                     Button { session.show(scene) } label: {
-                        Label(scene.name, systemImage: "rectangle.dashed")
+                        HStack(spacing: 12) {
+                            SceneThumbnail(session: session, rect: scene.rect)
+                            Text(scene.name)
+                        }
                     }
                     .foregroundStyle(.primary)
                     .contextMenu {

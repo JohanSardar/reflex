@@ -171,6 +171,8 @@ struct ObjectContent: View {
     /// Ink-coloured things (text, outlines) follow the paper: light on dark paper.
     let darkPaper: Bool
     var hideText = false
+    /// The table cell being typed in (row, column), hidden here because the editor draws it.
+    var editingCell: [Int]? = nil
 
     private var inkColor: Color { darkPaper ? .white : Color(red: 0.11, green: 0.11, blue: 0.12) }
     private var textColor: Color { object.textColor.map { Color(hex: $0) } ?? (object.kind == .sticky || (object.kind == .table && !object.autoTableColors) ? Color(red: 0.11, green: 0.11, blue: 0.12) : inkColor) }
@@ -236,7 +238,7 @@ struct ObjectContent: View {
                 RoundedRectangle(cornerRadius: 8).fill(.gray.opacity(0.2)).overlay(Image(systemName: "photo").font(.largeTitle).foregroundStyle(.secondary))
             }
         case .table:
-            TableContent(object: object, textColor: textColor, font: font, fill: tableFill, lines: tableLines, hideText: hideText)
+            TableContent(object: object, textColor: textColor, font: font, fill: tableFill, lines: tableLines, hideText: hideText && editingCell == nil, hiddenCell: editingCell)
         case .connector:
             EmptyView()
         }
@@ -268,6 +270,7 @@ struct TableContent: View {
     let fill: Color?
     let lines: Color
     let hideText: Bool
+    var hiddenCell: [Int]? = nil
 
     var body: some View {
         let t = object.table ?? TableData(cells: [[""]])
@@ -291,6 +294,7 @@ struct TableContent: View {
                             Text(t.cells[r][c].isEmpty && r == 0 ? "Column \(c + 1)" : t.cells[r][c])
                                 .font(r == 0 ? font.weight(.semibold) : font)
                                 .foregroundStyle(t.cells[r][c].isEmpty ? textColor.opacity(0.3) : textColor)
+                                .opacity(hiddenCell == [r, c] ? 0 : 1)
                                 .frame(width: cw - 16, height: rh - 8, alignment: object.align.frame)
                                 .offset(x: CGFloat(c) * cw + 8, y: CGFloat(r) * rh + 4)
                         }
