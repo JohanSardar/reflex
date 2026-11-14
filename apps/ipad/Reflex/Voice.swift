@@ -246,6 +246,7 @@ struct VoiceSendDock: View {
     @State private var started = Date()
     @State private var sentPulse = false
     @State private var permissionTouch = false
+    @State private var pressed = false
 
     var body: some View {
         let live = voice.holding || voice.state != .idle
@@ -281,60 +282,75 @@ struct VoiceSendDock: View {
         }
         .padding(.horizontal, live ? 20 : 0)
         .frame(minWidth: 56, minHeight: 56)
-        .glassEffect(live ? .regular.tint(.red).interactive() : .regular.interactive(), in: Capsule())
-        // A fresh glass when recording ends, so the button never keeps the recording look.
-        .id(live)
-        .contentShape(Capsule())
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in
-                    guard !voice.holding, !permissionTouch else { return }
-                    // The first time, only ask. A permission alert must never turn into a Send.
-                    if VoiceCapture.needsPermission {
-                        permissionTouch = true
-                        Task {
-                            let ok = await voice.requestPermission()
-                            onFail(ok ? "Ready. Hold the mic and talk, then let go to Send." : "Reflex needs the microphone and speech recognition. Allow them in Settings.")
-                        }
-                        return
-                    }
-                    voice.holding = true
-                    started = Date()
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    starting = Task {
-                        do {
-                            try await voice.start()
-                            return true
-                        } catch {
-                            voice.holding = false
-                            onFail(error.localizedDescription)
-                            return false
-                        }
-                    }
-                }
-                .onEnded { _ in
-                    if permissionTouch { permissionTouch = false; return }
-                    guard voice.holding else { return }
-                    voice.holding = false
-                    let start = starting
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    Task {
-                        // A short press can end before listening has started.
-                        guard await start?.value == true else { return }
-                        let (said, words) = await voice.stop()
-                        // Nothing heard: no Send.
-                        guard !said.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                            onFail("Didn't catch that. Hold the mic and talk, then let go.")
-                            return
-                        }
-                        onRelease(said, words)
-                    }
-                }
-        )
+        // Opaque backing under the glass, so the disc reads as a control on dark paper too.
+        .background(live ? Color.clear : Color(.systemBackground).opacity(0.82), in: Capsule())
+        .glassEffect(live ? .regular.tint(.red) : .regular, in: Capsule())
+        .scaleEffect(pressed && !live ? 0.94 : 1)
+        .animation(.spring(duration: 0.2), value: pressed)
+        // The touch is tracked by UIKit on a view that stays put while the button changes shape:
+        // a SwiftUI gesture is lost when the view is rebuilt mid-touch, and then release never ends it.
+        .overlay {
+            PressTracker { down in
+                if down { pressBegan() } else { pressEnded() }
+            }
+        }
         .accessibilityElement()
         .accessibilityIdentifier("mic-button")
         .accessibilityLabel(live ? "Listening. Release to send." : "Hold to talk")
         .accessibilityAddTraits(.isButton)
+    }
+
+    private func pressBegan() {
+        log.info("Mic press began (holding \(voice.holding))")
+        pressed = true
+        guard !voice.holding, !permissionTouch else { return }
+        // The first time, only ask. A permission alert must never turn into a Send.
+        if VoiceCapture.needsPermission {
+            permissionTouch = true
+            Task {
+                let ok = await voice.requestPermission()
+                onFail(ok ? "Ready. Hold the mic and talk, then let go to Send." : "Reflex needs the microphone and speech recognition. Allow them in Settings.")
+            }
+            return
+        }
+        voice.holding = true
+        started = Date()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        starting = Task {
+            do {
+                try await voice.start()
+                return true
+            } catch {
+                voice.holding = false
+                onFail(error.localizedDescription)
+                return false
+            }
+        }
+    }
+
+    /// Release, or a touch the system cancelled (an alert, a palm): either way recording ends.
+    private func pressEnded() {
+        log.info("Mic press ended (holding \(voice.holding), state \(String(describing: voice.state), privacy: .public))")
+        pressed = false
+        if permissionTouch { permissionTouch = false; return }
+        guard voice.holding else { return }
+        voice.holding = false
+        let start = starting
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task {
+            // A short press can end before listening has started.
+            guard await start?.value == true else {
+                _ = await voice.stop()
+                return
+            }
+            let (said, words) = await voice.stop()
+            // Nothing heard: no Send.
+            guard !said.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                onFail("Didn't catch that. Hold the mic and talk, then let go.")
+                return
+            }
+            onRelease(said, words)
+        }
     }
 
     private var sendButton: some View {
@@ -394,5 +410,47 @@ struct LevelMeter: View {
             }
         }
         .accessibilityHidden(true)
+    }
+}
+
+
+/// Reports a finger going down and coming up (or being cancelled) on a view that SwiftUI
+/// doesn't rebuild while the button around it changes.
+struct PressTracker: UIViewRepresentable {
+    let changed: (Bool) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        let press = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handle(_:)))
+        press.minimumPressDuration = 0
+        press.allowableMovement = .greatestFiniteMagnitude
+        press.cancelsTouchesInView = true
+        v.addGestureRecognizer(press)
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) { context.coordinator.changed = changed }
+    func makeCoordinator() -> Coordinator { Coordinator(changed: changed) }
+
+    final class Coordinator: NSObject {
+        var changed: (Bool) -> Void
+        private var down = false
+        init(changed: @escaping (Bool) -> Void) { self.changed = changed }
+
+        @MainActor @objc func handle(_ g: UILongPressGestureRecognizer) {
+            switch g.state {
+            case .began:
+                log.info("Press tracker began")
+                down = true
+                changed(true)
+            case .ended, .cancelled, .failed:
+                log.info("Press tracker ended \(g.state.rawValue)")
+                guard down else { return }
+                down = false
+                changed(false)
+            default: break
+            }
+        }
     }
 }
