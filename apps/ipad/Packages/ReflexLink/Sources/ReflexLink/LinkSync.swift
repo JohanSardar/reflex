@@ -265,7 +265,7 @@ public final class LinkSync {
 
     // MARK: Assets
 
-    /// Stores bytes as an asset, durably, before anything refers to them, and offers them to the Link.
+    /// Stores bytes locally before a Send refers to them. Delivery exports them only with that Send.
     public func storeAsset(_ bytes: Data) throws -> String {
         let hash = sha256(bytes).hex
         let url = Self.assetsDir.appending(path: hash)

@@ -99,27 +99,7 @@ interface Status {
   person: { id: string; name: string };
   lan_port: number;
   p2p_port: number | null;
-  spaces: { id: string; kind: string; digest: string; elements: number; sends: string[] }[];
-  journal: { entries: number; checkpoints: number };
-  assets: number;
-  inbox: { space: string; send: string; via: string; receipts: { recipient: string; state: string }[] }[];
-  paired: { device: string; name: string; connected: boolean }[];
-  peers: { device: string; name: string; paths: { transport: string; remote: string; rttMs: number | null; active: boolean; sentBytes: number; receivedBytes: number }[] }[];
-  agents: { id: string; name: string; status: string }[];
-  push?: {
-    targets: { id: string; agent: string; adapter: string; config: Record<string, unknown>; live: boolean }[];
-    attempts: { space: string; send: string; recipient: string; target: string; started_at: number; outcome: string; reason: string | null }[];
-  };
-}
-
-interface Status {
-  device: string;
-  name: string;
-  person: { id: string; name: string };
-  lan_port: number;
-  p2p_port: number | null;
-  spaces: { id: string; kind: string; digest: string; elements: number; sends: string[] }[];
-  journal: { entries: number; checkpoints: number };
+  pages: string[];
   assets: number;
   inbox: { space: string; send: string; via: string; receipts: { recipient: string; state: string }[] }[];
   paired: { device: string; name: string; connected: boolean }[];
@@ -133,8 +113,8 @@ interface Status {
 
 function showStatus(s: Status): string {
   const lines = [`${s.name} (${s.device}) · ${s.person.name} · ${s.lan_port === undefined ? "no LAN" : `LAN :${s.lan_port}`}${s.p2p_port ? ` · peer-to-peer :${s.p2p_port}` : ""}`, ""];
-  lines.push(`Spaces (${s.spaces.length}), journal ${s.journal.entries} entries, ${s.assets} assets`);
-  for (const x of s.spaces) lines.push(`  ${x.id.padEnd(20)} ${x.kind.padEnd(8)} ${String(x.elements).padStart(3)} elements  ${x.sends.length} sends  digest ${x.digest.slice(0, 12)}`);
+  lines.push(`Pages with Sends (${s.pages.length}), ${s.assets} assets`);
+  for (const page of s.pages) lines.push(`  ${page}`);
   lines.push(`Paired devices (${s.paired.length})`);
   for (const d of s.paired) {
     const p = s.peers.find((x) => x.device === d.device);

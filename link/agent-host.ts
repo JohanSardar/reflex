@@ -2,13 +2,13 @@
 // running on the Link's durable Spaces, Inbox and assets, served to the MCP
 // and CLI surfaces on `agent.sock`.
 //
-// Every write an Agent makes is journaled before its result is returned, and
+// Every Send is durable before it is delivered, and
 // every Send is indexed in the durable Inbox in the same transaction that
 // makes it durable, so a Link that is killed and restarted still delivers it.
 import { Core, ReflexError, type Identity } from "../agent/src/capabilities/index.ts";
 import { serveHost, type Listener } from "../agent/src/host/server.ts";
 import type { Who } from "../agent/src/host/rpc.ts";
-import type { Assets, Bounds, Delivery, FrozenSend, Inbox as AgentInbox, SpaceEntry, SendStore as AgentSpaces, WaitFilter, WriteOrigin } from "../agent/src/store.ts";
+import type { Assets, Delivery, FrozenSend, Inbox as AgentInbox, WaitFilter } from "../agent/src/store.ts";
 import type { Catalog, AgentRecord } from "./pairing/catalog.ts";
 import type { AssetStore } from "./storage/assets.ts";
 import type { DatabaseSync } from "node:sqlite";
@@ -37,18 +37,13 @@ class LinkInbox implements AgentInbox {
 
   #frozen(space: string, send: string): FrozenSend | undefined {
     const v = this.#store.get(send);
-    return v?.space === space ? v as unknown as FrozenSend : undefined;
+    return v?.space === space ? v : undefined;
   }
 
   take(agent: string, f: WaitFilter): Delivery | undefined {
     for (const e of this.#inbox.pending(recipient(agent), f.space)) {
       const send = this.#frozen(e.space, e.send);
       if (!send) continue;
-      // Sends store keys (`<agent>/<id>`); the Agent filters by its own IDs.
-      const local = (k?: string) => (k?.startsWith(`${agent}/`) ? k.slice(agent.length + 1) : k);
-      if (f.region && local(send.region) !== f.region) continue;
-      // A tap on that Element, whether its Behavior notifies or Sends.
-      if (f.element && local(send.element) !== f.element) continue;
       // A push of this Send is under way; it is delivered there, or comes back here if the push fails.
       if (this.inFlight(e.space, e.send, recipient(agent))) continue;
       this.#inbox.mark(e.space, e.send, recipient(agent), "delivered");
@@ -80,16 +75,7 @@ class LinkInbox implements AgentInbox {
 
 class LinkAssets implements Assets {
   #assets: AssetStore;
-  #added?: (hash: string) => void;
-  constructor(assets: AssetStore, added?: (hash: string) => void) {
-    this.#assets = assets;
-    this.#added = added;
-  }
-  put(bytes: Buffer) {
-    const hash = this.#assets.put(bytes);
-    this.#added?.(hash);
-    return hash;
-  }
+  constructor(assets: AssetStore) { this.#assets = assets; }
   get(hash: string) {
     try {
       return this.#assets.has(hash) ? this.#assets.get(hash) : undefined;
@@ -106,20 +92,10 @@ export interface AgentHostOptions {
   store: SendStore;
   inbox: Inbox;
   assets: AssetStore;
-  /** An Agent stored an asset (a model or picture it placed): offer it to connected devices now. */
-  assetAdded?: (hash: string) => void;
   catalog: Catalog;
   person: { id: string; name: string };
   socket: string;
   token: string;
-  /** Spaces this person's Agents can't see: ones someone else shared with them (link/sharing.ts). */
-  hidden?: (space: string) => boolean;
-  /** How many of the person's devices are connected (not other Links), and the Spaces on their screens. */
-  presence?: () => { devices: number; viewing?: string[] };
-  /** Whether the person is writing in a Space now, from a device's live pen signal; undefined when no device shows it. */
-  writing?: (space: string) => boolean | undefined;
-  /** The devices' recognized handwriting lines for one watched Region. */
-  deviceHints?: (space: string, region: string) => { strokes: string[]; text: string; confidence: number }[];
   /** Asks the person to approve a new Agent (on the Link's terminal and on paired iPads). */
   announce: (a: AgentRecord) => void;
   /** Asks connected iPads again about an Agent still waiting (one may have missed the question). */
@@ -144,7 +120,7 @@ export async function startAgentHost(o: AgentHostOptions) {
   const core = new Core({
     getSend: (id) => o.store.get(id),
     inbox,
-    assets: new LinkAssets(o.assets, o.assetAdded),
+    assets: new LinkAssets(o.assets),
     person: { person: o.person.id, name: o.person.name },
     names,
     progressEvery: Number(process.env.REFLEX_PROGRESS_S ?? 15),

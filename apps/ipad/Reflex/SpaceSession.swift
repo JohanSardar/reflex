@@ -74,8 +74,6 @@ final class SpaceSession {
 /// What the screen shows in one rectangle of the Space, as a PNG.
 enum Crop {
     @MainActor
-    /// `models` are pictures of 3D Embeds (Space frames), drawn where they are: a view snapshot
-    /// leaves their Metal content out. `ink` is drawn again over them.
     static func capture(space rect: CGRect, zoom: CGFloat, offset: CGPoint) -> (png: Data, bounds: CGRect)? {
         guard !rect.isNull, rect.width >= 1, rect.height >= 1,
               let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first

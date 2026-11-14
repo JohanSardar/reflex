@@ -59,7 +59,7 @@ function classify(g: Group, targets: Target[]): Record<string, any> {
     const on = ts.filter((t) => t.bounds[2] <= 1.3 * main.bounds[2] && t.bounds[3] <= 1.3 * main.bounds[3] && inside(main.points, center(t.bounds))).map((t) => t.id);
     if (on.length) return { kind: "circle", on: on.slice(0, 20) };
   }
-  if (g.text) return { kind: "writing", text: g.text, confidence: g.confidence };
+  if (g.text) return { kind: "writing", text_guess: g.text, confidence: g.confidence };
   if (ss.length === 2 && ss.every((s) => straight(s) > 0.8 && size(s) > 20) && area(ss[0].bounds, ss[1].bounds) >= 0.5 * Math.min(ss[0].bounds[2] * ss[0].bounds[3], ss[1].bounds[2] * ss[1].bounds[3])) {
     const t = under(); return { kind: "cross", ...(t ? { on: [t.id] } : {}) };
   }

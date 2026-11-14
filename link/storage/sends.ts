@@ -57,7 +57,11 @@ export function nativeSend(raw: unknown, space: unknown, person: string, device:
 }
 
 export class SendStore {
-  constructor(readonly db: DatabaseSync, readonly inbox: Inbox) {
+  readonly db: DatabaseSync;
+  readonly inbox: Inbox;
+  constructor(db: DatabaseSync, inbox: Inbox) {
+    this.db = db;
+    this.inbox = inbox;
     db.exec("CREATE TABLE IF NOT EXISTS native_sends (send TEXT PRIMARY KEY, space TEXT NOT NULL, body TEXT NOT NULL, device TEXT NOT NULL, at INTEGER NOT NULL)");
   }
   ingest(send: NativeSend): boolean {

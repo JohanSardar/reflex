@@ -1,48 +1,10 @@
-// The sync coordinator: binds Paths to devices once they prove their key, and
-// keeps every Space in sync with every bound peer through the kernel's sync
-// protocol (one Automerge sync conversation per Space per peer).
-//
-// Messages on a session (after the handshake, all encrypted):
-//   spaces        { spaces: [{ id, kind }] }    the Spaces this side holds
-//   sync          { space } + kernel sync bytes
-//   assets_have   { hashes }                    assets this side holds
-//   asset_want    { hashes }
-//   asset         { hash, off, size } + bytes   one part of at most 1 MiB, in order; the whole
-//                                               asset is checked against the hash before it is kept
-//   ping / pong   { n, at }                     RTT
-//   agent_request { id, name, color, requested_at }   an Agent is waiting for the person's approval (to approving iPads)
-//   agent_decision { id, status, requested_at } the person's answer, from an iPad that may approve
-//                                               (catalog.ts mayApprove); an answer to an older request is ignored
-//   agent_decision_refused { id, reason }       that iPad's answers don't count, and why
-//   agents        { agents: [{ id, name, color, status, requested_at }], approver }   every known Agent (to iPads),
-//                                               for chips and history; `approver`: whether that iPad's answers count
-//   device_paired { device, name, approves }    a new device of this person's paired (to their iPads, each told once,
-//                                               on the next binding if it wasn't connected)
-//   approver_requests { requests: [{ device, name, asked_at }] }   iPads waiting for "Let … approve Agents?" (to
-//                                               approving iPads, on every binding and change)
-//   approver_decision { device, allow }         the answer, from an approving iPad
-//   refused       { space, reason }             the changes it sent to that Space were refused
-//
-// The retained document bridge accepts only this person's paired devices.
-// Peers may write only as their paired person. T25 replaces this with native Sends.
-//
-// A peer can be connected over several transports at once (LAN, Apple
-// peer-to-peer). Every path stays open and whatever arrives on any of them is
-// taken; this side sends over the fastest, chosen with hysteresis
-// (./paths.ts). A path that closes or goes silent is dropped; if it was the
-// one being sent on, the next best takes over at once.
-//
-// Sync state is restartable: on every new binding, and whenever the path
-// being sent on is lost, it is reset, so the two sides run anti-entropy from
-// scratch and repair anything a dropped connection lost. Duplicate
-// deliveries are harmless: the same change arriving twice, over one path or
-// two, changes nothing the second time (`everyPath` sends every change over
-// every live path, to show it).
+// Paired encrypted paths, approvals and explicit native Send delivery.
+// Ink is never synchronized: only a Send and its referenced images cross this boundary.
 import { mayApprove, type Catalog, type PairedDevice } from "../pairing/catalog.ts";
 import { handshake, HandshakeError, type Me, type Message, type PeerInfo, type ScannedOffer, type Session } from "../pairing/handshake.ts";
 import type { Offers, ParsedOffer } from "../pairing/offer.ts";
 import type { AssetStore } from "../storage/assets.ts";
-import type { SpaceStore } from "../storage/journal.ts";
+import { nativeSend, type NativeSend } from "../storage/sends.ts";
 import type { Candidate, Path, Priority, Transport } from "../transports/transport.ts";
 import { PathSet, SILENT_MS } from "./paths.ts";
 
@@ -126,7 +88,6 @@ const hostOf = (remote: string): string => remote.replace(/:\d+$/, "");
 
 export class Coordinator {
   #me: Me;
-  #store: SpaceStore;
   #assets: AssetStore;
   #catalog: Catalog;
   #offers: Offers;
@@ -152,11 +113,11 @@ export class Coordinator {
   grantsApproval: (source: "terminal" | "admin") => boolean = () => false;
   /** What to do so an iPad may approve, for logs and for the iPad (link.ts). */
   approvalHint: () => string = () => "";
-  /** Session extension point, including T25's send/send_ack messages. */
+  onSend: (send: NativeSend) => void = () => { throw new Error("Send receiver is not ready"); };
+  /** Messages the coordinator itself doesn't handle (the Relay's `relay_keys`, link/relay/sync.ts). */
   onMessage: (p: Peer, h: Record<string, unknown>, body: Uint8Array) => void = () => {};
   constructor(opts: {
     me: Me;
-    store: SpaceStore;
     assets: AssetStore;
     catalog: Catalog;
     offers: Offers;
@@ -166,7 +127,6 @@ export class Coordinator {
     everyPath?: boolean;
   }) {
     this.#me = opts.me;
-    this.#store = opts.store;
     this.#assets = opts.assets;
     this.#catalog = opts.catalog;
     this.#offers = opts.offers;
@@ -174,10 +134,7 @@ export class Coordinator {
     this.#log = opts.log;
     this.#quiet = new Quiet(opts.log);
     this.#everyPath = opts.everyPath ?? false;
-    this.#store.onChange((space, origin) => {
-      if (origin === "create") this.#announceSpaces();
-      for (const p of this.#peers.values()) this.#pump(space, p);
-    });
+
   }
 
   /** Starts another transport while running: a Relay room shared with another person, or an invite's room. */
@@ -502,11 +459,7 @@ export class Coordinator {
 
   /** Starts over with a peer on its active path: anti-entropy for every Space, assets, open questions. */
   #fresh(peer: Peer): void {
-    for (const id of this.#store.ids()) this.#store.read(id, (s) => s.resetSync(peer.device));
     this.onBound(peer);
-    this.#sendSpaces(peer);
-    this.#send(peer, { t: "assets_have", hashes: this.#assets.list().filter((h) => this.#assetOk(peer, h)) });
-    for (const id of this.#store.ids()) this.#pump(id, peer);
     if (mayApprove(this.#catalog.device(peer.device), this.#me.person.id))
       for (const a of this.pendingAgents()) this.#send(peer, { t: "agent_request", ...a });
     this.#sendAgents(peer);
@@ -519,15 +472,6 @@ export class Coordinator {
   }
 
   #assetOk(p: Peer, _hash: string): boolean { return this.#own(p); }
-
-  /** Everything a Space's Elements and Sends say, where the assets they refer to are named. */
-  #refs(space: string): string {
-    return this.#store.read(space, (s) => {
-      const scene = s.scene(JSON.stringify({ detail: "full" }));
-      const sends: string[] = JSON.parse(scene).sends ?? [];
-      return scene + sends.map((id) => s.send(id)).join("");
-    });
-  }
 
   /** Every Agent's name and color, so iPads can label Agent changes (their chips and history). */
   announceAgents(): void {
@@ -560,36 +504,6 @@ export class Coordinator {
     this.announceAgents();
   }
 
-  /** Who a peer's changes to a Space may be written for, from its pairing record and its role there. */
-  #writers(device: string, space: string): string {
-    const d = this.#catalog.device(device);
-    return JSON.stringify(d?.person.id === this.#me.person.id ? { people: [d.person.id] } : { people: [], agents: [] });
-  }
-
-  #allowed(p: Peer, space: string): boolean {
-    return !p.refused.has(space) && this.#own(p);
-  }
-
-  #sendSpaces(p: Peer): void {
-    const spaces = this.#store.ids().filter((id) => this.#allowed(p, id)).map((id) => ({ id, kind: this.#store.kind(id) }));
-    this.#send(p, { t: "spaces", spaces });
-  }
-
-  #announceSpaces(): void {
-    for (const p of this.#peers.values()) this.#sendSpaces(p);
-  }
-
-  /** Tells peers about a newly stored asset. */
-  announceAsset(hash: string): void {
-    for (const p of this.#peers.values()) if (this.#assetOk(p, hash)) this.#send(p, { t: "assets_have", hashes: [hash] });
-  }
-
-  #pump(space: string, p: Peer): void {
-    if (this.#peers.get(p.device) !== p || !this.#allowed(p, space)) return;
-    const msg = this.#store.read(space, (s) => s.syncMessage(p.device));
-    if (msg) this.#send(p, { t: "sync", space }, msg, "change");
-  }
-
   async #loop(p: Peer, s: Session): Promise<void> {
     const transport = s.path.transport;
     try {
@@ -609,7 +523,6 @@ export class Coordinator {
     const r = p.paths.remove(s);
     if (p.paths.size === 0) {
       this.#peers.delete(p.device);
-      for (const id of this.#store.ids()) this.#store.read(id, (x) => x.resetSync(p.device));
       this.#log(`disconnected from ${p.name} (${p.device})`);
       this.onUnbound(p);
       return;
@@ -624,64 +537,26 @@ export class Coordinator {
 
   #handle(p: Peer, s: Session, h: Record<string, unknown>, body: Uint8Array): void {
     switch (h.t) {
-      case "spaces": {
-        for (const s of (h.spaces as { id: string; kind: string }[]) ?? []) {
-          if (typeof s?.id !== "string" || !this.#allowed(p, s.id)) continue; // not shared with this peer
-          if (!this.#store.has(s.id)) {
-            this.#store.ensure(s.id, s.kind);
-            this.#log(`now holding Space '${s.id}' from ${p.name}`);
-          }
-          this.#pump(s.id, p);
-        }
-        return;
-      }
-      case "sync": {
-        const space = String(h.space);
-        if (!this.#store.has(space) || !this.#allowed(p, space)) return; // not announced, or not shared with this peer
-        const apply = () => this.#store.commit(space, `sync:${p.device}`, (s) => s.receiveSyncMessageChecked(p.device, body, this.#writers(p.device, space)));
-        const r = JSON.parse(this.#own(p) ? apply() : apply());
-        if (!r.ok) {
-          const reason = r.errors.map((e: { msg: string }) => e.msg).join(" ");
-          // An iPad holding a Space from an earlier pairing (another person) offers it on every connect: once is enough.
-          const someoneElse = /for someone else/.test(reason) ? " It most likely holds this Space from an earlier pairing with another Link; an up-to-date Reflex app keeps such Spaces on the iPad only." : "";
-          this.#quiet.say(`refused:${p.device}:${space}`, `refused changes to '${space}' from ${p.name} (${p.device}): ${reason}${someoneElse}`);
-          // That Space stops syncing with it until it reconnects; its other Spaces carry on.
-          p.refused.add(space);
-          this.#store.read(space, (s) => s.resetSync(p.device));
-          this.#send(p, { t: "refused", space, reason });
-          return;
-        }
-        this.#pump(space, p); // the sync protocol needs a reply even when nothing changed
+      case "send": {
+        const device = this.#catalog.device(p.device);
+        if (!device || device.kind !== "ipad" || device.person.id !== this.#me.person.id) return;
+        const send = nativeSend(h.send, h.space, device.person.id, p.device);
+        // Images must be durable and readable before the envelope becomes visible.
+        for (const crop of send.crops ?? []) this.#assets.get(crop.asset);
+        this.onSend(send);
+        this.#send(p, { t: "send_ack", send: send.send });
         return;
       }
       case "assets_have": {
-        const want = ((h.hashes as string[]) ?? []).filter((x) => !this.#assets.has(x));
-        if (want.length) this.#send(p, { t: "asset_want", hashes: want });
-        return;
-      }
-      case "asset_want": {
-        for (const x of (h.hashes as string[]) ?? []) {
-          if (!this.#assets.has(x) || !this.#assetOk(p, x)) continue;
-          const bytes = this.#assets.get(x);
-          // All parts of one asset go over the path that was active for its first part; the
-          // other side puts parts together per path.
-          let via: Session | null = null;
-          for (let off = 0; off === 0 || off < bytes.length; off += ASSET_PART)
-            p.assetOut = p.assetOut
-              .then(() => {
-                if (this.#peers.get(p.device) !== p) return;
-                if (off === 0) via = p.paths.active();
-                if (!via || !p.paths.entry(via)) return; // that path is gone; the peer asks again on the next one
-                return via.send({ t: "asset", hash: x, off, size: bytes.length }, bytes.subarray(off, off + ASSET_PART), "asset");
-              })
-              .catch((e: Error) => this.#log(`could not send asset ${x} to ${p.name}: ${e.message}`));
-        }
+        // Older clients must upgrade to explicit Send delivery.
         return;
       }
       case "asset": {
+        if (!this.#own(p) || this.#catalog.device(p.device)?.kind !== "ipad") return;
         const hash = String(h.hash);
         const off = Number(h.off);
         const size = Number(h.size);
+        if (!/^[a-f0-9]{64}$/.test(hash) || !Number.isSafeInteger(off) || off < 0 || !Number.isSafeInteger(size) || size < 0 || size > 64 * 1024 * 1024) return;
         if (this.#assets.has(hash)) return;
         const key = `${s.path.id}:${hash}`;
         let inc = p.incoming.get(key);
@@ -694,8 +569,7 @@ export class Coordinator {
         inc.got += body.length;
         if (inc.got < size) return;
         p.incoming.delete(key);
-        if (this.#assets.putVerified(hash, Buffer.concat(inc.parts))) this.announceAsset(hash);
-        else this.#log(`rejected asset ${hash} from ${p.name}: bytes do not match the hash`);
+        if (!this.#assets.putVerified(hash, Buffer.concat(inc.parts))) this.#log(`rejected asset ${hash} from ${p.name}: bytes do not match the hash`);
         return;
       }
       case "agent_decision": {
@@ -733,18 +607,6 @@ export class Coordinator {
           this.#sendAgents(q);
           if (allow) for (const a of this.pendingAgents()) this.#send(q, { t: "agent_request", ...a });
         }
-        return;
-      }
-      case "refused": {
-        this.#log(`${p.name} refused changes: ${String(h.reason ?? "")}`);
-        return;
-      }
-      case "reset": {
-        // The peer dropped the changes refused here: sync that Space with it again.
-        const space = String(h.space ?? "");
-        if (!p.refused.delete(space)) return;
-        this.#store.read(space, (s) => s.resetSync(p.device));
-        this.#pump(space, p);
         return;
       }
       case "ping":

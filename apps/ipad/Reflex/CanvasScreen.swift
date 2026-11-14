@@ -197,7 +197,7 @@ struct CanvasScreen: View {
                 Button("Scan again") { pairing = true }.buttonStyle(.glassProminent).accessibilityIdentifier("connect-empty")
             default:
                 Text(link.spaces.isEmpty ? "No Spaces yet" : "Pick a Space").font(.title3)
-                Text(link.spaces.isEmpty ? "When an Agent opens a Space, it shows up in the Spaces menu." : "Open one from the Spaces menu.").foregroundStyle(.secondary)
+                Text("Create or open a page from the pages menu.").foregroundStyle(.secondary)
             }
         }
     }

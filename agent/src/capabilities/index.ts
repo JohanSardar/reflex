@@ -14,11 +14,13 @@ export class ReflexError extends Error {
 }
 export class Core {
   #names = new Map<string, string>();
-  constructor(readonly opts: {
+  readonly opts: {
     inbox: Inbox; assets: Assets; getSend: (id: string) => NativeSend | undefined;
     person: { person: string; name: string }; names?: Record<string, string>;
     progressEvery?: number; log?: (event: string, data?: Record<string, unknown>) => void;
-  }) {
+  };
+  constructor(opts: Core["opts"]) {
+    this.opts = opts;
     this.#names.set(opts.person.person, opts.person.name);
     for (const [id, name] of Object.entries(opts.names ?? {})) this.#names.set(id, name);
   }

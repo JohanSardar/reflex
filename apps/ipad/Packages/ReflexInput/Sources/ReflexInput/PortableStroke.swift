@@ -1,9 +1,8 @@
 import Foundation
 import PencilKit
 
-/// The portable form of one finished stroke: what the web viewer, export and
-/// an Agent's `read(detail: "strokes")` use. The native PencilKit archive is kept
-/// next to it for fidelity.
+/// The portable form of a finished stroke, captured only inside an explicit Send.
+/// The native PencilKit archive stays on the iPad.
 ///
 /// Coordinates are Space points. `points` are the path's control points, before
 /// `transform`. `visible` lists the parametric ranges of the path left after a
@@ -33,7 +32,7 @@ public struct PortableStroke: Codable, Equatable, Sendable {
     public var bounds: [Double]
     public var points: [Point]
 
-    /// The visible points in Space coordinates as the kernel takes them:
+    /// The visible points in Space coordinates for a Send:
     /// `[x, y, t, pressure]`, with `t` in milliseconds since the stroke began.
     public var spacePoints: [[Double]] {
         let (a, b, c, d, tx, ty) = (transform[0], transform[1], transform[2], transform[3], transform[4], transform[5])
