@@ -200,7 +200,8 @@ struct ObjectContent: View {
         case .sticky:
             ZStack {
                 Rectangle().fill(Color(hex: object.fill ?? Palette.sticky[0]))
-                    .shadow(color: .black.opacity(object.shadow ? 0.18 : 0), radius: 6, x: 0, y: 4)
+                    .shadow(color: .black.opacity(object.shadow ? 0.10 : 0), radius: 1.5, x: 0, y: 1)
+                    .shadow(color: .black.opacity(object.shadow ? 0.16 : 0), radius: 10, x: 0, y: 6)
                 if object.text.isEmpty && !hideText {
                     Text("Tap to type").font(.system(size: object.fontSize * 0.8)).foregroundStyle(.black.opacity(0.28)).multilineTextAlignment(.center).padding(16)
                 } else if !hideText {
@@ -291,7 +292,7 @@ struct TableContent: View {
                 if !hideText {
                     ForEach(0 ..< t.rows, id: \.self) { r in
                         ForEach(0 ..< t.cols, id: \.self) { c in
-                            Text(t.cells[r][c].isEmpty && r == 0 ? "Column \(c + 1)" : t.cells[r][c])
+                            Text(t.cells[r][c].isEmpty && r == 0 && hiddenCell != nil ? "Column \(c + 1)" : t.cells[r][c])
                                 .font(r == 0 ? font.weight(.semibold) : font)
                                 .foregroundStyle(t.cells[r][c].isEmpty ? textColor.opacity(0.3) : textColor)
                                 .opacity(hiddenCell == [r, c] ? 0 : 1)
@@ -316,7 +317,7 @@ enum PaperDrawing {
         // Far out, fewer lines, so the paper doesn't turn grey.
         // Never denser than 16pt on screen, so the pattern stays even and readable at every zoom.
         while step < 16 { step *= 2; every *= 2 }
-        let color = dark ? Color.white.opacity(paper.style == .dots ? 0.24 : 0.16) : Color.black.opacity(paper.style == .dots ? 0.28 : 0.10)
+        let color = dark ? Color.white.opacity(paper.style == .dots ? 0.15 : 0.08) : Color.black.opacity(paper.style == .dots ? 0.28 : 0.10)
         let startX = (ceil(origin.x / every) * every - origin.x) * zoom
         let startY = (ceil(origin.y / every) * every - origin.y) * zoom
         switch paper.style {

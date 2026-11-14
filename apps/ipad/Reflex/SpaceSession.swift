@@ -80,8 +80,12 @@ final class BoardSession {
 
     func updateMeta(_ change: (inout BoardMeta) -> Void) { library.update(id, change) }
 
-    func say(_ text: String) {
+    /// The notice offers a Pair button (Send before pairing).
+    var noticeOffersPairing = false
+
+    func say(_ text: String, pair: Bool = false) {
         notice = text
+        noticeOffersPairing = pair
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(4))
             if self?.notice == text { self?.notice = nil }
@@ -141,12 +145,16 @@ final class BoardSession {
     func writeThumbnail() {
         let rect = contentBounds ?? CGRect(x: 0, y: 0, width: 800, height: 600)
         let paper = meta.paper
-        let image = BoardRenderer.image(of: rect.insetBy(dx: -40, dy: -40), drawing: ink.drawing, objects: objects, files: files, paper: paper, maxSide: 640, dark: false)
+        let area = rect.insetBy(dx: -40, dy: -40)
+        let image = BoardRenderer.image(of: area, drawing: ink.drawing, objects: objects, files: files, paper: paper, maxSide: 640, dark: false)
+        let darkImage = BoardRenderer.image(of: area, drawing: ink.drawing, objects: objects, files: files, paper: paper, maxSide: 640, dark: true)
         guard let data = image?.pngData() else { return }
-        let url = files.thumbnail
+        let darkData = darkImage?.pngData()
+        let url = files.thumbnail, darkURL = files.thumbnailDark
         let library = library, id = id
         BoardFiles.queue.async {
             try? data.write(to: url, options: .atomic)
+            if let darkData { try? darkData.write(to: darkURL, options: .atomic) }
             Task { @MainActor in library.thumbnailWritten(id) }
         }
     }
@@ -882,7 +890,9 @@ final class BoardSession {
     }
 
     func resizeTable(_ id: String, rows: Int, cols: Int) {
+        let others = objects.filter { $0.id != id && !$0.isConnector }.map(\.frame)
         change([id], "Table") { o in
+            let old = o.frame
             guard var t = o.table else { return }
             let rows = max(1, min(rows, 30)), cols = max(1, min(cols, 12))
             let rowH = o.frame.height / CGFloat(max(t.rows, 1)), colW = o.frame.width / CGFloat(max(t.cols, 1))
@@ -891,6 +901,15 @@ final class BoardSession {
             t.cells = t.cells.map { r in Array((r + Array(repeating: "", count: max(0, cols - r.count))).prefix(cols)) }
             o.frame.size = CGSize(width: colW * CGFloat(cols), height: rowH * CGFloat(rows))
             o.table = t
+            // Grow away from neighbours: if the new column or row would run into another
+            // object, grow to the left or upward instead, when that side is clear.
+            func hits(_ f: CGRect) -> Bool { others.contains { $0.intersects(f) && !$0.intersects(old) } }
+            if hits(o.frame) {
+                var f = o.frame
+                if f.width > old.width { f.origin.x = old.maxX - f.width }
+                if f.height > old.height { f.origin.y = old.maxY - f.height }
+                if !hits(f) { o.frame = f }
+            }
         }
     }
 
@@ -910,6 +929,11 @@ final class BoardSession {
     // MARK: Send
 
     func send(trigger: String, said: String? = nil, words: [[String: Any]] = []) {
+        // Not paired yet: nothing to send to. Say so, with a way to pair.
+        guard link.destinationKey != nil else {
+            say("Pair with your Mac to send.", pair: true)
+            return
+        }
         // The screen is captured as the person sees it, without selection handles.
         clearSelection()
         let destination = link.destinationKey

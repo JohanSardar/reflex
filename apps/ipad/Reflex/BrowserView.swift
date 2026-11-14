@@ -75,17 +75,6 @@ struct BrowserView: View {
             }
         }
         .navigationTitle("Reflex")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { draftName = ""; newFolderParent = .some(nil) } label: { Image(systemName: "folder.badge.plus") }
-                    .accessibilityLabel("New Folder")
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            StatusCapsule(link: link, compact: false, action: onStatus)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-        }
     }
 
     private func row(_ title: String, _ symbol: String, _ color: Color, _ s: BoardSection) -> some View {
@@ -262,6 +251,11 @@ struct BrowserView: View {
                     .accessibilityIdentifier("browser-more")
             }
         }
+        // The connection lives in the top-right corner, as it does on a board.
+        ToolbarItem(placement: .topBarTrailing) {
+            StatusCapsule(link: link, compact: true, action: onStatus).fixedSize()
+        }
+        .sharedBackgroundVisibility(.hidden)
     }
 
     private func sortButton(_ s: BoardSort, _ title: String) -> some View {
@@ -455,12 +449,13 @@ struct BoardThumbnail: View {
     var body: some View {
         let rev = library.thumbnailRevision[id] ?? 0
         let paper = library.boards[id]?.paper ?? Paper()
-        if let image = load(rev) {
+        let dark = scheme == .dark
+        if let image = load(rev, dark: dark) {
+            // The board's own paper, as it looks in the current appearance.
             ZStack {
-                paper.tint.color(dark: false)
+                paper.tint.color(dark: dark)
                 Image(uiImage: image).resizable().scaledToFit().padding(10)
             }
-            .environment(\.colorScheme, .light)
         } else {
             // An empty board: a quiet placeholder that follows Light and Dark Mode.
             ZStack {
@@ -470,8 +465,10 @@ struct BoardThumbnail: View {
         }
     }
 
-    private func load(_ rev: Int) -> UIImage? {
+    private func load(_ rev: Int, dark: Bool) -> UIImage? {
         _ = rev
-        return UIImage(contentsOfFile: library.files(id).thumbnail.path(percentEncoded: false))
+        let f = library.files(id)
+        if dark, let img = UIImage(contentsOfFile: f.thumbnailDark.path(percentEncoded: false)) { return img }
+        return UIImage(contentsOfFile: f.thumbnail.path(percentEncoded: false))
     }
 }

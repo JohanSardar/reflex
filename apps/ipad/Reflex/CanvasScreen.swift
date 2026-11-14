@@ -49,7 +49,7 @@ struct CanvasScreen: View {
             if case .linkChanged = link.state {
                 HStack(spacing: 12) {
                     Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.orange)
-                    Text("This Mac's Link changed. Scan its code again.").font(.callout)
+                    Text("Your Mac's pairing changed. Scan its code again.").font(.callout)
                     Button("Scan") { pairing = true }.buttonStyle(.glassProminent).accessibilityIdentifier("scan-again")
                 }
                 .padding(.horizontal, 16).padding(.vertical, 10)
@@ -70,7 +70,7 @@ struct CanvasScreen: View {
         // On its own view, so it and the Agent question never compete for one view's alert.
         .background {
             Color.clear.alert(
-                link.localOnlyNotice?.count == 1 ? "1 Space from \(link.localOnlyNotice?.owner ?? "an earlier pairing") stays on this iPad" : "\(link.localOnlyNotice?.count ?? 0) Spaces from \(link.localOnlyNotice?.owner ?? "an earlier pairing") stay on this iPad",
+                link.localOnlyNotice?.count == 1 ? "1 board from \(link.localOnlyNotice?.owner ?? "an earlier pairing") stays on this iPad" : "\(link.localOnlyNotice?.count ?? 0) boards from \(link.localOnlyNotice?.owner ?? "an earlier pairing") stay on this iPad",
                 isPresented: Binding(get: { link.localOnlyNotice != nil && asking == nil }, set: { if !$0 { link.dismissLocalOnlyNotice() } })
             ) {
                 Button("Keep on this iPad", role: .cancel) { link.dismissLocalOnlyNotice() }
@@ -79,20 +79,20 @@ struct CanvasScreen: View {
                     link.deleteLocalOnly()
                 }
             } message: {
-                Text("They were made with an earlier Link, so they aren't sent to this one. You can still open them here.")
+                Text("They were made while paired with another Mac, so their Sends don't go to this one. You can still open them here.")
             }
         }
         // A device of this person's paired with the Link: said once, so one nobody meant to pair shows.
         .background {
             Color.clear.alert(
-                "\(link.newDevice?.name ?? "A device") paired with your Link",
+                "\(link.newDevice?.name ?? "A device") paired with your Mac",
                 isPresented: Binding(get: { link.newDevice != nil && asking == nil }, set: { if !$0 { link.newDevice = nil } })
             ) {
                 Button("OK", role: .cancel) { link.newDevice = nil }
             } message: {
                 Text(link.newDevice?.approves == true
-                    ? "It was paired with a code shown in the Link's terminal: it can sync your Spaces and approve Agents."
-                    : "Approving Agents stays with this iPad. If you didn't pair it, run `reflex link status` on your computer to see it.")
+                    ? "It was paired with a code shown on your Mac: it can sync your boards and approve Agents."
+                    : "Approving Agents stays with this iPad. If you didn't pair it, run `reflex link status` on your Mac to see it.")
             }
         }
         // Another iPad of the person's wants to approve Agents: only an approving iPad can let it.
@@ -108,14 +108,14 @@ struct CanvasScreen: View {
                 Button("Don't Allow", role: .cancel) { link.decideApprover(r.device, allow: false) }
                 Button("Allow") { link.decideApprover(r.device, allow: true) }
             } message: { _ in
-                Text("It paired with your Link. If you allow it, its Allow lets Agents use your Spaces, like this iPad's. Only allow an iPad you paired yourself.")
+                Text("It paired with your Mac. If you allow it, it can approve Agents too, like this iPad. Only allow an iPad you paired yourself.")
             }
         }
         .onChange(of: link.agentRequests, initial: true) { _, list in
             if asking.map({ a in !list.contains { $0.id == a.id } }) ?? true { asking = list.first }
         }
         .alert(
-            "Allow \(asking?.name ?? "this Agent") to use your Spaces?",
+            "Allow \(asking?.name ?? "this Agent") to receive your Sends?",
             isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } }),
             presenting: asking
         ) { a in

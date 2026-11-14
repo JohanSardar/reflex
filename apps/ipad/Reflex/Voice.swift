@@ -239,6 +239,8 @@ struct VoiceSendDock: View {
     let pending: Int
     let lastSend: Date?
     var preparing = false
+    /// Not paired yet: Send still works (it says how to pair) but looks quieter.
+    var paired = true
     let onFail: (String) -> Void
     let onRelease: (_ said: String, _ words: [[String: Any]]) -> Void
     let send: () -> Void
@@ -283,7 +285,7 @@ struct VoiceSendDock: View {
         .padding(.horizontal, live ? 20 : 0)
         .frame(minWidth: 56, minHeight: 56)
         // Opaque backing under the glass, so the disc reads as a control on dark paper too.
-        .background(live ? Color.clear : Color(.systemBackground).opacity(0.82), in: Capsule())
+        .background(live ? Color.clear : Color(.tertiarySystemBackground).opacity(0.9), in: Capsule())
         .glassEffect(live ? .regular.tint(.red) : .regular, in: Capsule())
         .scaleEffect(pressed && !live ? 0.94 : 1)
         .animation(.spring(duration: 0.2), value: pressed)
@@ -367,6 +369,8 @@ struct VoiceSendDock: View {
             .padding(.horizontal, 22).frame(height: 56)
         }
         .buttonStyle(.glassProminent)
+        // A fixed blue, so Send doesn't go grey (dimmed tint) whenever a popover is open.
+        .tint(paired ? Color(red: 0, green: 0.48, blue: 1) : Color(red: 0.42, green: 0.55, blue: 0.75))
         .overlay(alignment: .topTrailing) {
             if pending > 0 {
                 Text("\(pending)")

@@ -173,14 +173,15 @@ struct PairSheet: View {
                         }
                         .padding(.vertical, 6)
                     }
-                    Button { scanning = true } label: {
-                        Label("Scan QR Code", systemImage: "qrcode.viewfinder")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .foregroundStyle(canScan ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                    // No camera: no Scan row at all, and typing the code is the way in.
+                    if canScan {
+                        Button { scanning = true } label: {
+                            Label("Scan QR Code", systemImage: "qrcode.viewfinder")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .accessibilityIdentifier("scan-button")
                     }
-                    .disabled(!canScan)
-                    .accessibilityIdentifier("scan-button")
-                    DisclosureGroup("Enter the code instead", isExpanded: $typing) {
+                    DisclosureGroup(canScan ? "Enter the code instead" : "Enter the pairing code", isExpanded: $typing) {
                         TextField("reflex://pair?…", text: $code, axis: .vertical)
                             .font(.system(.body, design: .monospaced))
                             .textInputAutocapitalization(.never)
@@ -199,7 +200,7 @@ struct PairSheet: View {
                 } header: {
                     Text(s.paired ? "Pair a Different Mac" : "")
                 } footer: {
-                    Text(LocalizedStringKey((canScan ? "" : "This device has no camera, so enter the code instead. ") + (s.paired ? "Run `reflex pair` on the Mac for a new code." : "Pairing never approves an Agent by itself: each one asks first.")))
+                    Text(LocalizedStringKey((s.paired ? "Run `reflex pair` on the Mac for a new code." : "Pairing never approves an Agent by itself: each one asks first.")))
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("pair-error") }
@@ -216,7 +217,13 @@ struct PairSheet: View {
                 }
                 .ignoresSafeArea()
             }
-            .onAppear { if !code.isEmpty { typing = true } }
+            .onAppear {
+                // A code typed earlier stays until pairing works.
+                if code.isEmpty, link.destinationKey == nil { code = UserDefaults.standard.string(forKey: "pairCodeDraft") ?? "" }
+                if !code.isEmpty || !canScan { typing = true }
+            }
+            .onChange(of: code) { _, c in UserDefaults.standard.set(c, forKey: "pairCodeDraft") }
+            .onChange(of: link.destinationKey) { _, k in if k != nil { UserDefaults.standard.removeObject(forKey: "pairCodeDraft") } }
             .alert("Rename Agent", isPresented: Binding(get: { renamingAgent != nil }, set: { if !$0 { renamingAgent = nil } })) {
                 TextField("Name", text: $renameDraft).accessibilityIdentifier("rename-field")
                 Button("Cancel", role: .cancel) {}
@@ -233,7 +240,7 @@ struct PairSheet: View {
             return "Connected over \(path)"
         case .connecting: return "Connecting…"
         case .offline: return "Not reachable right now. Sends wait here until it's back."
-        case .linkChanged: return "Its Link was reset. Scan its code again."
+        case .linkChanged: return "Its pairing was reset. Scan its code again."
         case .unpaired: return "Not paired"
         }
     }

@@ -1,3 +1,4 @@
+import AVFoundation
 import PencilKit
 import PhotosUI
 import ReflexInput
@@ -56,7 +57,12 @@ struct BoardScreen: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { screen = $0.size; frame = $0 }
         .overlay(alignment: .top) { topBar }
         .overlay(alignment: .bottomLeading) { zoomCapsule.padding(.leading, 16).padding(.bottom, max(bottomLift, leadingLift) + 16) }
-        .overlay(alignment: .bottomTrailing) { bottomRight.padding(.trailing, 16 + trailingLift).padding(.bottom, bottomLift + 16) }
+        .overlay(alignment: .bottomTrailing) {
+            // Hidden while the keyboard is up: it would sit under or on top of it.
+            bottomRight.padding(.trailing, 16 + trailingLift).padding(.bottom, bottomLift + 16)
+                .opacity(keyboardTop.isFinite ? 0 : 1).allowsHitTesting(!keyboardTop.isFinite)
+                .animation(.easeOut(duration: 0.2), value: keyboardTop.isFinite)
+        }
         .overlay(alignment: .bottom) { messages.padding(.bottom, bottomLift + 92) }
         // The keyboard covers the bottom chrome instead of pushing it up.
         .ignoresSafeArea(.keyboard)
@@ -236,7 +242,7 @@ struct BoardScreen: View {
     private var shortTitle: String {
         let t = session.meta.title
         // When the insert tools fold into "+", the title gets their room.
-        let limit = foldInsertTools ? (screen.width < 700 ? 22 : 40) : (screen.width < 900 ? 18 : 30)
+        let limit = foldInsertTools ? (screen.width < 700 ? 22 : 40) : (screen.width < 900 ? 18 : screen.width > 1150 ? 44 : 30)
         return t.count > limit ? t.prefix(limit - 1) + "…" : t
     }
 
@@ -323,8 +329,7 @@ struct BoardScreen: View {
     @ViewBuilder private var mediaItems: some View {
         Button("Choose Photo", systemImage: "photo") { showPhotos = true }
         Button("Take Photo", systemImage: "camera") { showCamera = true }
-            .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
-            .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+            .disabled(!Camera.available)
         Button("Choose File", systemImage: "folder") { showFiles = true }
         Button("Paste", systemImage: "doc.on.clipboard") { session.paste() }.disabled(!session.canPaste)
         Divider()
@@ -467,7 +472,8 @@ struct BoardScreen: View {
 
     private var bottomRight: some View {
         HStack(spacing: 12) {
-            VoiceSendDock(voice: voice, pending: link.pendingSends, lastSend: session.lastSendOK, preparing: session.preparingSends > 0, onFail: { session.say($0) }) { said, words in
+            VoiceSendDock(voice: voice, pending: link.pendingSends, lastSend: session.lastSendOK, preparing: session.preparingSends > 0,
+                          paired: link.destinationKey != nil, onFail: { session.say($0) }) { said, words in
                 session.send(trigger: "voice", said: said, words: words)
             } send: {
                 session.send(trigger: "button")
@@ -488,9 +494,15 @@ struct BoardScreen: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if let notice = session.notice {
-                Text(notice)
-                    .font(.callout)
-                    .padding(.horizontal, 16).padding(.vertical, 10)
+                HStack(spacing: 12) {
+                    Text(notice).font(.callout)
+                    if session.noticeOffersPairing {
+                        Button("Pair") { session.notice = nil; onStatus() }
+                            .buttonStyle(.borderedProminent).controlSize(.small)
+                            .accessibilityIdentifier("notice-pair")
+                    }
+                }
+                    .padding(.leading, 16).padding(.trailing, session.noticeOffersPairing ? 8 : 16).padding(.vertical, session.noticeOffersPairing ? 6 : 10)
                     .glassEffect(.regular, in: Capsule())
                     .transition(.opacity)
                     .accessibilityIdentifier("send-notice")
@@ -591,4 +603,11 @@ struct ShareSheet: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: [url], applicationActivities: nil)
     }
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
+}
+
+/// Whether this device can take a photo: a camera the picker can use and that really exists.
+enum Camera {
+    static var available: Bool {
+        UIImagePickerController.isSourceTypeAvailable(.camera) && AVCaptureDevice.default(for: .video) != nil
+    }
 }

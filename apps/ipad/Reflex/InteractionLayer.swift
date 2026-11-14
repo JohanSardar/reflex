@@ -27,6 +27,8 @@ struct InteractionLayer: View {
     private var objectsLive: Bool { !ink.pickerVisible || session.selecting || (ink.pickerVisible && !ink.fingerDraws) }
     private var lassoLive: Bool { session.selecting || (ink.pickerVisible && ink.lassoPicked) }
 
+    @State private var plusPressed = Date.distantPast
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             if lassoLive { lassoCapture }
@@ -62,6 +64,12 @@ struct InteractionLayer: View {
     }
 
     private func tapCanvas(_ p: CGPoint) {
+        // The canvas also sees taps on a table's + buttons; those keep the table selected.
+        if session.selection.count == 1, let t = session.selectedObjects.first, t.kind == .table {
+            let r = toScreen(t.frame), s = toScreen(p)
+            let pluses = [CGPoint(x: r.maxX + 26, y: r.midY), CGPoint(x: r.midX, y: r.maxY + 26)]
+            if pluses.contains(where: { hypot($0.x - s.x, $0.y - s.y) < 24 }) || Date().timeIntervalSince(plusPressed) < 0.5 { return }
+        }
         if canvasMenu != nil { canvasMenu = nil; return }
         if session.editing != nil { session.endEditing(); return }
         if !session.selection.isEmpty || !session.selectedStrokes.isEmpty { session.clearSelection(); return }
@@ -322,8 +330,20 @@ struct InteractionLayer: View {
                     .position(p)
                     .accessibilityIdentifier("handle-\(anchorName(anchor))")
             }
+            if !dragging, resizeStart == nil, obj.kind == .table, let t = obj.table {
+                // Freeform-style: + on the right edge adds a column, + on the bottom edge adds a row.
+                tablePlus("Add Column", id: "table-add-column", at: CGPoint(x: r.maxX + 26, y: r.midY)) {
+                    session.resizeTable(obj.id, rows: t.rows, cols: t.cols + 1)
+                }
+                tablePlus("Add Row", id: "table-add-row", at: CGPoint(x: r.midX, y: r.maxY + 26)) {
+                    session.resizeTable(obj.id, rows: t.rows + 1, cols: t.cols)
+                }
+            }
             if !dragging, resizeStart == nil {
-                ForEach([CGPoint(x: r.midX, y: r.minY - 30), CGPoint(x: r.maxX + 30, y: r.midY), CGPoint(x: r.midX, y: r.maxY + 30), CGPoint(x: r.minX - 30, y: r.midY)], id: \.self) { p in
+                let spots = obj.kind == .table
+                    ? [CGPoint(x: r.midX, y: r.minY - 30), CGPoint(x: r.minX - 30, y: r.midY)]
+                    : [CGPoint(x: r.midX, y: r.minY - 30), CGPoint(x: r.maxX + 30, y: r.midY), CGPoint(x: r.midX, y: r.maxY + 30), CGPoint(x: r.minX - 30, y: r.midY)]
+                ForEach(spots, id: \.self) { p in
                     Image(systemName: "arrow.up.right.circle.fill")
                         .font(.system(size: 20))
                         .rotationEffect(.degrees(connectorAngle(p, r)))
@@ -339,6 +359,22 @@ struct InteractionLayer: View {
                 }
             }
         }
+    }
+
+    private func tablePlus(_ label: String, id: String, at p: CGPoint, action: @escaping () -> Void) -> some View {
+        Button { plusPressed = Date(); action() } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .background(Color.accentColor, in: Circle())
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .position(p)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(id)
     }
 
     private func connectorAngle(_ p: CGPoint, _ r: CGRect) -> Double {

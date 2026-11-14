@@ -68,7 +68,7 @@ struct MiniToolbar: View {
         } else if !session.selectedStrokes.isEmpty && objects.isEmpty {
             swatchButton("#1C1C1E", .inkColor, label: "Ink Color")
         } else if objects.count > 1 || !session.selectedStrokes.isEmpty {
-            button("square.3.layers.3d", "Arrange") { popover = .arrange }
+            button("align.horizontal.left", "Arrange") { popover = .arrange }
                 .popover(item: binding(.arrange)) { _ in arrangePicker }
                 .accessibilityIdentifier("arrange-button")
             if objects.count > 1 {
@@ -98,10 +98,10 @@ struct MiniToolbar: View {
     private var moreMenu: some View {
         Menu {
             ControlGroup {
-                Button("Back", systemImage: "square.3.layers.3d.bottom.filled") { session.sendToBack() }
-                Button("Front", systemImage: "square.3.layers.3d.top.filled") { session.bringToFront() }
+                Button("Send to Back", systemImage: "square.3.layers.3d.bottom.filled") { session.sendToBack() }
+                Button("Bring to Front", systemImage: "square.3.layers.3d.top.filled") { session.bringToFront() }
             }
-            .controlGroupStyle(.compactMenu)
+            .controlGroupStyle(.menu)
             if session.selectionAboveInk {
                 Button("Send Below Drawing", systemImage: "square.2.layers.3d.bottom.filled") { session.setAboveInk(false) }
             } else {
@@ -168,7 +168,7 @@ struct MiniToolbar: View {
             VStack(alignment: .leading, spacing: 12) {
                 switch o.kind {
                 case .sticky:
-                    ColorGrid(colors: Palette.sticky, selected: o.fill) { c in session.changeSelection("Fill") { $0.fill = c } }
+                    ColorGrid(colors: Palette.sticky, selected: o.fill, columns: 7) { c in session.changeSelection("Fill") { $0.fill = c } }
                 case .text:
                     ColorGrid(colors: Palette.text, selected: o.textColor) { c in session.changeSelection("Color") { $0.textColor = c } }
                 default:
@@ -345,10 +345,15 @@ struct MiniToolbar: View {
 struct ColorGrid: View {
     let colors: [String]
     let selected: String?
+    var columns = 6
     let pick: (String) -> Void
 
+    init(colors: [String], selected: String?, columns: Int = 6, pick: @escaping (String) -> Void) {
+        self.colors = colors; self.selected = selected; self.columns = columns; self.pick = pick
+    }
+
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.fixed(36), spacing: 10), count: 6), spacing: 10) {
+        LazyVGrid(columns: Array(repeating: GridItem(.fixed(36), spacing: 10), count: columns), spacing: 10) {
             ForEach(colors, id: \.self) { c in
                 Button { pick(c) } label: {
                     Circle().fill(Color(hex: c))
@@ -434,12 +439,14 @@ struct PaperPicker: View {
                 Paper.forNewBoards = paper
                 newBoards = paper
             } label: {
-                Label(newBoards == paper ? "New Boards Use This Paper" : "Use for New Boards",
-                      systemImage: newBoards == paper ? "checkmark.circle.fill" : "doc.badge.plus")
+                Label(newBoards == paper ? "Default for New Boards" : "Make Default for New Boards",
+                      systemImage: newBoards == paper ? "checkmark" : "doc.badge.plus")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .disabled(newBoards == paper)
+            .tint(newBoards == paper ? .green : .accentColor)
+            .allowsHitTesting(newBoards != paper)
+            .accessibilityAddTraits(newBoards == paper ? .isSelected : [])
             .accessibilityIdentifier("paper-default")
         }
         .padding(20)
@@ -523,8 +530,12 @@ struct ShapeLibrary: View {
 
     private var symbols: [String] {
         if !query.isEmpty {
-            let q = query.lowercased().replacingOccurrences(of: " ", with: ".")
-            return SymbolCatalog.all.filter { $0.contains(q) }
+            // Every typed word must start a word of the symbol's name ("car" finds car.fill, not scarf).
+            let words = query.lowercased().split(separator: " ").map(String.init)
+            return SymbolCatalog.all.filter { name in
+                let parts = name.split(separator: ".")
+                return words.allSatisfy { w in parts.contains { $0.hasPrefix(w) } }
+            }
         }
         return SymbolCatalog.categories.first { $0.name == category }?.symbols ?? []
     }

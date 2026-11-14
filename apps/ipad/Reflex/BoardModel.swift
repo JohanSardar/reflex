@@ -291,6 +291,8 @@ struct BoardFiles {
     var objects: URL { folder.appending(path: "objects.json") }
     var history: URL { folder.appending(path: "history.json") }
     var thumbnail: URL { folder.appending(path: "thumb.png") }
+    /// The same board as it looks in Dark Mode (Match System paper turns dark, black ink white).
+    var thumbnailDark: URL { folder.appending(path: "thumb-dark.png") }
     var media: URL { folder.appending(path: "media", directoryHint: .isDirectory) }
     var ink: URL { folder.appending(path: "ink.pkdrawing") }
 
@@ -510,7 +512,7 @@ final class BoardLibrary {
 
     /// Draws thumbnails for boards that have none yet (boards from earlier versions).
     func ensureThumbnails() {
-        for (id, meta) in boards where !FileManager.default.fileExists(atPath: files(id).thumbnail.path(percentEncoded: false)) {
+        for (id, meta) in boards where !FileManager.default.fileExists(atPath: files(id).thumbnailDark.path(percentEncoded: false)) {
             let f = files(id)
             let drawing = (try? Data(contentsOf: f.ink)).flatMap { try? PKDrawing(data: $0) } ?? PKDrawing()
             let objects = f.loadObjects()
@@ -519,6 +521,9 @@ final class BoardLibrary {
             guard !r.isNull else { continue }
             guard let png = BoardRenderer.image(of: r.insetBy(dx: -40, dy: -40), drawing: drawing, objects: objects, files: f, paper: meta.paper, maxSide: 640, dark: false)?.pngData() else { continue }
             try? png.write(to: f.thumbnail, options: .atomic)
+            if let dark = BoardRenderer.image(of: r.insetBy(dx: -40, dy: -40), drawing: drawing, objects: objects, files: f, paper: meta.paper, maxSide: 640, dark: true)?.pngData() {
+                try? dark.write(to: f.thumbnailDark, options: .atomic)
+            }
             thumbnailWritten(id)
         }
     }
