@@ -77,3 +77,7 @@ On the clean current build, open a page and use the real Pencil: write a quick s
 ![Before: same six finger strokes](physical/before.png)
 
 ![After: same six finger strokes](physical/after.png)
+
+## Verification and review
+
+`npm run typecheck` passed (root, agent, relay; no lint script). Both instrumented physical Release builds and the clean main Release build succeeded; development signatures verified. The extractor was run on both valid captures. Sol-loop: one round, GPT-6.1 Sol on medium, APPROVE with no findings or new tests. The reviewer independently matched eight XML exports to the traces, reproduced all six committed CSV/JSON artifacts, and verified percentiles, maxima, hitch totals, CPU sample counts and matching screenshot geometry. Diff before/after review: 13 files, +2351/-1 before this review note; no behavior changes. Token usage was not returned.
