@@ -1,0 +1,109 @@
+{
+  "during": {
+    "n": 635,
+    "median_ms": 8.331374992,
+    "p95_ms": 9.134000007,
+    "max_ms": 17.048916663,
+    "over_16_67_ms": 2,
+    "over_33_33_ms": 0
+  },
+  "end_500ms": {
+    "n": 323,
+    "median_ms": 8.341833337,
+    "p95_ms": 18.403916663,
+    "max_ms": 40.092708339,
+    "over_16_67_ms": 23,
+    "over_33_33_ms": 1
+  },
+  "stroke_end_max_ms": {
+    "1": 40.092708339,
+    "2": 32.581791674,
+    "3": 32.474958337,
+    "4": 29.062749992,
+    "5": 25.085333327,
+    "6": 23.850500001
+  },
+  "stroke_windows": {
+    "1": {
+      "StrokeBegin": 17897740375,
+      "StrokeEnd": 18790851375
+    },
+    "2": {
+      "StrokeBegin": 19349832375,
+      "StrokeEnd": 20249036750
+    },
+    "3": {
+      "StrokeBegin": 20824524416,
+      "StrokeEnd": 21724781083
+    },
+    "4": {
+      "StrokeBegin": 22324728208,
+      "StrokeEnd": 23224525333
+    },
+    "5": {
+      "StrokeBegin": 23800251916,
+      "StrokeEnd": 24699733375
+    },
+    "6": {
+      "StrokeBegin": 25275800250,
+      "StrokeEnd": 26175573000
+    }
+  },
+  "hitches": {
+    "drawing": [
+      {
+        "start_ns": 17909410166,
+        "duration_ms": 12.505208,
+        "phase": "drawing",
+        "stroke": "1",
+        "reason": "Potentially expensive app update(s)"
+      }
+    ],
+    "end": [
+      {
+        "start_ns": 18834797666,
+        "duration_ms": 8.337,
+        "phase": "end",
+        "stroke": "1",
+        "reason": "Potentially expensive app update(s)"
+      },
+      {
+        "start_ns": 20277069000,
+        "duration_ms": 8.336666,
+        "phase": "end",
+        "stroke": "2",
+        "reason": "Potentially expensive app update(s)"
+      },
+      {
+        "start_ns": 21752687208,
+        "duration_ms": 8.336666,
+        "phase": "end",
+        "stroke": "3",
+        "reason": "Potentially expensive app update(s)"
+      },
+      {
+        "start_ns": 23257484291,
+        "duration_ms": 8.336666,
+        "phase": "end",
+        "stroke": "4",
+        "reason": "Potentially expensive app update(s)"
+      },
+      {
+        "start_ns": 23269989750,
+        "duration_ms": 16.673333,
+        "phase": "end",
+        "stroke": "4",
+        "reason": ""
+      }
+    ],
+    "outside": []
+  },
+  "stroke_end_update_max_ms": {
+    "1": 10.952166,
+    "2": 8.687833,
+    "3": 8.024958,
+    "4": 10.735041,
+    "5": 3.345166,
+    "6": 1.109041
+  }
+}
