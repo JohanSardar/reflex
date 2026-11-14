@@ -211,7 +211,7 @@ struct PairSheet: View {
             }
             .onAppear { if !code.isEmpty { typing = true } }
         }
-        .presentationDetents([.medium, .large])
+        .presentationSizing(.form)
     }
 
     private var stateDetail: String {

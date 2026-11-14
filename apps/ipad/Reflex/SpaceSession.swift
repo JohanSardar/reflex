@@ -323,7 +323,7 @@ final class BoardSession {
     }
 
     func addTable(at point: CGPoint? = nil) {
-        insert(BoardObject(kind: .table, frame: newFrame(CGSize(width: 360, height: 160), at: point), stroke: "#C7C7CC", fontSize: 17, align: .leading,
+        insert(BoardObject(kind: .table, frame: newFrame(CGSize(width: 360, height: 160), at: point), fill: "#FFFFFF", stroke: "#AEAEB2", fontSize: 17, align: .leading,
                            table: TableData(cells: [["", ""], ["", ""]]), shadow: false))
     }
 

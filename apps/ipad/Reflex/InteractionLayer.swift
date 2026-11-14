@@ -50,6 +50,8 @@ struct InteractionLayer: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .animation(.easeOut(duration: 0.15), value: session.selection)
         .onChange(of: ink.pickerVisible) { _, _ in canvasMenu = nil }
+        .onChange(of: session.objects.count) { _, _ in canvasMenu = nil }
+        .onChange(of: session.selection) { _, _ in canvasMenu = nil }
         .onAppear {
             ink.onTap = { p in tapCanvas(p) }
             ink.onLongPress = { p in

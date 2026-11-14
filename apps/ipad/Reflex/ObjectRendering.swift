@@ -173,7 +173,7 @@ struct ObjectContent: View {
     var hideText = false
 
     private var inkColor: Color { darkPaper ? .white : Color(red: 0.11, green: 0.11, blue: 0.12) }
-    private var textColor: Color { object.textColor.map { Color(hex: $0) } ?? (object.kind == .sticky ? Color(red: 0.11, green: 0.11, blue: 0.12) : inkColor) }
+    private var textColor: Color { object.textColor.map { Color(hex: $0) } ?? (object.kind == .sticky || (object.kind == .table && object.fill != nil) ? Color(red: 0.11, green: 0.11, blue: 0.12) : inkColor) }
 
     private var font: Font {
         var f = Font.system(size: object.fontSize, weight: object.bold ? .bold : .regular)
@@ -259,16 +259,20 @@ struct TableContent: View {
             let cw = g.size.width / CGFloat(max(t.cols, 1)), rh = g.size.height / CGFloat(max(t.rows, 1))
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 10).fill(object.fill.map { Color(hex: $0) } ?? Color.white.opacity(0.001))
+                // The first row reads as a header.
+                UnevenRoundedRectangle(topLeadingRadius: 10, topTrailingRadius: 10)
+                    .fill(lines.opacity(0.18))
+                    .frame(height: rh)
                 Path { p in
                     for c in 1 ..< max(t.cols, 1) { p.move(to: CGPoint(x: CGFloat(c) * cw, y: 0)); p.addLine(to: CGPoint(x: CGFloat(c) * cw, y: g.size.height)) }
                     for r in 1 ..< max(t.rows, 1) { p.move(to: CGPoint(x: 0, y: CGFloat(r) * rh)); p.addLine(to: CGPoint(x: g.size.width, y: CGFloat(r) * rh)) }
                 }
-                .stroke(lines, lineWidth: 1)
-                RoundedRectangle(cornerRadius: 10).stroke(lines, lineWidth: 1)
+                .stroke(lines, lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: 10).stroke(lines, lineWidth: 1.5)
                 if !hideText {
                     ForEach(0 ..< t.rows, id: \.self) { r in
                         ForEach(0 ..< t.cols, id: \.self) { c in
-                            Text(t.cells[r][c]).font(font).foregroundStyle(textColor)
+                            Text(t.cells[r][c]).font(r == 0 ? font.weight(.semibold) : font).foregroundStyle(textColor)
                                 .frame(width: cw - 16, height: rh - 8, alignment: object.align.frame)
                                 .offset(x: CGFloat(c) * cw + 8, y: CGFloat(r) * rh + 4)
                         }

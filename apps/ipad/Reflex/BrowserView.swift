@@ -433,15 +433,19 @@ struct BoardThumbnail: View {
     var body: some View {
         let rev = library.thumbnailRevision[id] ?? 0
         let paper = library.boards[id]?.paper ?? Paper()
-        ZStack {
-            paper.tint.color(dark: false)
-            if let image = load(rev) {
+        if let image = load(rev) {
+            ZStack {
+                paper.tint.color(dark: false)
                 Image(uiImage: image).resizable().scaledToFit().padding(10)
-            } else {
+            }
+            .environment(\.colorScheme, .light)
+        } else {
+            // An empty board: a quiet placeholder that follows Light and Dark Mode.
+            ZStack {
+                Color(.tertiarySystemFill)
                 Image(systemName: "scribble.variable").font(.system(size: 36)).foregroundStyle(.tertiary)
             }
         }
-        .environment(\.colorScheme, .light)
     }
 
     private func load(_ rev: Int) -> UIImage? {

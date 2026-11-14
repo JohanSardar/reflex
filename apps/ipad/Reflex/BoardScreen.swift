@@ -52,12 +52,13 @@ struct BoardScreen: View {
             InkCanvas(controller: ink).ignoresSafeArea()
             InteractionLayer(session: session, darkPaper: darkPaper, guides: guideSettings, screen: screen).ignoresSafeArea()
         }
-        .ignoresSafeArea(.keyboard)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { screen = $0.size; frame = $0 }
         .overlay(alignment: .top) { topBar }
         .overlay(alignment: .bottomLeading) { zoomCapsule.padding(.leading, 16).padding(.bottom, bottomLift + 16) }
         .overlay(alignment: .bottomTrailing) { bottomRight.padding(.trailing, 16 + trailingLift).padding(.bottom, bottomLift + 16) }
         .overlay(alignment: .bottom) { messages.padding(.bottom, bottomLift + 92) }
+        // The keyboard covers the bottom chrome instead of pushing it up.
+        .ignoresSafeArea(.keyboard)
         .onAppear {
             ink.fingerDraws = fingerDraws
             applyPaperStyle()
