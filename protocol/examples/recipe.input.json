@@ -1,6 +1,0 @@
-{
-  "space": "physics-hw",
-  "name": "check-my-work",
-  "params": { "problem": "A ball is thrown up at 12 m/s. How high does it go?", "latex": "h = \\frac{v^2}{2g}" },
-  "at": { "x": 0, "y": 0 }
-}

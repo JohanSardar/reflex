@@ -1,1 +1,0 @@
-{ "id": "sim-1", "type": "embed", "by": "you", "bounds": [1000, 200, 480, 320], "data": { "experiment": "drop-test" }, "state": { "gravity": 4.2 } }

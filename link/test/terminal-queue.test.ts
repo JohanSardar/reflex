@@ -53,7 +53,7 @@ async function surface(dir: string, who: { name: string; credential: string }) {
   s.on("error", () => {});
   s.write(JSON.stringify({ t: "hello", token: readFileSync(join(dir, "rpc.key"), "utf8").trim(), client: "terminal-test" }) + "\n");
   await until("the surface to be ready", 2000, () => frames.includes("ready"));
-  s.write(JSON.stringify({ t: "call", id: 1, tool: "list_spaces", args: {}, who }) + "\n");
+  s.write(JSON.stringify({ t: "call", id: 1, tool: "wait_for_user", args: { timeout_s: 0 }, who }) + "\n");
   return { close: () => s.destroy() };
 }
 

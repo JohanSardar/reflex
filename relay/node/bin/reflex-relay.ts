@@ -5,8 +5,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { startRelay } from "../server.ts";
 
-const HELP = `A self-hosted Reflex Relay: syncs your devices across networks, stores each
-Space as an encrypted log it can't read, and gives cloud Agents remote MCP over OAuth.
+const HELP = `A self-hosted Reflex Relay: forwards live encrypted connections between paired devices.
 
 Usage
   reflex-relay [--port 8787] [--dir ~/.reflex/relay] [--origin https://relay.example.com]
@@ -14,8 +13,8 @@ Usage
 Options
   --port <n>       Port to listen on (default 8787, or $PORT)
   --host <addr>    Address to bind (default 0.0.0.0)
-  --dir <dir>      Where logs, grants and sealed assets are kept (default $REFLEX_RELAY_DIR or ~/.reflex/relay)
-  --origin <url>   The public URL, when behind a TLS proxy (OAuth metadata uses it)
+  --dir <dir>      Legacy profile option (accepted for CLI compatibility; no storage is written)
+  --origin <url>   The public URL, when behind a TLS proxy
   -h, --help       Show this help
 `;
 

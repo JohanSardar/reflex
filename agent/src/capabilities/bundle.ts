@@ -8,13 +8,11 @@
 // Images are what the device rendered when the person pressed Send (the
 // Send's `crops`), so the Agent sees what the person saw. Where no crop covers
 // a Mark, Reflex renders one.
-import { readFileSync } from "node:fs";
 import type { Renderer, SceneElement } from "../render.ts";
 import type { Bounds, FrozenSend, SpaceEntry } from "../store.ts";
 
-const sendSchema = JSON.parse(readFileSync(new URL("../../../protocol/schema/send-bundle.schema.json", import.meta.url), "utf8"));
-const CHANGE_FIELDS = new Set(Object.keys(sendSchema.$defs.change.properties));
-const MARK_FIELDS = new Set(Object.keys(sendSchema.$defs.mark.properties));
+const CHANGE_FIELDS = new Set(["kind", "id", "by", "was_bounds", "text", "was", "panel", "values", "state", "file", "mime", "pages", "image", "on", "set"]);
+const MARK_FIELDS = new Set(["id", "kind", "on", "from", "to", "near", "target", "text_guess", "confidence", "bounds", "moved_since_marked", "marked_at", "line", "earlier", "stroke_count", "image", "note"]);
 /** Images per Bundle by default (ARCHITECTURE §4.3). */
 const MAX_IMAGES = 4;
 
@@ -203,14 +201,7 @@ export function project(opts: {
     also_sent_to: opts.alsoSentTo,
     redelivered: opts.redelivered,
     pending_after: opts.pendingAfter,
-    next:
-      kind === "watch"
-        ? `A snapshot of ${opts.personName === "You" ? "the person's" : `${opts.personName}'s`} work in progress${frozen.user_still_writing ? "; they are still writing" : ""}. Step in only when a line is wrong and they have moved past it, with a short hint beside it; never answer in full. ${opts.pushed ? `Then end your turn: the next snapshot or Send is pushed to you the same way.` : `Then wait_for_user(after: '${s}').`}`
-        : opts.pushed
-        ? `${kind === "send" ? `Reply with apply(in_reply_to: '${s}')${refs.length ? `; what you add without at goes next to ${refs[0].id}` : ""}` : `${opts.personName}'s turn is not over. Answer with apply(in_reply_to: '${s}') if useful`}. With nothing to add, acknowledge it with wait_for_user(after: '${s}', timeout_s: 0). Then end your turn: the next Send is pushed to you the same way.`
-        : kind === "send"
-        ? `Reply with apply(in_reply_to: '${s}')${refs.length ? `; what you add without at goes next to ${refs[0].id}` : ""}, then wait_for_user(after: '${s}').`
-        : `${opts.personName}'s turn is not over. Answer if useful, then wait_for_user(after: '${s}').`,
+    next: `Answer in your session. Acknowledge this Send with wait_for_user(after: '${s}', timeout_s: 0).`,
   };
   return { bundle, images, marks: refs };
 }

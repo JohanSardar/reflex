@@ -7,8 +7,18 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "skipLibCheck": true,
-    "lib": ["ES2023", "DOM"],
-    "types": ["node", "@cloudflare/workers-types"]
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
+    "types": [
+      "node",
+      "@cloudflare/workers-types"
+    ]
   },
-  "include": ["kernel/wasm/js/**/*.ts", "kernel/proof/**/*.ts", "link/**/*.ts", "tests/conformance/**/*.ts"]
+  "include": [
+    "kernel/wasm/js/**/*.ts",
+    "kernel/proof/**/*.ts",
+    "link/**/*.ts"
+  ]
 }

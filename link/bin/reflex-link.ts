@@ -9,69 +9,16 @@ import { homeDir } from "../home.ts";
 import { Link, LinkError } from "../link.ts";
 import { LinkClient, RpcError } from "../rpc/client.ts";
 
-const HELP = `Reflex Link keeps every Space durable on this computer, in sync with your iPad, and open to your Agents.
-
-First time? Run \`reflex setup\`: it starts the Link in the background and shows the code to scan.
-
-Usage
-  reflex link                         Start the Link in this terminal and show a pairing code
-                                      (Enter shows a new code; y/n answers an Agent asking to connect)
-  reflex link status                  Show Spaces, peers, Agents and the Inbox
-  reflex link stop                    Stop the Link running from this profile (in the background or a terminal)
-  reflex link pair <code>             Pair with another Link showing <code> (reflex://pair?...)
-                                      (to pair an iPad: reflex pair)
-  reflex link agents                  List Agents and their approval
-  reflex link deny <agent>            Deny an Agent waiting to connect
-  reflex link revoke <agent>          Take an approved Agent's access away
-  reflex link forget <device>         Forget a paired device that is gone (a reinstalled or lost iPad), by name or ID
-  reflex link relay                   The Relay: connection and the grants you gave cloud Agents
-  reflex link relay revoke <grant>    End a cloud Agent's grant now
-  reflex link shares                  Shared Spaces: who is in each, with which role, and live invites
-  reflex link join <invite>           Join someone's Space with the invite they sent (reflex://invite?...)
-  reflex link role <space> <person> viewer    Make someone in your Space a viewer
-  reflex link remove <space> <person>         Remove someone from your Space (its key changes)
-  reflex link fault <spec>            Change fault injection on a Link started with --fault
-                                      (e.g. "lan:drop=1" takes LAN down, "" clears it)
-  reflex link library                 The Recipes and Embed Templates Agents saved to your Library
-  reflex link library rename <name> <new-name>   Rename one (recipe:<name> or embed:<name> if both exist)
-  reflex link library delete <name>              Delete one
-
-Sharing a Space: type \`invite <space> [editor|viewer]\` in the Link's terminal, or tap Share on your
-iPad. Making someone an editor needs you too: \`role <space> <person> editor\` there, or the iPad.
-
-Through a Relay (--relay), your devices sync when they aren't on the same network, and each
-Space is kept there as an encrypted log the Relay can't read. A cloud Agent signs in on the
-Relay's page, which shows a code: type it into this Link's terminal to pick one Space and how
-long it may use it. Nothing else can grant one.
-
-Agents are approved by you: tap Allow on your iPad. Until an iPad approves, y in the Link's terminal does too.
-
-Acting as the person without an iPad (a Link started with --dev)
-  reflex link dev space <space>                     Create a Space
-  reflex link dev draw <space> <stroke> [x,y ...]   Draw a stroke as this person
-  reflex link dev undo <space>                      Undo this person's last action
-  reflex link dev send <space> <send> [said]        Send, as this person
-  reflex link dev asset <file>                      Store a file as an asset
-  reflex link dev agent <name> apply <space> <json> Act as an Agent over the low-level RPC
-  reflex link dev agent <name> inbox                That Agent's pending Sends
-  reflex link dev agent <name> ack <space> <send>   Acknowledge a Send
-
-Options
-  --home <dir>    Link profile folder (default $REFLEX_HOME or ~/.reflex/link)
-  --name <name>   This device's name, on first start
-  --port <n>      LAN port (default 7420; any free port if taken)
-  --dev           Allow acting as the person without an iPad
-  --web-port <n>  The web viewer's port on 127.0.0.1 (default 7421; any free one if taken)
-  --no-web        Don't serve the web viewer
-  --relay <url>   Sync through this Reflex Relay (default wss://reflex.eilmer.si, or $REFLEX_RELAY);
-                  remembered. --relay off stops using one
-  --no-lan        Don't listen or look for devices on the local network (Relay only)
-  --no-p2p        Don't use Apple peer-to-peer Wi-Fi (on by default on macOS; needs npm run build:p2p)
-  --fault <spec>  Drop, delay or duplicate frames per transport, e.g. "lan:delay=80,jitter=40;p2p:drop=0.01"
-  --every-path    Send every change over every live path, not just the fastest
-  --json          Machine-readable output
-  --no-prompt     Don't use this terminal for pairing codes or questions
-  -h, --help      Show this help
+const HELP = `Reflex Link — receive iPad Sends for local agents
+Usage: reflex link [status|stop|pair|forget <device>|agents|deny <agent>|revoke <agent>]
+  --home <path>    Profile folder
+  --name <name>    Mac name on first start
+  --port <n>       LAN port (default 7420)
+  --relay <url>    Forward through a Relay; off disables it
+  --no-lan        Use the Relay only
+  --no-p2p        Disable peer-to-peer Wi-Fi
+  --no-prompt     Run without terminal pairing/approval prompts
+  --json          Print JSON
 `;
 
 const { values: flags, positionals: args } = parseArgs({
@@ -82,9 +29,6 @@ const { values: flags, positionals: args } = parseArgs({
     port: { type: "string" },
     json: { type: "boolean", default: false },
     "no-prompt": { type: "boolean", default: false },
-    dev: { type: "boolean", default: false },
-    "web-port": { type: "string" },
-    "no-web": { type: "boolean", default: false },
     relay: { type: "string" },
     "no-lan": { type: "boolean", default: false },
     "no-p2p": { type: "boolean", default: false },
@@ -132,8 +76,6 @@ async function start(): Promise<void> {
     name: flags.name,
     port: flags.port ? Number(flags.port) : undefined,
     prompt: !flags["no-prompt"],
-    dev: flags.dev,
-    webPort: flags["no-web"] ? null : flags["web-port"] ? Number(flags["web-port"]) : undefined,
     relay: relayUrl(),
     lan: !flags["no-lan"],
     p2p: !flags["no-p2p"],
@@ -149,6 +91,25 @@ async function start(): Promise<void> {
   await link.start();
   process.on("SIGINT", () => void stop("SIGINT"));
   process.on("SIGTERM", () => void stop("SIGTERM"));
+}
+
+interface Status {
+  device: string;
+  name: string;
+  person: { id: string; name: string };
+  lan_port: number;
+  p2p_port: number | null;
+  spaces: { id: string; kind: string; digest: string; elements: number; sends: string[] }[];
+  journal: { entries: number; checkpoints: number };
+  assets: number;
+  inbox: { space: string; send: string; via: string; receipts: { recipient: string; state: string }[] }[];
+  paired: { device: string; name: string; connected: boolean }[];
+  peers: { device: string; name: string; paths: { transport: string; remote: string; rttMs: number | null; active: boolean; sentBytes: number; receivedBytes: number }[] }[];
+  agents: { id: string; name: string; status: string }[];
+  push?: {
+    targets: { id: string; agent: string; adapter: string; config: Record<string, unknown>; live: boolean }[];
+    attempts: { space: string; send: string; recipient: string; target: string; started_at: number; outcome: string; reason: string | null }[];
+  };
 }
 
 interface Status {
@@ -198,69 +159,6 @@ function showStatus(s: Status): string {
   return lines.join("\n");
 }
 
-/** A stand-in Agent client: keeps its own credential, like the Agent layer will. */
-async function agentClient(name: string): Promise<LinkClient> {
-  const credDir = join(dir, "dev-agents");
-  mkdirSync(credDir, { recursive: true, mode: 0o700 });
-  const file = join(credDir, name.toLowerCase().replace(/[^a-z0-9]+/g, "-") + ".cred");
-  if (!existsSync(file)) writeFileSync(file, "rxa_" + randomBytes(32).toString("base64url"), { mode: 0o600 });
-  const credential = readFileSync(file, "utf8").trim();
-  const c = await LinkClient.connect(dir, "agent");
-  console.error(`connecting as Agent "${name}"...`);
-  const me = await c.call<{ agent: string; color: string }>("agent.hello", { name, credential });
-  console.error(`approved as ${me.agent}`);
-  return c;
-}
-
-async function dev(): Promise<void> {
-  const [what, ...rest] = args.slice(1);
-  switch (what) {
-    case "space":
-      return out(`made Space ${rest[0]}`, await admin("space.open", { space: rest[0] }));
-    case "draw": {
-      const [space, id, ...pts] = rest;
-      const points = (pts.length ? pts : ["0,0", "40,40", "80,0"]).map((p) => p.split(",").map(Number));
-      const r = await admin("dev.intent", { space, intent: { intent: "add_stroke", id, stroke: { points } } });
-      return out(JSON.stringify(r), r);
-    }
-    case "undo": {
-      const r = await admin("dev.undo", { space: rest[0] });
-      return out(JSON.stringify(r), r);
-    }
-    case "send": {
-      const [space, send, ...said] = rest;
-      const r = await admin("dev.send", { space, raw: { send, trigger: "button", ...(said.length ? { said: said.join(" ") } : {}) } });
-      return out(JSON.stringify(r), r);
-    }
-    case "asset": {
-      const r = await admin<{ hash: string }>("assets.put", { base64: readFileSync(rest[0]).toString("base64") });
-      return out(r.hash, r);
-    }
-    case "agent": {
-      const [name, action, space, arg] = rest;
-      const c = await agentClient(name);
-      try {
-        if (action === "apply") {
-          const r = await c.call("space.apply", { space, batch: JSON.parse(arg) });
-          return out(JSON.stringify(r), r);
-        }
-        if (action === "inbox") {
-          const r = await c.call("inbox.pending", space ? { space } : {});
-          return out(JSON.stringify(r, null, 2), r);
-        }
-        if (action === "ack") {
-          const r = await c.call("inbox.ack", { space, send: arg });
-          return out(JSON.stringify(r), r);
-        }
-        throw new LinkError("usage", `Unknown agent action '${action}'.`, "Use apply, inbox or ack.");
-      } finally {
-        c.close();
-      }
-    }
-    default:
-      throw new LinkError("usage", `Unknown dev command '${what}'.`, "Run reflex link --help.");
-  }
-}
 
 async function main(): Promise<void> {
   if (flags.help) return void process.stdout.write(HELP);
@@ -319,75 +217,11 @@ async function main(): Promise<void> {
       const a = await admin<{ id: string; name: string; status: string }>("agents.decide", { id: args[1], status });
       return out(`${a.name} (${a.id}) ${a.status}.`, a);
     }
-    case "relay": {
-      if (args[1] === "revoke") {
-        if (!args[2]) throw new LinkError("usage", "Which grant? reflex link relay revoke <grant>", "Run reflex link relay to see them.");
-        const g = await admin<{ gid: string; name: string; space: string; status: string }>("relay.revoke", { grant: args[2] });
-        return out(`${g.name}'s grant on '${g.space}' (${g.gid}) is ${g.status}.`, g);
-      }
-      const s = await admin<{ relay: null | { url: string; connected: boolean; logs: number; grants: { gid: string; space: string; name: string; agent: string; expires: number; status: string }[] } }>("status");
-      if (!s.relay) return out("This Link isn't using a Relay. Start it with --relay <url>.", s.relay);
-      const r = s.relay;
-      const lines = [`${r.url} · ${r.connected ? "connected" : "not connected"} · ${r.logs} Spaces in its encrypted log`, `Grants (${r.grants.length})`];
-      for (const g of r.grants) lines.push(`  ${g.gid}  ${g.status.padEnd(8)} ${g.space.padEnd(16)} ${g.name} (${g.agent}) until ${new Date(g.expires).toLocaleString()}`);
-      return out(lines.join("\n"), r);
-    }
-    case "shares": {
-      type S = { space: string; owner: { name: string }; role: string | null; members: { person: { id: string; name: string }; role: string }[]; epoch: number };
-      const r = await admin<{ shares: S[]; invites: { invite: string; space: string; role: string; expires: number }[] }>("share.list");
-      const lines = r.shares.map((s) => `${s.space.padEnd(16)} ${s.owner.name}'s · you: ${s.role ?? "removed"} · key epoch ${s.epoch}\n${s.members.map((m) => `    ${m.person.name} (${m.person.id}) ${m.role}`).join("\n")}`);
-      for (const i of r.invites) lines.push(`invite ${i.invite} to '${i.space}' as ${i.role}, until ${new Date(i.expires).toLocaleString()}`);
-      return out(lines.join("\n") || "No shared Spaces yet.", r);
-    }
-    case "join": {
-      if (!args[1]) throw new LinkError("usage", "Which invite? reflex link join '<invite>'", "Paste the whole reflex://invite?... the owner sent.");
-      const r = await admin<{ space: string; role: string; owner: { name: string } }>("share.join", { uri: args[1] });
-      return out(`Joined '${r.space}', ${r.owner.name}'s Space, as ${r.role === "editor" ? "an editor" : "a viewer"}.`, r);
-    }
-    case "role":
-    case "remove": {
-      const [, space, person, role] = args;
-      if (!space || !person) throw new LinkError("usage", `reflex link ${cmd} <space> <person>${cmd === "role" ? " viewer" : ""}`, "Run reflex link shares to see who is in each Space.");
-      const r = await admin(cmd === "role" ? "share.role" : "share.remove", { space, person, role });
-      return out(JSON.stringify(r, null, 2), r);
-    }
     case "fault": {
       if (args[1] === undefined) throw new LinkError("usage", 'Which faults? reflex link fault "lan:drop=1" (or "" to clear)');
       const f = await admin<Record<string, unknown>>("fault", { spec: args[1] });
       return out(Object.entries(f).map(([t, v]) => `${t}: ${JSON.stringify(v)}`).join("\n"), f);
     }
-    case "library": {
-      type E = { kind: string; name: string; summary?: string };
-      const [, sub, a, b] = args;
-      const find = async (name: string): Promise<E> => {
-        const list = await admin<E[]>("library.list");
-        const hits = list.filter((e) => e.name === name);
-        if (!hits.length) throw new LinkError("unknown_id", `The Library has no '${name}'.`, "Run reflex link library to list it.");
-        if (hits.length > 1) throw new LinkError("ambiguous", `The Library has a recipe and an embed named '${name}'.`, `Name it as recipe:${name} or embed:${name}.`);
-        return hits[0];
-      };
-      const pick = async (ref: string): Promise<E> => {
-        const m = /^(recipe|embed):(.+)$/.exec(ref);
-        return m ? { kind: m[1], name: m[2] } : find(ref);
-      };
-      if (sub === "rename") {
-        if (!a || !b) throw new LinkError("usage", "reflex link library rename <name> <new-name>", "Run reflex link library to list it.");
-        const e = await pick(a);
-        const r = await admin("library.edit", { kind: e.kind, name: e.name, to: b });
-        return out(`Renamed ${e.kind} '${e.name}' to '${b}'.`, r);
-      }
-      if (sub === "delete") {
-        if (!a) throw new LinkError("usage", "reflex link library delete <name>", "Run reflex link library to list it.");
-        const e = await pick(a);
-        const r = await admin("library.edit", { kind: e.kind, name: e.name });
-        return out(`Deleted ${e.kind} '${e.name}' from the Library. Undo on your iPad brings it back.`, r);
-      }
-      if (sub) throw new LinkError("usage", `Unknown library command '${sub}'.`, "reflex link library [rename <name> <new-name> | delete <name>]");
-      const list = await admin<(E & { by?: Record<string, string> })[]>("library.list");
-      return out(list.map((e) => `${e.kind.padEnd(7)} ${e.name.padEnd(28)} ${e.summary ?? ""}`).join("\n") || "The Library is empty.", list);
-    }
-    case "dev":
-      return dev();
     default:
       throw new LinkError("usage", `Unknown command '${cmd}'.`, "Run reflex link --help.");
   }

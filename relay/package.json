@@ -2,7 +2,7 @@
   "name": "@reflex/relay",
   "version": "0.1.0",
   "private": true,
-  "description": "Reflex Relay: an encrypted log and router for Spaces, with remote MCP over OAuth. Runs on Cloudflare Workers or Node.",
+  "description": "Forward encrypted live connections between paired devices.",
   "type": "module",
   "bin": {
     "reflex-relay": "./node/bin/reflex-relay.ts"
@@ -12,13 +12,7 @@
     "node": "node node/bin/reflex-relay.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.32.2",
-    "@noble/ciphers": "2.0.1",
     "@noble/hashes": "2.0.1",
-    "@reflex/agent": "0.1.0",
-    "@reflex/kernel": "0.1.0",
-    "@resvg/resvg-wasm": "2.6.2",
-    "dejavu-fonts-ttf": "2.37.3",
     "ws": "8.21.0"
   },
   "devDependencies": {
