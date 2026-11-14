@@ -141,7 +141,7 @@ struct CanvasScreen: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { open?.ink.flush(); open?.saveNow() }
+            if phase != .active { open?.ink.flush(); open?.saveNow(); open?.saveHistory() }
         }
         #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .debugInk)) { note in

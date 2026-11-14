@@ -55,7 +55,7 @@ struct BoardScreen: View {
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { screen = $0.size; frame = $0 }
         .overlay(alignment: .top) { topBar }
-        .overlay(alignment: .bottomLeading) { zoomCapsule.padding(.leading, 16).padding(.bottom, bottomLift + 16) }
+        .overlay(alignment: .bottomLeading) { zoomCapsule.padding(.leading, 16).padding(.bottom, max(bottomLift, leadingLift) + 16) }
         .overlay(alignment: .bottomTrailing) { bottomRight.padding(.trailing, 16 + trailingLift).padding(.bottom, bottomLift + 16) }
         .overlay(alignment: .bottom) { messages.padding(.bottom, bottomLift + 92) }
         // The keyboard covers the bottom chrome instead of pushing it up.
@@ -108,6 +108,15 @@ struct BoardScreen: View {
     private var bottomLift: CGFloat {
         let r = ink.pickerObscured
         guard ink.pickerVisible, !r.isNull, screen.height > 0, r.width > screen.width * 0.4, r.minY > frame.height * 0.55 else { return 0 }
+        return max(0, frame.maxY - r.minY + 4)
+    }
+
+    /// A minimized (floating) palette parked over the bottom-left capsule pushes the capsule above it.
+    private var leadingLift: CGFloat {
+        let r = ink.pickerObscured
+        guard ink.pickerVisible, !r.isNull, bottomLift == 0, screen.height > 0 else { return 0 }
+        let capsule = CGRect(x: frame.minX, y: frame.maxY - 16 - 52, width: 340, height: 68)
+        guard r.intersects(capsule) else { return 0 }
         return max(0, frame.maxY - r.minY + 4)
     }
 
@@ -313,6 +322,7 @@ struct BoardScreen: View {
         HStack(spacing: 0) {
             Button { session.undo() } label: {
                 Image(systemName: "arrow.uturn.backward").font(.system(size: 18, weight: .medium)).frame(width: 44, height: 44)
+                    .opacity(session.canUndo ? 1 : 0.3)
             }
             .disabled(!session.canUndo)
             .contextMenu {
@@ -324,6 +334,7 @@ struct BoardScreen: View {
             .accessibilityIdentifier("undo-button")
             Button { session.redo() } label: {
                 Image(systemName: "arrow.uturn.forward").font(.system(size: 18, weight: .medium)).frame(width: 44, height: 44)
+                    .opacity(session.canRedo ? 1 : 0.3)
             }
             .disabled(!session.canRedo)
             .accessibilityLabel("Redo")
@@ -342,7 +353,6 @@ struct BoardScreen: View {
             Button("Paste", systemImage: "doc.on.clipboard") { session.paste() }.disabled(!session.canPaste)
             Divider()
             Button("Add Scene", systemImage: "star") { session.addScene() }
-            Button("Paper…", systemImage: "doc.richtext") { showPaper = true }
             Menu("Alignment", systemImage: "squareshape.split.2x2.dotted") {
                 Toggle("Snap to Grid", isOn: $snapToGrid)
                 Toggle("Center Guides", isOn: $centerGuides)
@@ -350,8 +360,6 @@ struct BoardScreen: View {
                 Toggle("Spacing Guides", isOn: $spacingGuides)
             }
             Toggle(isOn: $fingerDraws) { Label("Draw with Finger", systemImage: "hand.draw") }
-            Divider()
-            exportMenu
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 18, weight: .medium)).frame(width: 44, height: 44)
         }
@@ -392,6 +400,16 @@ struct BoardScreen: View {
             Button { step(1) } label: { Image(systemName: "chevron.right").frame(width: 38, height: 44) }
                 .disabled(session.meta.scenes.isEmpty)
                 .accessibilityLabel("Next Scene")
+            Divider().frame(height: 22)
+            Button { showPaper = true } label: {
+                Image(systemName: paper.style.symbol).frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("Paper")
+            .accessibilityIdentifier("paper-button")
+            .popover(isPresented: $showPaper) {
+                PaperPicker(paper: Binding(get: { session.meta.paper }, set: { p in session.updateMeta { $0.paper = p } }))
+                    .preferredColorScheme(darkPaper ? .dark : .light)
+            }
         }
         .font(.system(size: 16, weight: .medium))
         .padding(.horizontal, 6)
@@ -408,20 +426,10 @@ struct BoardScreen: View {
         session.show(scenes[sceneIndex])
     }
 
-    // MARK: Bottom right: paper, mic and Send
+    // MARK: Bottom right: mic and Send
 
     private var bottomRight: some View {
         HStack(spacing: 12) {
-            Button { showPaper = true } label: {
-                Image(systemName: paper.style.symbol).font(.system(size: 18, weight: .medium)).frame(width: 52, height: 52)
-            }
-            .foregroundStyle(.primary)
-            .glassEffect(.regular.interactive(), in: Circle())
-            .accessibilityLabel("Paper")
-            .accessibilityIdentifier("paper-button")
-            .popover(isPresented: $showPaper) {
-                PaperPicker(paper: Binding(get: { session.meta.paper }, set: { p in session.updateMeta { $0.paper = p } }))
-            }
             VoiceSendDock(voice: voice, pending: link.pendingSends, lastSend: session.lastSendOK, onFail: { session.say($0) }) { said, words in
                 session.send(trigger: "voice", said: said, words: words)
             } send: {

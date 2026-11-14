@@ -173,7 +173,19 @@ struct ObjectContent: View {
     var hideText = false
 
     private var inkColor: Color { darkPaper ? .white : Color(red: 0.11, green: 0.11, blue: 0.12) }
-    private var textColor: Color { object.textColor.map { Color(hex: $0) } ?? (object.kind == .sticky || (object.kind == .table && object.fill != nil) ? Color(red: 0.11, green: 0.11, blue: 0.12) : inkColor) }
+    private var textColor: Color { object.textColor.map { Color(hex: $0) } ?? (object.kind == .sticky || (object.kind == .table && !object.autoTableColors) ? Color(red: 0.11, green: 0.11, blue: 0.12) : inkColor) }
+
+    /// A table in the default colours follows the paper: white on light paper, dark grey on dark paper.
+    private var tableFill: Color? {
+        if object.autoTableColors { return darkPaper ? Color(red: 0.17, green: 0.17, blue: 0.18) : .white }
+        return object.fill.map { Color(hex: $0) }
+    }
+    private var tableLines: Color {
+        if object.autoTableColors && (object.stroke == nil || object.stroke?.uppercased() == "#AEAEB2") {
+            return darkPaper ? Color(red: 0.39, green: 0.39, blue: 0.40) : Color(red: 0.68, green: 0.68, blue: 0.70)
+        }
+        return object.stroke.map { Color(hex: $0) } ?? .gray.opacity(0.5)
+    }
 
     private var font: Font {
         var f = Font.system(size: object.fontSize, weight: object.bold ? .bold : .regular)
@@ -224,7 +236,7 @@ struct ObjectContent: View {
                 RoundedRectangle(cornerRadius: 8).fill(.gray.opacity(0.2)).overlay(Image(systemName: "photo").font(.largeTitle).foregroundStyle(.secondary))
             }
         case .table:
-            TableContent(object: object, textColor: textColor, font: font, lines: object.stroke.map { Color(hex: $0) } ?? .gray.opacity(0.5), hideText: hideText)
+            TableContent(object: object, textColor: textColor, font: font, fill: tableFill, lines: tableLines, hideText: hideText)
         case .connector:
             EmptyView()
         }
@@ -253,6 +265,7 @@ struct TableContent: View {
     let object: BoardObject
     let textColor: Color
     let font: Font
+    let fill: Color?
     let lines: Color
     let hideText: Bool
 
@@ -261,7 +274,7 @@ struct TableContent: View {
         GeometryReader { g in
             let cw = g.size.width / CGFloat(max(t.cols, 1)), rh = g.size.height / CGFloat(max(t.rows, 1))
             ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 10).fill(object.fill.map { Color(hex: $0) } ?? Color.white.opacity(0.001))
+                RoundedRectangle(cornerRadius: 10).fill(fill ?? Color.white.opacity(0.001))
                 // The first row reads as a header.
                 UnevenRoundedRectangle(topLeadingRadius: 10, topTrailingRadius: 10)
                     .fill(lines.opacity(0.18))

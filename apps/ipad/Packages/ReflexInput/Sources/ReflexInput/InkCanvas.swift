@@ -30,6 +30,13 @@ public final class BoardUndoManager: UndoManager {
     override public var canRedo: Bool { canRedoCheck?() ?? false }
     override public func undo() { undoAction?() }
     override public func redo() { redoAction?() }
+
+    /// Tells listeners (the palette's undo and redo buttons) that canUndo or canRedo changed.
+    public func refresh() {
+        for name: Notification.Name in [.NSUndoManagerCheckpoint, .NSUndoManagerDidCloseUndoGroup, .NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
+            NotificationCenter.default.post(name: name, object: self)
+        }
+    }
 }
 
 /// PKCanvasView with the board's own undo manager and a hook so objects under
@@ -96,6 +103,7 @@ public final class InkCanvasController: NSObject {
 
     @ObservationIgnored private var usingTool = false
     @ObservationIgnored private var restoring = false
+    @ObservationIgnored private var paletteSynced = false
     @ObservationIgnored private var liveEdit = false
     @ObservationIgnored private var lastDrawing: PKDrawing
     @ObservationIgnored private let store: InkStore
@@ -154,6 +162,10 @@ public final class InkCanvasController: NSObject {
         addGestures()
         applyPolicy()
         publishStrokes()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            self?.settled = true
+            self?.applyPolicy()
+        }
     }
 
     // MARK: Tool picker
@@ -165,6 +177,21 @@ public final class InkCanvasController: NSObject {
         pickerVisible = visible
         applyPolicy()
         refreshObscured()
+        // The palette's undo and redo read the board's history once it is on screen.
+        if visible {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.pickerVisible else { return }
+                // The palette reads canUndo when the drawing changes. Setting the same drawing once
+                // (outside history and stroke tracking) shows the board's own undo state right away.
+                if !self.paletteSynced {
+                    self.paletteSynced = true
+                    self.restoring = true
+                    self.canvasView.drawing = self.canvasView.drawing
+                    self.restoring = false
+                }
+                self.canvasView.boardUndo.refresh()
+            }
+        }
         // The person can drag the palette to another edge; follow it while it's open.
         paletteWatch?.cancel()
         if visible {
@@ -204,9 +231,12 @@ public final class InkCanvasController: NSObject {
         return .null
     }
 
-    /// Picks an ink tool again after a Reflex tool has been used.
+    /// The last pen, pencil or marker picked, to go back to after placing an object.
+    private weak var lastInkItem: PKToolPickerItem?
+
+    /// Picks the last ink tool again after a Reflex tool has placed something, as Freeform does.
     public func pickInkTool() {
-        if let pen = toolPicker.toolItems.first(where: { $0 is PKToolPickerInkingItem }) {
+        if let pen = lastInkItem ?? toolPicker.toolItems.first(where: { $0 is PKToolPickerInkingItem }) {
             toolPicker.selectedToolItem = pen
         }
     }
@@ -221,11 +251,15 @@ public final class InkCanvasController: NSObject {
         canvasView.drawingPolicy = drawsWithFinger ? .anyInput : .pencilOnly
         #endif
         let item = toolPicker.selectedToolItem
+        if item is PKToolPickerInkingItem { lastInkItem = item }
         customTool = (item as? PKToolPickerCustomItem)?.identifier
         lassoPicked = item is PKToolPickerLassoItem
         // Reflex's own tools and lasso take touches themselves; the canvas mustn't draw with them.
-        canvasView.drawingGestureRecognizer.isEnabled = customTool == nil && !lassoPicked
+        canvasView.drawingGestureRecognizer.isEnabled = customTool == nil && !lassoPicked && settled
     }
+
+    /// False for a moment after the board opens, so the tap that opened it isn't drawn as a dot.
+    @ObservationIgnored private var settled = false
 
     /// The pen color in use, for debug strokes.
     private var currentInk: PKInk {
@@ -267,11 +301,21 @@ public final class InkCanvasController: NSObject {
     @objc private func oneFingerTap(_ g: UITapGestureRecognizer) {
         // While the palette draws with a finger, a tap is a dot of ink, not a selection change.
         guard !(pickerVisible && fingerDraws && customTool == nil && !lassoPicked) else { return }
+        guard tapsAllowed(at: g.location(in: canvasView.superview)) else { return }
         onTap?(space(g.location(in: canvasView.superview)))
     }
     @objc private func longPress(_ g: UILongPressGestureRecognizer) {
         guard g.state == .began, !(pickerVisible && fingerDraws) else { return }
+        guard tapsAllowed(at: g.location(in: canvasView.superview)) else { return }
         onLongPress?(space(g.location(in: canvasView.superview)))
+    }
+
+    /// The tap that opened the board, or one on the top bar that slipped past a button
+    /// (Back), must not open the canvas menu.
+    private let openedAt = Date()
+    private func tapsAllowed(at point: CGPoint) -> Bool {
+        guard Date().timeIntervalSince(openedAt) > 0.7 else { return false }
+        return point.y > 84
     }
 
     // MARK: Viewport

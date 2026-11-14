@@ -506,6 +506,12 @@ public final class LinkSync {
         network = m
     }
 
+    /// Dials the Mac again now, for a "Retry Now" button.
+    public func retryNow() {
+        changedHosts = []
+        reconnectSoon(after: 0)
+    }
+
     private func reconnectSoon(after seconds: Double) {
         Task {
             if seconds > 0 { try? await Task.sleep(for: .seconds(seconds)) }

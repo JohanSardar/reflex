@@ -372,6 +372,7 @@ extension UIColor {
 struct PaperPicker: View {
     @Binding var paper: Paper
     @Environment(\.colorScheme) private var scheme
+    @State private var newBoards = Paper.forNewBoards
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -423,6 +424,18 @@ struct PaperPicker: View {
                 }
             }
             Text(paper.tint.name).font(.footnote).foregroundStyle(.secondary)
+            Divider()
+            Button {
+                Paper.forNewBoards = paper
+                newBoards = paper
+            } label: {
+                Label(newBoards == paper ? "New Boards Use This Paper" : "Use for New Boards",
+                      systemImage: newBoards == paper ? "checkmark.circle.fill" : "doc.badge.plus")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(newBoards == paper)
+            .accessibilityIdentifier("paper-default")
         }
         .padding(20)
         .frame(width: 360)

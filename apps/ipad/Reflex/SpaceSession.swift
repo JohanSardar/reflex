@@ -30,8 +30,8 @@ final class BoardSession {
     var guides: (x: [CGFloat], y: [CGFloat]) = ([], [])
     /// The shape the palette's Shape tool places.
     var shapeTool: ShapeKind = .roundedRect
-    private(set) var canUndo = false
-    private(set) var canRedo = false
+    private(set) var canUndo = false { didSet { if canUndo != oldValue { ink.canvasView.boardUndo.refresh() } } }
+    private(set) var canRedo = false { didSet { if canRedo != oldValue { ink.canvasView.boardUndo.refresh() } } }
     /// The last few undo steps, newest first, for the long-press history menu.
     private(set) var undoNames: [String] = []
 
@@ -217,7 +217,7 @@ final class BoardSession {
         var current: Data
     }
 
-    private func saveHistory() {
+    func saveHistory() {
         let keep = 30
         let encode = { (steps: [(name: String, state: Snapshot)]) in
             steps.suffix(keep).map { SavedStep(name: $0.name, drawing: $0.state.drawing.dataRepresentation(), objects: $0.state.objects) }

@@ -7,6 +7,15 @@ import SwiftUI
 
 // MARK: Paper
 
+extension Paper {
+    private static let newBoardsKey = "paperForNewBoards"
+    /// The paper new boards start with, chosen with "Use for New Boards".
+    static var forNewBoards: Paper {
+        get { UserDefaults.standard.data(forKey: newBoardsKey).flatMap { try? JSONDecoder().decode(Paper.self, from: $0) } ?? Paper() }
+        set { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: newBoardsKey) }
+    }
+}
+
 struct Paper: Codable, Equatable, Hashable {
     enum Style: String, Codable, CaseIterable, Identifiable {
         case blank, dots, lines, squares
@@ -237,6 +246,8 @@ struct BoardObject: Codable, Equatable, Identifiable {
     var aboveInk: Bool?
 
     var isAboveInk: Bool { aboveInk ?? false }
+    /// A table left in its default white follows the paper (dark grey with light text on dark paper).
+    var autoTableColors: Bool { kind == .table && fill?.uppercased() == "#FFFFFF" && textColor == nil }
 
     var isConnector: Bool { kind == .connector }
     var hasText: Bool { kind == .sticky || kind == .text || kind == .shape || kind == .table }
@@ -347,6 +358,20 @@ final class BoardLibrary {
         self.link = link
         folders = (try? Data(contentsOf: Self.foldersURL)).flatMap { try? BoardFiles.decoder.decode([BoardFolder].self, from: $0) } ?? []
         reload()
+        discardEmptyNewBoards()
+    }
+
+    /// A new board left empty (the app quit while it was open) goes to the Trash at launch, as it would on Back.
+    private func discardEmptyNewBoards() {
+        let empty = boards.values.filter { meta in
+            guard !meta.hasContent else { return false }
+            let f = files(meta.id)
+            // Anything that can't be read for sure counts as content, so nothing is lost.
+            if let data = try? Data(contentsOf: f.objects), (try? BoardFiles.decoder.decode([BoardObject].self, from: data))?.isEmpty != true { return false }
+            if let data = try? Data(contentsOf: f.ink), (try? PKDrawing(data: data))?.strokes.isEmpty != true { return false }
+            return true
+        }
+        if !empty.isEmpty { delete(empty.map(\.id)) }
     }
 
     func files(_ id: String) -> BoardFiles { BoardFiles(folder: link.folderURL(id)) }
@@ -417,6 +442,7 @@ final class BoardLibrary {
         let id = link.createPage()
         var meta = BoardMeta(id: id, title: nextUntitled(), created: Date(), modified: Date(), folder: folder, hasContent: false)
         meta.viewport = Viewport(center: InkCanvasControllerDefaults.newCenter, zoom: 1)
+        meta.paper = Paper.forNewBoards
         boards[id] = meta
         files(id).save(meta: meta)
         return id

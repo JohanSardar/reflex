@@ -214,6 +214,7 @@ struct InteractionLayer: View {
                 case "reflex.text": session.addText(at: p)
                 default: session.addShape(session.shapeTool, at: p)
                 }
+                ink.pickInkTool()
             }
             .accessibilityIdentifier("placement-area")
     }
@@ -477,7 +478,7 @@ struct ObjectTextEditor: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        let color = object.textColor.map { Color(hex: $0) } ?? (object.kind == .sticky ? Color(red: 0.11, green: 0.11, blue: 0.12) : (darkPaper ? .white : Color(red: 0.11, green: 0.11, blue: 0.12)))
+        let color = object.textColor.map { Color(hex: $0) } ?? (object.kind == .sticky || (object.kind == .table && !object.autoTableColors) ? Color(red: 0.11, green: 0.11, blue: 0.12) : (darkPaper ? .white : Color(red: 0.11, green: 0.11, blue: 0.12)))
         var font = Font.system(size: object.fontSize * zoom, weight: object.bold ? .bold : header ? .semibold : .regular)
         if object.italic { font = font.italic() }
         return TextField("", text: $text, prompt: Text(prompt).foregroundStyle(color.opacity(0.35)), axis: .vertical)

@@ -46,18 +46,12 @@ struct StatusCapsule: View {
             HStack(spacing: 7) {
                 Circle().fill(s.color.gradient).frame(width: 9, height: 9)
                     .overlay { if case .connecting = link.state { Circle().stroke(s.color.opacity(0.4), lineWidth: 4).scaleEffect(1.6) } }
-                Text(compact ? shortHeadline(s) : s.headline).lineLimit(1)
-                if !compact, s.paired, !s.approved.isEmpty {
-                    Text("·").foregroundStyle(.secondary)
-                    Text(s.approved.prefix(2).map(\.name).joined(separator: ", ") + (s.approved.count > 2 ? " +\(s.approved.count - 2)" : ""))
-                        .foregroundStyle(.secondary).lineLimit(1)
-                }
+                Text(shortHeadline(s)).lineLimit(1)
                 if link.pendingSends > 0 {
+                    Text("·").foregroundStyle(.secondary)
                     Text("\(link.pendingSends) waiting")
-                        .font(.system(size: 12, weight: .semibold))
-                        .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(.orange.opacity(0.18), in: Capsule())
                         .foregroundStyle(.orange)
+                        .lineLimit(1)
                 }
             }
             .font(.system(size: 15, weight: .medium))
@@ -73,9 +67,9 @@ struct StatusCapsule: View {
 
     private func shortHeadline(_ s: LinkStatus) -> String {
         switch link.state {
-        case .unpaired: "Pair"
-        case .offline: "Offline"
-        case .connecting: "Connecting"
+        case .unpaired: "Pair with Mac"
+        case .offline: compact ? "Offline" : "\(s.macName) offline"
+        case .connecting: "Connecting…"
         case .linkChanged: "Scan again"
         case .connected: s.macName
         }
@@ -91,6 +85,9 @@ struct PairSheet: View {
     @State private var busy = false
     @State private var error: String?
     @State private var typing = false
+    @State private var renamingAgent: String?
+    @State private var renameDraft = ""
+    @AppStorage("agentNicknames") private var nicknamesData = Data()
     @Environment(\.dismiss) private var dismiss
 
     private var canScan: Bool { DataScannerViewController.isSupported && DataScannerViewController.isAvailable }
@@ -114,8 +111,15 @@ struct PairSheet: View {
                         .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("mac-row")
                         if link.pendingSends > 0 {
-                            Label("\(link.pendingSends) \(link.pendingSends == 1 ? "Send is" : "Sends are") saved here and go out when \(s.macName) is back.", systemImage: "tray.full")
-                                .foregroundStyle(.orange)
+                            HStack {
+                                Label(link.pendingSends == 1 ? "1 Send is waiting and goes out when \(s.macName) is back."
+                                      : "\(link.pendingSends) Sends are waiting and go out when \(s.macName) is back.", systemImage: "tray.full")
+                                    .foregroundStyle(.orange)
+                                Spacer()
+                                if case .connected = link.state {} else {
+                                    Button("Retry Now") { link.retryNow() }.buttonStyle(.bordered)
+                                }
+                            }
                         }
                     }
                     Section {
@@ -125,10 +129,10 @@ struct PairSheet: View {
                         }
                         ForEach(link.agentRequests) { a in
                             HStack {
-                                agentIcon(a.name, color: a.color)
+                                agentIcon(displayName(a), color: a.color)
                                 VStack(alignment: .leading) {
-                                    Text(a.name).font(.headline)
-                                    Text("Wants to receive your Sends").font(.subheadline).foregroundStyle(.secondary)
+                                    Text(displayName(a)).font(.headline)
+                                    Text("Wants to receive your Sends · \(agentDetail(a, among: link.agentRequests.map(displayName) + s.approved.map(displayName)))").font(.subheadline).foregroundStyle(.secondary)
                                 }
                                 Spacer()
                                 Button("Don't Allow") { link.decide(a.id, allow: false) }.buttonStyle(.bordered)
@@ -137,24 +141,26 @@ struct PairSheet: View {
                         }
                         ForEach(s.approved) { a in
                             HStack {
-                                agentIcon(a.name, color: a.color)
+                                agentIcon(displayName(a), color: a.color)
                                 VStack(alignment: .leading) {
-                                    Text(a.name).font(.headline)
-                                    Text("Allowed").font(.subheadline).foregroundStyle(.secondary)
+                                    Text(displayName(a)).font(.headline)
+                                    Text(agentDetail(a, among: s.approved)).font(.subheadline).foregroundStyle(.secondary)
                                 }
                                 Spacer()
                             }
                             .swipeActions {
                                 Button("Revoke", role: .destructive) { link.decide(a.id, allow: false) }
+                                Button("Rename") { renameDraft = displayName(a); renamingAgent = a.id }.tint(.blue)
                             }
                             .contextMenu {
+                                Button("Rename", systemImage: "pencil") { renameDraft = displayName(a); renamingAgent = a.id }
                                 Button("Revoke", systemImage: "hand.raised", role: .destructive) { link.decide(a.id, allow: false) }
                             }
                         }
                     } header: {
                         Text("Agents")
                     } footer: {
-                        if !s.approved.isEmpty { Text("Swipe an Agent to revoke it. A revoked Agent stops receiving Sends.") }
+                        if !s.approved.isEmpty { Text("Swipe an Agent to rename or revoke it. A revoked Agent stops receiving Sends.") }
                     }
                 }
                 Section {
@@ -168,8 +174,9 @@ struct PairSheet: View {
                         .padding(.vertical, 6)
                     }
                     Button { scanning = true } label: {
-                        Label(canScan ? "Scan QR Code" : "Scan QR Code (needs a camera)", systemImage: "qrcode.viewfinder")
+                        Label("Scan QR Code", systemImage: "qrcode.viewfinder")
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .foregroundStyle(canScan ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
                     }
                     .disabled(!canScan)
                     .accessibilityIdentifier("scan-button")
@@ -192,7 +199,7 @@ struct PairSheet: View {
                 } header: {
                     Text(s.paired ? "Pair a Different Mac" : "")
                 } footer: {
-                    Text(s.paired ? "Run `reflex pair` on the Mac for a new code." : "Pairing never approves an Agent by itself: each one asks first.")
+                    Text(LocalizedStringKey((canScan ? "" : "This device has no camera, so enter the code instead. ") + (s.paired ? "Run `reflex pair` on the Mac for a new code." : "Pairing never approves an Agent by itself: each one asks first.")))
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("pair-error") }
@@ -210,6 +217,11 @@ struct PairSheet: View {
                 .ignoresSafeArea()
             }
             .onAppear { if !code.isEmpty { typing = true } }
+            .alert("Rename Agent", isPresented: Binding(get: { renamingAgent != nil }, set: { if !$0 { renamingAgent = nil } })) {
+                TextField("Name", text: $renameDraft).accessibilityIdentifier("rename-field")
+                Button("Cancel", role: .cancel) {}
+                Button("Rename") { if let id = renamingAgent { setNickname(id, renameDraft) } }
+            } message: { Text("The name is only shown on this iPad.") }
         }
         .presentationSizing(.form)
     }
@@ -224,6 +236,38 @@ struct PairSheet: View {
         case .linkChanged: return "Its Link was reset. Scan its code again."
         case .unpaired: return "Not paired"
         }
+    }
+
+    private var nicknames: [String: String] { (try? JSONDecoder().decode([String: String].self, from: nicknamesData)) ?? [:] }
+
+    private func setNickname(_ id: String, _ name: String) {
+        var n = nicknames
+        let t = name.trimmingCharacters(in: .whitespaces)
+        n[id] = t.isEmpty ? nil : t
+        nicknamesData = (try? JSONEncoder().encode(n)) ?? Data()
+    }
+
+    private func displayName(_ a: AgentInfo) -> String { nicknames[a.id] ?? a.name }
+    private func displayName(_ a: AgentRequest) -> String { nicknames[a.id] ?? a.name }
+
+    /// What tells this Agent apart: its colour, when it asked, and a short ID when two share a name.
+    private func agentDetail(_ a: AgentInfo, among all: [AgentInfo]) -> String {
+        agentDetail(id: a.id, name: displayName(a), color: a.color, at: a.requestedAt,
+                    status: "Allowed", names: all.map(displayName))
+    }
+    private func agentDetail(_ a: AgentRequest, among names: [String]) -> String {
+        agentDetail(id: a.id, name: displayName(a), color: a.color, at: a.requestedAt, status: nil, names: names)
+    }
+    private func agentDetail(id: String, name: String, color: String, at: Int64?, status: String?, names: [String]) -> String {
+        var parts: [String] = status.map { [$0] } ?? []
+        parts.append(color.capitalized)
+        if let at {
+            parts.append("asked " + Date(timeIntervalSince1970: Double(at) / 1000).formatted(.relative(presentation: .named)))
+        }
+        if names.filter({ $0 == name }).count > 1 {
+            parts.append("ID " + String(id.suffix(4)).uppercased())
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func agentIcon(_ name: String, color: String) -> some View {
