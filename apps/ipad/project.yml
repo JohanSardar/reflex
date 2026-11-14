@@ -31,8 +31,8 @@ targets:
         NSBonjourServices: [_reflex-link._tcp, _reflex-p2p._tcp]
         NSLocalNetworkUsageDescription: Reflex finds and syncs with the Reflex Link on your computer over the local network, or directly over peer-to-peer Wi-Fi.
         NSCameraUsageDescription: Reflex uses the camera to scan the pairing code your Reflex Link shows, and to take photos you add to a Space.
-        NSMicrophoneUsageDescription: Hold the mic button to talk to the Agents in a Space. Speech is transcribed on this iPad.
-        NSSpeechRecognitionUsageDescription: Reflex turns what you say into text on this iPad, so it can go with your Send.
+        NSMicrophoneUsageDescription: Hold the mic to talk to your agents about this board. Speech is turned into text on this iPad.
+        NSSpeechRecognitionUsageDescription: Reflex turns what you say about a board into text on this iPad, so it goes with your Send.
         CFBundleURLTypes:
           - CFBundleURLName: si.eilmer.reflex.pair
             CFBundleURLSchemes: [reflex]
