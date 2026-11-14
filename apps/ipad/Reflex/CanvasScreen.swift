@@ -6,77 +6,35 @@ import SwiftUI
 
 private let log = Logger(subsystem: "si.eilmer.reflex", category: "canvas")
 
-/// The local ink page, tools, voice and Send, page picker, pairing and Agent approval.
+/// The app: the board browser, an open board, pairing and Agent approval.
 struct CanvasScreen: View {
     @State private var link = LinkSync(deviceName: UIDevice.current.name)
-    @State private var open: SpaceSession?
-    @State private var showStrokeIDs = false
+    @State private var library: BoardLibrary?
+    @State private var open: BoardSession?
     @State private var pairing = false
     @State private var voice = VoiceCapture()
-    /// Spaces changed since the person last looked at them (SPEC §4, Attention).
-    @State private var lastSeen: [String: Int] = [:]
     /// The Agent question on screen: the first one the Link lists as waiting. Kept in view state so the alert
-    /// is shown again for each new question, also while a Space is open.
+    /// is shown again for each new question, also while a board is open.
     @State private var asking: AgentRequest?
     @State private var askingApprover: ApproverRequest?
+    @AppStorage("pairingShown") private var pairingShown = false
     @Environment(\.scenePhase) private var scenePhase
     @Binding var incomingCode: String?
 
     var body: some View {
         ZStack {
-            Color(red: 0.99, green: 0.99, blue: 0.97).ignoresSafeArea()
-            if let open {
-                InkCanvas(controller: open.ink).ignoresSafeArea().id(open.id)
-                if showStrokeIDs {
-                    StrokeIDOverlay(strokes: open.ink.strokes, offset: open.ink.contentOffset, zoom: open.ink.zoomScale)
-                        .ignoresSafeArea()
-                }
-            } else {
-                emptyState
-            }
-        }
-        .overlay(alignment: .top) {
-            HStack(spacing: 10) {
-                spaceMenu
+            if let library {
+                BrowserView(library: library, link: link, open: openBoard, onStatus: { pairing = true })
+                    .opacity(open == nil ? 1 : 0)
+                    .allowsHitTesting(open == nil)
                 if let open {
-                    InkToolbar(ink: open.ink, showStrokeIDs: $showStrokeIDs)
+                    BoardScreen(session: open, link: link, voice: voice, library: library, onBack: closeBoard, onStatus: { pairing = true })
+                        .id(open.id)
+                        .transition(.asymmetric(insertion: .scale(scale: 0.92).combined(with: .opacity), removal: .opacity))
                 }
-                connectButton
-            }
-            .padding(.top, 8)
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if let open {
-                HStack(spacing: 14) {
-                    MicButton(voice: voice, onFail: { open.say($0) }) { said, words in
-                        open.send(trigger: "voice", said: said, words: words)
-                    }
-                    SendButton { open.send(trigger: "button") }
-                }
-                .padding(24)
             }
         }
-        .overlay(alignment: .bottom) {
-            if voice.state != .idle, !voice.partial.isEmpty {
-                Text(voice.partial)
-                    .font(.title3)
-                    .padding(.horizontal, 18).padding(.vertical, 12)
-                    .glassEffect()
-                    .padding(.bottom, 110).padding(.horizontal, 120)
-                    .accessibilityIdentifier("voice-partial")
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if let notice = open?.notice {
-                Text(notice)
-                    .font(.callout)
-                    .padding(.horizontal, 16).padding(.vertical, 10)
-                    .glassEffect()
-                    .padding(.bottom, 32)
-                    .transition(.opacity)
-                    .accessibilityIdentifier("send-notice")
-            }
-        }
+        .animation(.smooth(duration: 0.3), value: open?.id)
         .overlay(alignment: .top) {
             // The Mac's Link was reset: this iPad stopped dialing it, and says what to do.
             if case .linkChanged = link.state {
@@ -157,16 +115,25 @@ struct CanvasScreen: View {
         } message: { _ in
             Text("It will receive what you send.")
         }
-        .onChange(of: link.person?.id) { _, _ in
-            if let id = link.spaces.first { open = SpaceSession(id: id, link: link) }
-        }
+        .onChange(of: link.spaces) { _, _ in library?.reload() }
         .onChange(of: incomingCode) { _, code in if code != nil { pairing = true } }
         .task {
             link.start()
             link.beforeChangingPerson = { open?.ink.flush(); InkCanvasController.finishSaving() }
-            if open == nil, let id = link.spaces.first { open = SpaceSession(id: id, link: link) }
+            if library == nil {
+                let lib = BoardLibrary(link: link)
+                library = lib
+                lib.ensureThumbnails()
+            }
+            // The pairing sheet comes up by itself only the first time.
+            if case .unpaired = link.state, !pairingShown {
+                pairingShown = true
+                pairing = true
+            }
         }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { open?.ink.flush() } }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { open?.ink.flush(); open?.saveNow() }
+        }
         #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .debugInk)) { note in
             guard let url = note.object as? URL, let open,
@@ -180,112 +147,21 @@ struct CanvasScreen: View {
             }
         }
         #endif
-        .preferredColorScheme(.light)
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "scribble.variable").font(.system(size: 44)).foregroundStyle(.secondary)
-            switch link.state {
-            case .unpaired:
-                Text("Connect this iPad to your Reflex Link").font(.title3)
-                Text("Run `reflex setup` on your computer, then tap Connect and scan the code it shows.").foregroundStyle(.secondary)
-                Button("Connect") { pairing = true }.buttonStyle(.glassProminent).accessibilityIdentifier("connect-empty")
-            case .linkChanged:
-                Text("This Mac's Link changed").font(.title3)
-                Text("Run `reflex pair` on your computer, then scan its code again.").foregroundStyle(.secondary)
-                Button("Scan again") { pairing = true }.buttonStyle(.glassProminent).accessibilityIdentifier("connect-empty")
-            default:
-                Text(link.spaces.isEmpty ? "No Spaces yet" : "Pick a Space").font(.title3)
-                Text("Create or open a page from the pages menu.").foregroundStyle(.secondary)
-            }
-        }
+    private func openBoard(_ id: String) {
+        guard let library else { return }
+        open?.close()
+        open = BoardSession(id: id, link: link, library: library, customItems: ReflexTools.items { tool in
+            open?.shapeTool = tool
+        })
     }
 
-    private func unread(_ id: String) -> Bool { (link.revision[id] ?? 0) > (lastSeen[id] ?? 0) && open?.id != id }
-
-    private var spaceMenu: some View {
-        Menu {
-            Button("New page", systemImage: "plus") { open = SpaceSession(id: link.createPage(), link: link) }
-            ForEach(link.spaces, id: \.self) { id in
-                Button {
-                    open = SpaceSession(id: id, link: link)
-                    lastSeen[id] = link.revision[id] ?? 0
-                } label: {
-                    Label(link.localOnly[id] == nil ? id : "\(link.title(id)) (this iPad only)", systemImage: open?.id == id ? "checkmark" : unread(id) ? "circle.fill" : "square.on.square")
-                }
-                .accessibilityIdentifier("space-\(id)")
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "square.stack")
-                Text(open.map { link.title($0.id) } ?? "Spaces").lineLimit(1)
-                if link.spaces.contains(where: unread) { Circle().fill(.blue).frame(width: 8, height: 8) }
-            }
-            .font(.system(size: 16, weight: .medium))
-            .padding(.horizontal, 14).frame(height: 48)
-            .glassEffect()
-        }
-        .accessibilityIdentifier("spaces-menu")
-    }
-
-    private var connectButton: some View {
-        Button { pairing = true } label: {
-            HStack(spacing: 6) {
-                Circle().fill(statusColor).frame(width: 9, height: 9)
-                Text(statusText).lineLimit(1)
-            }
-            .font(.system(size: 15, weight: .medium))
-            .padding(.horizontal, 14).frame(height: 48)
-            .glassEffect()
-        }
-        .accessibilityIdentifier("connect-button")
-        .accessibilityLabel("Link: \(statusText)")
-    }
-
-    private var statusText: String {
-        switch link.state {
-        case .unpaired: "Connect"
-        case .connecting: "Connecting…"
-        case .connected(let name): name.split(separator: ".").first.map(String.init) ?? name
-        case .offline: "Offline"
-        case .linkChanged: "Scan again"
-        }
-    }
-
-    private var statusColor: Color {
-        switch link.state {
-        case .connected: .green
-        case .connecting: .orange
-        case .offline: .red
-        case .linkChanged: .orange
-        case .unpaired: .gray
-        }
-    }
-}
-
-/// Each stroke's Reflex ID drawn at its bounds, to check identity by eye.
-struct StrokeIDOverlay: View {
-    let strokes: [InkStrokeInfo]
-    let offset: CGPoint
-    let zoom: CGFloat
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(strokes) { stroke in
-                let origin = CGPoint(
-                    x: stroke.bounds.minX * zoom - offset.x,
-                    y: stroke.bounds.maxY * zoom - offset.y
-                )
-                Text(stroke.parent.map { "\(stroke.id) ← \($0)" } ?? stroke.id)
-                    .font(.system(size: 11, design: .monospaced))
-                    .padding(.horizontal, 4).padding(.vertical, 1)
-                    .background(Color.yellow.opacity(0.85), in: RoundedRectangle(cornerRadius: 3))
-                    .fixedSize()
-                    .offset(x: origin.x, y: origin.y + 2)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .allowsHitTesting(false)
+    private func closeBoard() {
+        guard let o = open else { return }
+        o.ink.setPickerVisible(false)
+        let discarded = o.close()
+        open = nil
+        if discarded { library?.reload() }
     }
 }

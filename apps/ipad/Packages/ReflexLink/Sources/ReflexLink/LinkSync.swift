@@ -88,6 +88,10 @@ public final class LinkSync {
     /// The live paths to the Link ("lan", "p2p"), and the one changes go out on.
     public private(set) var transports: [String] = []
     public private(set) var activeTransport: String?
+    /// Sends saved on this iPad that the Link hasn't acknowledged yet.
+    public private(set) var pendingSends = 0
+    /// The paired computer's name, if this iPad is paired.
+    public var pairedName: String? { paired?.name }
 
     @ObservationIgnored private var identity: DeviceIdentity
     @ObservationIgnored private var actor: String
@@ -186,7 +190,29 @@ public final class LinkSync {
             }
         }
         spaces = found.sorted()
-        if spaces.isEmpty { _ = createPage() }
+        countPendingSends()
+    }
+
+    /// Takes a page off the list and moves its folder to Reflex/Trash, where it is kept, never deleted.
+    public func removePage(_ key: String) {
+        guard spaces.contains(key) else { return }
+        let trash = Self.root.appending(path: "Trash", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        var name = (key.hasPrefix(Self.localPrefix) ? "local-only-" : "") + title(key)
+        if FileManager.default.fileExists(atPath: trash.appending(path: name).path(percentEncoded: false)) { name += "-\(Self.now())" }
+        do {
+            try FileManager.default.moveItem(at: Self.folder(key), to: trash.appending(path: name, directoryHint: .isDirectory))
+            spaces.removeAll { $0 == key }
+        } catch { linkLog.error("Could not remove page: \(error.localizedDescription)") }
+    }
+
+    /// Where a page's files are kept.
+    public func folderURL(_ key: String) -> URL { Self.folder(key) }
+
+    private func countPendingSends() {
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: Self.outboxDir.path(percentEncoded: false))) ?? []
+        let n = files.filter { $0.hasSuffix(".json") }.count
+        if n != pendingSends { pendingSends = n }
     }
 
     @discardableResult
@@ -243,6 +269,7 @@ public final class LinkSync {
         let item: [String: Any] = ["link": paired.key, "space": space, "send": send]
         try FileManager.default.createDirectory(at: Self.outboxDir, withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: item).write(to: Self.outboxDir.appending(path: id + ".json"), options: [.atomic, .completeFileProtection])
+        countPendingSends()
         if let session { deliver(item, session) }
         return send
     }
@@ -641,6 +668,7 @@ public final class LinkSync {
             let file = Self.outboxDir.appending(path: id + ".json")
             guard let data = try? Data(contentsOf: file), let item = try? JSONSerialization.jsonObject(with: data) as? [String: Any], item["link"] as? String == paired?.key else { return }
             try? FileManager.default.removeItem(at: file)
+            countPendingSends()
         case "agents":
             var known: [String: AgentInfo] = [:]
             for a in h["agents"] as? [[String: Any]] ?? [] {

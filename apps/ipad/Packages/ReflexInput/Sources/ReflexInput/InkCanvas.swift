@@ -3,20 +3,7 @@ import PencilKit
 import SwiftUI
 import UIKit
 
-/// The tools on the Reflex toolbar.
-public enum InkTool: String, CaseIterable, Sendable {
-    case pen
-    /// Removes whole strokes it touches.
-    case strokeEraser
-    /// Removes only the Ink under it, leaving fragments with their own IDs.
-    case preciseEraser
-    /// Selects strokes to move, delete or duplicate.
-    case lasso
-
-    public var isEraser: Bool { self == .strokeEraser || self == .preciseEraser }
-}
-
-/// A stroke on screen with its Reflex ID, for the stroke-ID overlay.
+/// A stroke on screen with its Reflex ID.
 public struct InkStrokeInfo: Identifiable, Sendable {
     public var id: String
     public var parent: String?
@@ -24,168 +11,281 @@ public struct InkStrokeInfo: Identifiable, Sendable {
     public var bounds: CGRect
 }
 
-/// Owns the PencilKit canvas for one Space: tools, the Goodnotes-style eraser
-/// and undo, stroke identity and saving.
+/// The undo manager the canvas hands to the system (keyboard ⌘Z, three-finger
+/// swipe, PencilKit). PencilKit's own registrations are switched off: the board
+/// keeps one history for ink and objects, which outlives leaving the board.
+public final class BoardUndoManager: UndoManager {
+    public var undoAction: (() -> Void)?
+    public var redoAction: (() -> Void)?
+    public var canUndoCheck: (() -> Bool)?
+    public var canRedoCheck: (() -> Bool)?
+
+    override public init() {
+        super.init()
+        groupsByEvent = false
+        disableUndoRegistration()
+    }
+
+    override public var canUndo: Bool { canUndoCheck?() ?? false }
+    override public var canRedo: Bool { canRedoCheck?() ?? false }
+    override public func undo() { undoAction?() }
+    override public func redo() { redoAction?() }
+}
+
+/// PKCanvasView with the board's own undo manager and a hook so objects under
+/// the ink can take touches when the board isn't drawing.
+public final class ReflexCanvasView: PKCanvasView {
+    public let boardUndo = BoardUndoManager()
+    override public var undoManager: UndoManager? { boardUndo }
+    public var onLayout: (() -> Void)?
+    override public func layoutSubviews() {
+        super.layoutSubviews()
+        onLayout?()
+    }
+}
+
+/// Owns the PencilKit canvas for one board: Apple's tool picker, stroke
+/// identity, saving and the viewport.
 @MainActor @Observable
 public final class InkCanvasController: NSObject {
-    public let canvasView: PKCanvasView = PKCanvasView()
+    public let canvasView = ReflexCanvasView()
+    public let toolPicker: PKToolPicker
 
-    public var tool: InkTool = .pen { didSet { applyTool() } }
-    public var penColor: UIColor = .black { didSet { applyTool() } }
-    public private(set) var canUndo = false
-    public private(set) var canRedo = false
-    /// The viewport used to capture a Send and position the stroke-ID overlay.
+    /// The viewport, for the objects and paper drawn around the ink.
     public private(set) var contentOffset: CGPoint = .zero
     public private(set) var zoomScale: CGFloat = 1
+    public private(set) var viewSize: CGSize = .zero
     public private(set) var strokes: [InkStrokeInfo] = []
     /// Strokes added since the last Send, by ID.
     public private(set) var unsent: [String] = []
+    /// Whether Apple's tool picker is on screen.
+    public private(set) var pickerVisible = false
+    /// The Reflex tool picked in the palette (shape, sticky, text), if one is.
+    public private(set) var customTool: String?
+    /// Whether the lasso is the picked tool (Reflex draws its own lasso, which selects objects too).
+    public private(set) var lassoPicked = false
+    /// Where the palette covers the screen, in window points.
+    public private(set) var pickerObscured: CGRect = .null
+    /// Whether one finger draws while the palette is open.
+    public var fingerDraws = true { didSet { applyPolicy() } }
+
+    /// A finished ink change, with the drawing as it was before it.
+    @ObservationIgnored public var onFinishedChange: ((_ before: PKDrawing) -> Void)?
+    /// A tap on the canvas outside any object, in Space points.
+    @ObservationIgnored public var onTap: ((_ space: CGPoint) -> Void)?
+    /// A long press on the canvas outside any object, in Space points.
+    @ObservationIgnored public var onLongPress: ((_ space: CGPoint) -> Void)?
 
     /// Size of the scrollable Space, in points.
-    public static let spaceSize = CGSize(width: 6000, height: 6000)
-    /// Scroll room before the Space's origin, in points.
-    static let margin = CGSize(width: 40, height: 140)
+    public static let spaceSize = CGSize(width: 16000, height: 16000)
+    /// Where a new board opens: the middle of the Space, so it scrolls every way.
+    public static let newBoardCenter = CGPoint(x: 8000, y: 8000)
 
     @ObservationIgnored private var usingTool = false
+    @ObservationIgnored private var restoring = false
+    @ObservationIgnored private var liveEdit = false
+    @ObservationIgnored private var lastDrawing: PKDrawing
     @ObservationIgnored private let store: InkStore
     @ObservationIgnored private var ledger: StrokeLedger
     @ObservationIgnored private var portableCache: [String: PortableStroke] = [:]
-    @ObservationIgnored private var lastEraser: InkTool = .strokeEraser
-    @ObservationIgnored private var toolBeforeEraser: InkTool = .pen
-    @ObservationIgnored private var undoObservers: [NSObjectProtocol] = []
-    @ObservationIgnored private var undoGestures: [UITapGestureRecognizer] = []
-    public init(space: String) {
+    @ObservationIgnored private var undoGestures: [UIGestureRecognizer] = []
+
+    public init(space: String, customItems: [PKToolPickerCustomItem] = []) {
         store = InkStore(space: space)
         let (drawing, ledger) = store.load()
         self.ledger = ledger
+        lastDrawing = drawing
         unsent = store.loadUnsent(fallback: ledger.records.map(\.id))
+        var items: [PKToolPickerItem] = [
+            PKToolPickerInkingItem(type: .pen, color: .black),
+            PKToolPickerInkingItem(type: .monoline, color: .systemBlue),
+            PKToolPickerInkingItem(type: .marker, color: .systemYellow),
+            PKToolPickerInkingItem(type: .pencil, color: .darkGray),
+            PKToolPickerInkingItem(type: .fountainPen, color: .black),
+            PKToolPickerInkingItem(type: .watercolor, color: .systemTeal),
+            PKToolPickerInkingItem(type: .crayon, color: .systemOrange),
+            PKToolPickerEraserItem(type: .vector),
+            PKToolPickerEraserItem(type: .bitmap, width: 16),
+            PKToolPickerLassoItem(),
+            PKToolPickerRulerItem(),
+        ]
+        items.append(contentsOf: customItems)
+        toolPicker = PKToolPicker(toolItems: items)
         super.init()
+
+        toolPicker.stateAutosaveName = "reflex.tools"
+        toolPicker.showsDrawingPolicyControls = true
+        toolPicker.addObserver(canvasView)
+        toolPicker.addObserver(self)
 
         canvasView.drawing = drawing
         canvasView.delegate = self
-        #if targetEnvironment(simulator)
-        // The Simulator has no Pencil, and PencilKit treats its touches as
-        // Pencil-only by default. On a device, the system's "Only Draw with
-        // Apple Pencil" setting decides.
-        canvasView.drawingPolicy = .anyInput
-        #else
-        canvasView.drawingPolicy = .default
-        #endif
         canvasView.isOpaque = false
         canvasView.backgroundColor = .clear
         canvasView.contentSize = Self.spaceSize
-        canvasView.minimumZoomScale = 0.25
+        canvasView.minimumZoomScale = 0.1
         canvasView.maximumZoomScale = 4
         canvasView.contentInsetAdjustmentBehavior = .never
-        // Room above and left of the page origin for the toolbar.
-        canvasView.contentInset = UIEdgeInsets(top: Self.margin.height, left: Self.margin.width, bottom: 0, right: 0)
-        canvasView.contentOffset = CGPoint(x: -Self.margin.width, y: -Self.margin.height)
-        contentOffset = canvasView.contentOffset
+        canvasView.contentInset = .zero
         canvasView.showsVerticalScrollIndicator = false
         canvasView.showsHorizontalScrollIndicator = false
+        canvasView.decelerationRate = .normal
         canvasView.accessibilityIdentifier = "ink-canvas"
-        canvasView.accessibilityLabel = "Ink canvas"
+        canvasView.accessibilityLabel = "Board"
 
-        addUndoGestures()
-        let pencil = UIPencilInteraction(delegate: self)
-        canvasView.addInteraction(pencil)
-        observeUndo()
-        applyTool()
+        canvasView.boardUndo.canUndoCheck = { false }
+        canvasView.boardUndo.canRedoCheck = { false }
+
+        canvasView.onLayout = { [weak self] in self?.layoutChanged() }
+        addGestures()
+        applyPolicy()
         publishStrokes()
     }
 
-    // MARK: Tools
+    // MARK: Tool picker
 
-    private func applyTool() {
-        switch tool {
-        case .pen:
-            canvasView.tool = PKInkingTool(.pen, color: penColor, width: 3)
-        case .strokeEraser:
-            canvasView.tool = PKEraserTool(.vector)
-        case .preciseEraser:
-            canvasView.tool = PKEraserTool(.bitmap, width: 16)
-        case .lasso:
-            canvasView.tool = PKLassoTool()
-        }
-        if tool.isEraser { lastEraser = tool }
+    /// Shows or hides Apple's tool picker. It stays until hidden again.
+    public func setPickerVisible(_ visible: Bool) {
+        toolPicker.setVisible(visible, forFirstResponder: canvasView)
+        if visible { canvasView.becomeFirstResponder() } else { canvasView.resignFirstResponder() }
+        pickerVisible = visible
+        applyPolicy()
     }
 
-    /// Pencil double-tap or squeeze: to the last eraser, and back again.
-    func toggleEraser() {
-        if tool.isEraser {
-            tool = toolBeforeEraser
-        } else {
-            toolBeforeEraser = tool
-            tool = lastEraser
+    /// Picks an ink tool again after a Reflex tool has been used.
+    public func pickInkTool() {
+        if let pen = toolPicker.toolItems.first(where: { $0 is PKToolPickerInkingItem }) {
+            toolPicker.selectedToolItem = pen
         }
     }
 
-    // MARK: Undo
-
-    private var undoManager: UndoManager? { canvasView.undoManager }
-
-    public func undo() {
-        guard undoManager?.canUndo == true else { return }
-        undoManager?.undo()
-        refreshUndo()
+    private func applyPolicy() {
+        // The palette open means drawing (by finger too, if the person wants); closed, a finger
+        // pans and selects and only the Pencil draws, as in Freeform.
+        let drawsWithFinger = pickerVisible && fingerDraws
+        #if targetEnvironment(simulator)
+        canvasView.drawingPolicy = drawsWithFinger ? .anyInput : .pencilOnly
+        #else
+        canvasView.drawingPolicy = drawsWithFinger ? .anyInput : .pencilOnly
+        #endif
+        let item = toolPicker.selectedToolItem
+        customTool = (item as? PKToolPickerCustomItem)?.identifier
+        lassoPicked = item is PKToolPickerLassoItem
+        // Reflex's own tools and lasso take touches themselves; the canvas mustn't draw with them.
+        canvasView.drawingGestureRecognizer.isEnabled = customTool == nil && !lassoPicked
     }
 
-    public func redo() {
-        guard undoManager?.canRedo == true else { return }
-        undoManager?.redo()
-        refreshUndo()
+    /// The pen color in use, for debug strokes.
+    private var currentInk: PKInk {
+        (canvasView.tool as? PKInkingTool)?.ink ?? PKInk(.pen, color: .black)
     }
 
-    private func addUndoGestures() {
+    // MARK: Undo hooks
+
+    /// Swaps in a drawing from the board's history. Strokes that come back get their IDs back.
+    public func restore(_ drawing: PKDrawing) {
+        restoring = true
+        canvasView.drawing = drawing
+        restoring = false
+        drawingChanged(record: false)
+    }
+
+    public var drawing: PKDrawing { canvasView.drawing }
+
+    private func addGestures() {
         let threeFinger = UITapGestureRecognizer(target: self, action: #selector(threeFingerTap))
         threeFinger.numberOfTouchesRequired = 3
         let twoFinger = UITapGestureRecognizer(target: self, action: #selector(twoFingerTap))
         twoFinger.numberOfTouchesRequired = 2
         twoFinger.require(toFail: threeFinger)
-        for gesture in [twoFinger, threeFinger] {
+        let tap = UITapGestureRecognizer(target: self, action: #selector(oneFingerTap(_:)))
+        tap.require(toFail: twoFinger)
+        let press = UILongPressGestureRecognizer(target: self, action: #selector(longPress(_:)))
+        press.minimumPressDuration = 0.45
+        for gesture in [twoFinger, threeFinger, tap, press] {
             gesture.allowedTouchTypes = [UITouch.TouchType.direct.rawValue as NSNumber]
+            gesture.cancelsTouchesInView = false
             canvasView.addGestureRecognizer(gesture)
         }
-        undoGestures = [twoFinger, threeFinger]
+        undoGestures = [twoFinger, threeFinger, tap, press]
     }
 
-    @objc private func twoFingerTap() { undo() }
-    @objc private func threeFingerTap() { redo() }
+    @objc private func twoFingerTap() { canvasView.boardUndo.undo() }
+    @objc private func threeFingerTap() { canvasView.boardUndo.redo() }
+    @objc private func oneFingerTap(_ g: UITapGestureRecognizer) {
+        // While the palette draws with a finger, a tap is a dot of ink, not a selection change.
+        guard !(pickerVisible && fingerDraws && customTool == nil && !lassoPicked) else { return }
+        onTap?(space(g.location(in: canvasView.superview)))
+    }
+    @objc private func longPress(_ g: UILongPressGestureRecognizer) {
+        guard g.state == .began, !(pickerVisible && fingerDraws) else { return }
+        onLongPress?(space(g.location(in: canvasView.superview)))
+    }
 
-    private func observeUndo() {
-        let names: [Notification.Name] = [
-            .NSUndoManagerDidCloseUndoGroup, .NSUndoManagerDidUndoChange,
-            .NSUndoManagerDidRedoChange, .NSUndoManagerWillCloseUndoGroup,
-        ]
-        undoObservers = names.map { name in
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refreshUndo() }
-            }
+    // MARK: Viewport
+
+    /// A point on screen (the canvas's superview) in Space points.
+    public func space(_ screen: CGPoint) -> CGPoint {
+        CGPoint(x: (screen.x + canvasView.contentOffset.x) / canvasView.zoomScale,
+                y: (screen.y + canvasView.contentOffset.y) / canvasView.zoomScale)
+    }
+
+    /// The Space rectangle on screen now.
+    public var visibleRect: CGRect {
+        let z = canvasView.zoomScale, o = canvasView.contentOffset, s = canvasView.bounds.size
+        return CGRect(x: o.x / z, y: o.y / z, width: s.width / z, height: s.height / z)
+    }
+
+    /// Centers the view on a Space point at a zoom.
+    public func show(center: CGPoint, zoom: CGFloat, animated: Bool) {
+        let size = canvasView.bounds.size == .zero ? UIScreen.main.bounds.size : canvasView.bounds.size
+        let z = min(max(zoom, canvasView.minimumZoomScale), canvasView.maximumZoomScale)
+        let offset = CGPoint(x: center.x * z - size.width / 2, y: center.y * z - size.height / 2)
+        let apply = {
+            self.canvasView.zoomScale = z
+            self.canvasView.contentOffset = self.clamp(offset, zoom: z, size: size)
         }
+        if animated {
+            UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseInOut, .allowUserInteraction], animations: apply) { _ in
+                self.syncViewport()
+            }
+        } else {
+            apply()
+        }
+        syncViewport()
     }
 
-    private func refreshUndo() {
-        canUndo = undoManager?.canUndo ?? false
-        canRedo = undoManager?.canRedo ?? false
+    /// Fits a Space rectangle in the view, with a margin.
+    public func show(rect: CGRect, animated: Bool, margin: CGFloat = 60, maxZoom: CGFloat = 2) {
+        guard !rect.isNull, rect.width > 0 || rect.height > 0 else { return }
+        let size = canvasView.bounds.size == .zero ? UIScreen.main.bounds.size : canvasView.bounds.size
+        let z = min((size.width - margin * 2) / max(rect.width, 1), (size.height - margin * 2 - 120) / max(rect.height, 1), maxZoom)
+        show(center: CGPoint(x: rect.midX, y: rect.midY), zoom: z, animated: animated)
+    }
+
+    /// Zooms around the middle of the view.
+    public func setZoom(_ zoom: CGFloat, animated: Bool) {
+        let r = visibleRect
+        show(center: CGPoint(x: r.midX, y: r.midY), zoom: zoom, animated: animated)
+    }
+
+    private func clamp(_ offset: CGPoint, zoom: CGFloat, size: CGSize) -> CGPoint {
+        CGPoint(x: min(max(offset.x, 0), Self.spaceSize.width * zoom - size.width),
+                y: min(max(offset.y, 0), Self.spaceSize.height * zoom - size.height))
+    }
+
+    private func syncViewport() {
+        contentOffset = canvasView.contentOffset
+        zoomScale = canvasView.zoomScale
+        viewSize = canvasView.bounds.size
+    }
+
+    /// Called when the canvas's size changes (rotation, Split View).
+    public func layoutChanged() {
+        if canvasView.bounds.size != viewSize { syncViewport() }
     }
 
     #if DEBUG
-    /// Draws one pen stroke through Space points, as the person would, with the pen
-    /// going down and up around it.
-    public func debugDraw(space points: [CGPoint]) {
-        guard points.count >= 2 else { return }
-        let strokePoints = points.enumerated().map { i, p in
-            PKStrokePoint(
-                location: p, timeOffset: Double(i) * 0.008, size: CGSize(width: 2.4, height: 2.4),
-                opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2
-            )
-        }
-        let stroke = PKStroke(ink: PKInk(.pen, color: penColor), path: PKStrokePath(controlPoints: strokePoints, creationDate: Date()))
-        var drawing = canvasView.drawing
-        drawing.strokes.append(stroke)
-        canvasView.drawing = drawing
-    }
-
     /// Draws one pen stroke through `screen` points, as if the person drew it:
     /// the change goes through the same delegate path as a real stroke. For
     /// driving the Simulator, whose automation has no freeform path gesture.
@@ -198,12 +298,101 @@ public final class InkCanvasController: NSObject {
                 opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2
             )
         }
-        let stroke = PKStroke(ink: PKInk(.pen, color: penColor), path: PKStrokePath(controlPoints: points, creationDate: Date()))
+        let stroke = PKStroke(ink: currentInk, path: PKStrokePath(controlPoints: points, creationDate: Date()))
         var drawing = canvasView.drawing
         drawing.strokes.append(stroke)
         canvasView.drawing = drawing
     }
     #endif
+
+    // MARK: Moving strokes with a Reflex selection
+
+    /// Indexes of strokes mostly inside a closed Space path.
+    public func strokeIndexes(inside path: CGPath) -> [Int] {
+        canvasView.drawing.strokes.enumerated().compactMap { i, stroke in
+            let pts = stroke.path.interpolatedPoints(by: .distance(8)).map { $0.location.applying(stroke.transform) }
+            guard !pts.isEmpty else { return nil }
+            let inside = pts.filter { path.contains($0) }.count
+            return Double(inside) / Double(pts.count) >= 0.6 ? i : nil
+        }
+    }
+
+    /// The Reflex IDs of strokes at these indexes.
+    public func strokeIDs(_ indexes: [Int]) -> [String] {
+        indexes.compactMap { $0 < ledger.records.count ? ledger.records[$0].id : nil }
+    }
+
+    /// Indexes for these IDs, in drawing order.
+    public func strokeIndexes(_ ids: Set<String>) -> [Int] {
+        ledger.records.enumerated().compactMap { ids.contains($0.element.id) ? $0.offset : nil }
+    }
+
+    /// Bounds of these strokes, in Space points.
+    public func bounds(ofStrokes ids: Set<String>) -> CGRect {
+        let idx = Set(strokeIndexes(ids))
+        return canvasView.drawing.strokes.enumerated().reduce(CGRect.null) { r, e in
+            idx.contains(e.offset) ? r.union(e.element.renderBounds) : r
+        }
+    }
+
+    /// Starts a move or edit of strokes that finishes with `endLiveEdit`: one history step.
+    public func beginLiveEdit() {
+        flush()
+        liveEdit = true
+    }
+
+    /// Applies a transform to the strokes with these IDs, live.
+    public func transformStrokes(_ ids: Set<String>, by t: CGAffineTransform) {
+        let idx = Set(strokeIndexes(ids))
+        var drawing = canvasView.drawing
+        for i in idx { drawing.strokes[i].transform = drawing.strokes[i].transform.concatenating(t) }
+        canvasView.drawing = drawing
+    }
+
+    public func endLiveEdit() {
+        liveEdit = false
+        drawingChanged()
+    }
+
+    /// Removes strokes by ID (Delete on a selection).
+    public func removeStrokes(_ ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        let idx = Set(strokeIndexes(ids))
+        var drawing = canvasView.drawing
+        drawing.strokes = drawing.strokes.enumerated().filter { !idx.contains($0.offset) }.map(\.element)
+        canvasView.drawing = drawing
+        if usingTool || liveEdit { return }
+        drawingChanged()
+    }
+
+    /// Copies strokes by ID, moved by an offset; returns the copies' IDs.
+    @discardableResult
+    public func duplicateStrokes(_ ids: Set<String>, offset: CGPoint) -> [String] {
+        let idx = strokeIndexes(ids)
+        guard !idx.isEmpty else { return [] }
+        var drawing = canvasView.drawing
+        let copies = idx.map { i -> PKStroke in
+            var s = drawing.strokes[i]
+            // A new creation date makes it a new stroke, not a restore of the original.
+            s.path = PKStrokePath(controlPoints: Array(s.path), creationDate: Date())
+            s.transform = s.transform.concatenating(CGAffineTransform(translationX: offset.x, y: offset.y))
+            return s
+        }
+        drawing.strokes.append(contentsOf: copies)
+        canvasView.drawing = drawing
+        drawingChanged()
+        return Array(ledger.records.suffix(copies.count).map(\.id))
+    }
+
+    /// Recolors strokes by ID.
+    public func recolorStrokes(_ ids: Set<String>, color: UIColor) {
+        let idx = Set(strokeIndexes(ids))
+        guard !idx.isEmpty else { return }
+        var drawing = canvasView.drawing
+        for i in idx { drawing.strokes[i].ink = PKInk(drawing.strokes[i].ink.inkType, color: color) }
+        canvasView.drawing = drawing
+        drawingChanged()
+    }
 
     // MARK: Strokes, for recognition hints
 
@@ -235,17 +424,16 @@ public final class InkCanvasController: NSObject {
     }
 
     /// Process finished edits only; PencilKit owns the live drawing path.
-    public func flush() { drawingChanged() }
+    public func flush() { if !liveEdit { drawingChanged() } }
 
     /// Used before moving pages to another local folder during re-pairing.
     public static func finishSaving() { InkStore.finishSaving() }
 
     // MARK: Identity and saving
 
-    private func drawingChanged() {
+    private func drawingChanged(record: Bool = true) {
         let drawing = canvasView.drawing
         let change = ledger.reconcile(drawing.strokes)
-        refreshUndo()
         guard !change.isEmpty else { return }
         inkLog.debug("""
             Ink change: +\(change.added.map(\.id), privacy: .public) \
@@ -257,8 +445,11 @@ public final class InkCanvasController: NSObject {
         for id in change.added.map(\.id) + change.restored + change.moved where !unsent.contains(id) {
             unsent.append(id)
         }
+        let before = lastDrawing
+        lastDrawing = drawing
         publishStrokes()
         save(drawing)
+        if record { onFinishedChange?(before) }
     }
 
     private func save(_ drawing: PKDrawing) {
@@ -288,7 +479,7 @@ public final class InkCanvasController: NSObject {
 extension InkCanvasController: PKCanvasViewDelegate {
     public func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         // PencilKit can call this repeatedly during a stroke. Reconcile on tool-up.
-        if !usingTool { drawingChanged() }
+        if !usingTool && !restoring && !liveEdit { drawingChanged() }
     }
 
     public func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { usingTool = true }
@@ -299,30 +490,27 @@ extension InkCanvasController: PKCanvasViewDelegate {
     }
 
     public func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        contentOffset = scrollView.contentOffset
+        syncViewport()
     }
 
     public func scrollViewDidZoom(_ scrollView: UIScrollView) {
-        zoomScale = scrollView.zoomScale
-        contentOffset = scrollView.contentOffset
+        syncViewport()
     }
 }
 
-extension InkCanvasController: UIPencilInteractionDelegate {
-    public func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
-        switch UIPencilInteraction.preferredTapAction {
-        case .switchEraser, .switchPrevious: toggleEraser()
-        default: break
+extension InkCanvasController: PKToolPickerObserver {
+    public func toolPickerSelectedToolItemDidChange(_ toolPicker: PKToolPicker) { applyPolicy() }
+
+    public func toolPickerVisibilityDidChange(_ toolPicker: PKToolPicker) {
+        if pickerVisible != toolPicker.isVisible {
+            pickerVisible = toolPicker.isVisible
+            applyPolicy()
         }
     }
 
-    public func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
-        guard squeeze.phase == .ended else { return }
-        switch UIPencilInteraction.preferredSqueezeAction {
-        case .ignore: break
-        // Reflex has no contextual palette yet, so squeeze switches to the eraser.
-        default: toggleEraser()
-        }
+    public func toolPickerFramesObscuredDidChange(_ toolPicker: PKToolPicker) {
+        guard let window = canvasView.window else { return }
+        pickerObscured = toolPicker.frameObscured(in: window)
     }
 }
 
