@@ -31,6 +31,14 @@ final class VoiceCapture {
     @ObservationIgnored private var latest: SFTranscription?
     @ObservationIgnored private var finished: CheckedContinuation<Void, Never>?
 
+    /// True when the mic or speech recognition hasn't been allowed yet (or was refused).
+    static var needsPermission: Bool {
+        SFSpeechRecognizer.authorizationStatus() != .authorized || AVAudioApplication.shared.recordPermission != .granted
+    }
+
+    /// Asks for the mic and speech recognition, outside a hold. True if both are allowed.
+    func requestPermission() async -> Bool { await Self.allowed() }
+
     /// Starts listening. Throws a message the person can read if it can't.
     func start() async throws {
         guard state == .idle else { return }
@@ -236,6 +244,7 @@ struct VoiceSendDock: View {
     @State private var starting: Task<Bool, Never>?
     @State private var started = Date()
     @State private var sentPulse = false
+    @State private var permissionTouch = false
 
     var body: some View {
         let live = voice.holding || voice.state != .idle
@@ -272,11 +281,22 @@ struct VoiceSendDock: View {
         .padding(.horizontal, live ? 20 : 0)
         .frame(minWidth: 56, minHeight: 56)
         .glassEffect(live ? .regular.tint(.red).interactive() : .regular.interactive(), in: Capsule())
+        // A fresh glass when recording ends, so the button never keeps the recording look.
+        .id(live)
         .contentShape(Capsule())
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in
-                    guard !voice.holding else { return }
+                    guard !voice.holding, !permissionTouch else { return }
+                    // The first time, only ask. A permission alert must never turn into a Send.
+                    if VoiceCapture.needsPermission {
+                        permissionTouch = true
+                        Task {
+                            let ok = await voice.requestPermission()
+                            onFail(ok ? "Ready. Hold the mic and talk, then let go to Send." : "Reflex needs the microphone and speech recognition. Allow them in Settings.")
+                        }
+                        return
+                    }
                     voice.holding = true
                     started = Date()
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -292,6 +312,7 @@ struct VoiceSendDock: View {
                     }
                 }
                 .onEnded { _ in
+                    if permissionTouch { permissionTouch = false; return }
                     guard voice.holding else { return }
                     voice.holding = false
                     let start = starting
@@ -300,6 +321,11 @@ struct VoiceSendDock: View {
                         // A short press can end before listening has started.
                         guard await start?.value == true else { return }
                         let (said, words) = await voice.stop()
+                        // Nothing heard: no Send.
+                        guard !said.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                            onFail("Didn't catch that. Hold the mic and talk, then let go.")
+                            return
+                        }
                         onRelease(said, words)
                     }
                 }
@@ -314,7 +340,7 @@ struct VoiceSendDock: View {
         Button(action: send) {
             HStack(spacing: 8) {
                 Image(systemName: sentPulse ? "checkmark" : "paperplane.fill")
-                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 20)
                 Text(sentPulse ? "Sent" : "Send")
             }
             .font(.system(size: 17, weight: .semibold))

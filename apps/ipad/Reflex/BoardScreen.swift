@@ -50,6 +50,7 @@ struct BoardScreen: View {
             PaperLayer(ink: ink, paper: paper, dark: darkPaper).ignoresSafeArea()
             ObjectsLayer(session: session, darkPaper: darkPaper).ignoresSafeArea()
             InkCanvas(controller: ink).ignoresSafeArea()
+            ObjectsLayer(session: session, darkPaper: darkPaper, above: true).ignoresSafeArea()
             InteractionLayer(session: session, darkPaper: darkPaper, guides: guideSettings, screen: screen).ignoresSafeArea()
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { screen = $0.size; frame = $0 }
@@ -189,7 +190,8 @@ struct BoardScreen: View {
 
     private var shortTitle: String {
         let t = session.meta.title
-        let limit = screen.width < 900 ? 18 : 30
+        // When the insert tools fold into "+", the title gets their room.
+        let limit = foldInsertTools ? (screen.width < 700 ? 22 : 40) : (screen.width < 900 ? 18 : 30)
         return t.count > limit ? t.prefix(limit - 1) + "…" : t
     }
 
@@ -480,6 +482,8 @@ struct PaperLayer: View {
 struct ObjectsLayer: View {
     let session: BoardSession
     let darkPaper: Bool
+    /// Which side of the ink: the objects under it, or the ones brought in front.
+    var above = false
 
     var body: some View {
         let ink = session.ink
@@ -491,11 +495,11 @@ struct ObjectsLayer: View {
                 var c = ctx
                 c.translateBy(x: -o.x, y: -o.y)
                 c.scaleBy(x: z, y: z)
-                for obj in session.objects where obj.isConnector {
+                for obj in session.objects where obj.isConnector && obj.isAboveInk == above {
                     ConnectorGeometry.draw(obj, in: &c, ink: darkPaper ? .white : Color(red: 0.11, green: 0.11, blue: 0.12), selected: session.selection.contains(obj.id))
                 }
             }
-            ForEach(session.objects.filter { !$0.isConnector && $0.frame.intersects(visible) }) { obj in
+            ForEach(session.objects.filter { !$0.isConnector && $0.isAboveInk == above && $0.frame.intersects(visible) }) { obj in
                 ObjectContent(object: obj, files: session.files, darkPaper: darkPaper, hideText: session.editing == obj.id)
                     .frame(width: obj.frame.width, height: obj.frame.height)
                     .scaleEffect(z)

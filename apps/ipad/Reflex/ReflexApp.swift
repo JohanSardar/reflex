@@ -16,6 +16,17 @@ struct ReflexApp: App {
         #endif
     }()
 
+    init() {
+        // Renaming starts with the whole name selected, so typing replaces it.
+        NotificationCenter.default.addObserver(forName: UITextField.textDidBeginEditingNotification, object: nil, queue: .main) { note in
+            nonisolated(unsafe) let field = note.object as? UITextField
+            MainActor.assumeIsolated {
+                guard let field, ["title-field", "rename-field", "rename-folder-field"].contains(field.accessibilityIdentifier ?? "") else { return }
+                DispatchQueue.main.async { field.selectAll(nil) }
+            }
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             CanvasScreen(incomingCode: $code)

@@ -82,6 +82,7 @@ struct BoardMeta: Codable, Equatable, Identifiable {
     var created: Date
     var modified: Date
     var opened: Date?
+    var lastUsed: Date { max(opened ?? .distantPast, modified) }
     var favorite = false
     var folder: String?
     var paper = Paper()
@@ -232,6 +233,10 @@ struct BoardObject: Codable, Equatable, Identifiable {
     var group: String?
     var shadow = true
     var cornerRadius: Double = 0
+    /// Drawn in front of the ink instead of under it. Optional so older boards decode.
+    var aboveInk: Bool?
+
+    var isAboveInk: Bool { aboveInk ?? false }
 
     var isConnector: Bool { kind == .connector }
     var hasText: Bool { kind == .sticky || kind == .text || kind == .shape || kind == .table }
@@ -380,7 +385,8 @@ final class BoardLibrary {
     func boards(in section: BoardSection) -> [BoardMeta] {
         switch section {
         case .all: all
-        case .recents: all.filter { $0.opened != nil }.sorted { ($0.opened ?? .distantPast) > ($1.opened ?? .distantPast) }.prefix(30).map { $0 }
+        // Opened or edited in the last 30 days, newest first.
+        case .recents: all.filter { $0.lastUsed > Date.now.addingTimeInterval(-30 * 86400) }.sorted { $0.lastUsed > $1.lastUsed }.prefix(30).map { $0 }
         case .favorites: all.filter(\.favorite)
         case .folder(let f):
             all.filter { $0.folder != nil && (self.descendants(of: f) + [f]).contains($0.folder!) }

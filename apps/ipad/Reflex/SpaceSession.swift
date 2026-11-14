@@ -25,6 +25,7 @@ final class BoardSession {
     var editingCell: (row: Int, col: Int)?
     /// Select mode: drag across things to select them (from a tap on empty canvas, or the lasso).
     var selecting = false
+    @ObservationIgnored private var lastInsertCenter: CGPoint?
     /// Guides shown while dragging, in Space points: vertical x's and horizontal y's.
     var guides: (x: [CGFloat], y: [CGFloat]) = ([], [])
     /// The shape the palette's Shape tool places.
@@ -269,6 +270,7 @@ final class BoardSession {
     func insert(_ o: BoardObject, select: Bool = true, edit: Bool = false) -> String {
         let before = current
         objects.append(o)
+        lastInsertCenter = CGPoint(x: o.frame.midX, y: o.frame.midY)
         push("Insert", before)
         if select {
             selection = [o.id]
@@ -284,12 +286,36 @@ final class BoardSession {
         let k = 1 / min(max(ink.zoomScale, 0.35), 1)
         let size = CGSize(width: base.width * k, height: base.height * k)
         let r = ink.visibleRect
-        var c = point ?? CGPoint(x: r.midX, y: r.midY)
-        if point == nil {
-            let taken = objects.contains { abs($0.frame.midX - c.x) < 4 && abs($0.frame.midY - c.y) < 4 }
-            if taken { c.x += 30; c.y += 30 }
-        }
+        let c = point ?? freeSpot(for: size, near: CGPoint(x: r.midX, y: r.midY), in: r)
         return CGRect(x: c.x - size.width / 2, y: c.y - size.height / 2, width: size.width, height: size.height).integral
+    }
+
+    /// The centre of a free spot for a new object: the middle of the view if nothing is there,
+    /// else the nearest clear place around it, else a step down and right from the last insert.
+    private func freeSpot(for size: CGSize, near c: CGPoint, in view: CGRect) -> CGPoint {
+        let gap: CGFloat = 24
+        func clear(_ p: CGPoint) -> Bool {
+            let f = CGRect(x: p.x - size.width / 2, y: p.y - size.height / 2, width: size.width, height: size.height)
+            guard view.insetBy(dx: 20, dy: 60).contains(f) else { return false }
+            let padded = f.insetBy(dx: -gap / 2, dy: -gap / 2)
+            return !objects.contains { !$0.isConnector && $0.frame.intersects(padded) }
+        }
+        if clear(c) { return c }
+        let dx = size.width + gap, dy = size.height + gap
+        for ring in 1 ... 3 {
+            var spots: [CGPoint] = []
+            for i in -ring ... ring {
+                for j in -ring ... ring where max(abs(i), abs(j)) == ring {
+                    spots.append(CGPoint(x: c.x + CGFloat(i) * dx, y: c.y + CGFloat(j) * dy))
+                }
+            }
+            if let best = spots.filter(clear).min(by: { hypot($0.x - c.x, $0.y - c.y) < hypot($1.x - c.x, $1.y - c.y) }) { return best }
+        }
+        if let last = lastInsertCenter, view.contains(last) {
+            lastInsertCenter = CGPoint(x: last.x + gap, y: last.y + gap)
+            return lastInsertCenter!
+        }
+        return c
     }
 
     func addSticky(at point: CGPoint? = nil) {
@@ -384,12 +410,21 @@ final class BoardSession {
     func bringToFront() { reorder(front: true) }
     func sendToBack() { reorder(front: false) }
 
+    /// The ink is one layer in the order: Front puts objects over the drawing, Back puts them under it.
     private func reorder(front: Bool) {
         let before = current
-        let picked = objects.filter { selection.contains($0.id) }
+        var picked = objects.filter { selection.contains($0.id) }
+        for i in picked.indices { picked[i].aboveInk = front ? true : nil }
         objects.removeAll { selection.contains($0.id) }
         objects = front ? objects + picked : picked + objects
         push(front ? "Bring to Front" : "Send to Back", before)
+    }
+
+    var selectionAboveInk: Bool { !selectedObjects.isEmpty && selectedObjects.allSatisfy(\.isAboveInk) }
+
+    /// Moves the selection over or under the drawing, keeping its order among objects.
+    func setAboveInk(_ above: Bool) {
+        changeSelection(above ? "Bring Above Drawing" : "Send Below Drawing") { $0.aboveInk = above ? true : nil }
     }
 
     func toggleLock() {

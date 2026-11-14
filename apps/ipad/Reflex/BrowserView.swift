@@ -29,7 +29,7 @@ struct BrowserView: View {
         NavigationSplitView(columnVisibility: $columns) {
             sidebar
         } detail: {
-            NavigationStack { detail }
+            NavigationStack { detail }.id(section)
         }
         .alert("Rename Board", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Title", text: $draftName).accessibilityIdentifier("rename-field")
@@ -37,7 +37,7 @@ struct BrowserView: View {
             Button("Rename") { if let id = renaming { library.rename(id, draftName) } }
         }
         .alert("Rename Folder", isPresented: Binding(get: { renamingFolder != nil }, set: { if !$0 { renamingFolder = nil } })) {
-            TextField("Name", text: $draftName)
+            TextField("Name", text: $draftName).accessibilityIdentifier("rename-folder-field")
             Button("Cancel", role: .cancel) {}
             Button("Rename") { if let id = renamingFolder { library.renameFolder(id, draftName) } }
         }
@@ -192,9 +192,11 @@ struct BrowserView: View {
                     if listLayout { listRows(boards) } else { grid(boards) }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.bottom, 90)
         }
-        .overlay { emptyState }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay { emptyState.frame(maxWidth: 480).frame(maxWidth: .infinity, maxHeight: .infinity) }
         .navigationTitle(query.isEmpty ? title : "Search")
         .navigationBarTitleDisplayMode(.large)
         .searchable(text: $query, placement: .toolbar, prompt: "Search titles and text")
@@ -299,7 +301,7 @@ struct BrowserView: View {
     // MARK: Cards
 
     private func grid(_ boards: [BoardMeta]) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 300), spacing: 20)], spacing: 22) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 400), spacing: 20)], spacing: 22) {
             ForEach(boards) { b in
                 BoardCard(meta: b, library: library, folderName: library.folder(b.folder)?.name, selecting: selecting, picked: picked.contains(b.id))
                     .onTapGesture { tapped(b.id) }

@@ -226,6 +226,7 @@ struct InteractionLayer: View {
             Button("Done") { session.selecting = false }.fontWeight(.semibold)
         }
         .padding(.horizontal, 18).padding(.vertical, 10)
+        .background(Color(.systemBackground).opacity(0.82), in: Capsule())
         .glassEffect(.regular, in: Capsule())
         .position(x: screen.width / 2, y: 92)
         .accessibilityIdentifier("select-banner")
@@ -245,6 +246,7 @@ struct InteractionLayer: View {
             menuButton("Text", "character.textbox") { session.addText(at: space) }
         }
         .padding(.horizontal, 6)
+        .background(Color(.systemBackground).opacity(0.82), in: Capsule())
         .glassEffect(.regular, in: Capsule())
         .fixedSize()
         .position(x: min(max(p.x, 220), screen.width - 220), y: max(p.y - 40, 110))
@@ -425,7 +427,8 @@ struct InteractionLayer: View {
                 let cellRect = CGRect(x: r.minX + CGFloat(cell.col) * cw, y: r.minY + CGFloat(cell.row) * rh, width: cw, height: rh)
                 ObjectTextEditor(text: Binding(get: { session.object(id)?.table?.cells[cell.row][cell.col] ?? "" },
                                                set: { session.setCell(id, row: cell.row, col: cell.col, $0) }),
-                                 object: obj, zoom: z, darkPaper: darkPaper, onTab: { nextCell(obj, cell) }, onDone: { session.endEditing() })
+                                 object: obj, zoom: z, darkPaper: darkPaper, onTab: { nextCell(obj, cell) }, onDone: { session.endEditing() },
+                                 prompt: cell.row == 0 ? "Column \(cell.col + 1)" : "", header: cell.row == 0)
                     .frame(width: cellRect.width, height: cellRect.height)
                     .background(Color.accentColor.opacity(0.08))
                     .position(x: cellRect.midX, y: cellRect.midY)
@@ -433,7 +436,8 @@ struct InteractionLayer: View {
             } else if obj.kind != .table {
                 let r = toScreen(obj.frame)
                 ObjectTextEditor(text: Binding(get: { session.object(id)?.text ?? "" }, set: { session.setText(id, $0) }),
-                                 object: obj, zoom: z, darkPaper: darkPaper, onTab: nil, onDone: { session.endEditing() })
+                                 object: obj, zoom: z, darkPaper: darkPaper, onTab: nil, onDone: { session.endEditing() },
+                                 prompt: obj.kind == .sticky ? "Type a note" : obj.kind == .text ? "Text" : "")
                     .frame(width: r.width, height: r.height)
                     .position(x: r.midX, y: r.midY)
                     .id(id)
@@ -468,13 +472,15 @@ struct ObjectTextEditor: View {
     let darkPaper: Bool
     let onTab: (() -> Void)?
     let onDone: () -> Void
+    var prompt = ""
+    var header = false
     @FocusState private var focused: Bool
 
     var body: some View {
         let color = object.textColor.map { Color(hex: $0) } ?? (object.kind == .sticky ? Color(red: 0.11, green: 0.11, blue: 0.12) : (darkPaper ? .white : Color(red: 0.11, green: 0.11, blue: 0.12)))
-        var font = Font.system(size: object.fontSize * zoom, weight: object.bold ? .bold : .regular)
+        var font = Font.system(size: object.fontSize * zoom, weight: object.bold ? .bold : header ? .semibold : .regular)
         if object.italic { font = font.italic() }
-        return TextField("", text: $text, axis: .vertical)
+        return TextField("", text: $text, prompt: Text(prompt).foregroundStyle(color.opacity(0.35)), axis: .vertical)
             .font(font)
             .underline(object.underline)
             .foregroundStyle(color)

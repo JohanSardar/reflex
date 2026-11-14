@@ -29,6 +29,7 @@ struct MiniToolbar: View {
         }
         .padding(.horizontal, 8)
         .frame(height: 50)
+        .background(Color(.systemBackground).opacity(0.82), in: Capsule())
         .glassEffect(.regular, in: Capsule())
         .accessibilityIdentifier("mini-toolbar")
     }
@@ -96,6 +97,11 @@ struct MiniToolbar: View {
                 Button("Front", systemImage: "square.3.layers.3d.top.filled") { session.bringToFront() }
             }
             .controlGroupStyle(.compactMenu)
+            if session.selectionAboveInk {
+                Button("Send Below Drawing", systemImage: "square.2.layers.3d.bottom.filled") { session.setAboveInk(false) }
+            } else {
+                Button("Bring Above Drawing", systemImage: "square.2.layers.3d.top.filled") { session.setAboveInk(true) }
+            }
             Button("Cut", systemImage: "scissors") { session.cutSelection() }
             Button("Copy", systemImage: "doc.on.doc") { session.copySelection() }
             Button(locked ? "Unlock" : "Lock", systemImage: locked ? "lock.open" : "lock") { session.toggleLock() }

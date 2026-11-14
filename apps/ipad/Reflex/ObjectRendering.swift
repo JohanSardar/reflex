@@ -188,11 +188,14 @@ struct ObjectContent: View {
                 Rectangle().fill(Color(hex: object.fill ?? Palette.sticky[0]))
                     .shadow(color: .black.opacity(object.shadow ? 0.18 : 0), radius: 6, x: 0, y: 4)
                 if object.text.isEmpty && !hideText {
-                    Text("Double-tap to type").font(.system(size: object.fontSize * 0.8)).foregroundStyle(.black.opacity(0.28)).multilineTextAlignment(.center).padding(16)
+                    Text("Tap to type").font(.system(size: object.fontSize * 0.8)).foregroundStyle(.black.opacity(0.28)).multilineTextAlignment(.center).padding(16)
                 } else if !hideText {
                     label.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: object.align.frame)
                 }
             }
+        case .text where object.text.isEmpty && !hideText:
+            Text("Text").font(font).foregroundStyle(inkColor.opacity(0.3))
+                .padding(.horizontal, 8).padding(.vertical, 6).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         case .text:
             label.padding(.horizontal, 8).padding(.vertical, 6).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: Alignment(horizontal: object.align.frame.horizontal, vertical: .top))
                 .opacity(hideText ? 0 : 1)
@@ -272,7 +275,9 @@ struct TableContent: View {
                 if !hideText {
                     ForEach(0 ..< t.rows, id: \.self) { r in
                         ForEach(0 ..< t.cols, id: \.self) { c in
-                            Text(t.cells[r][c]).font(r == 0 ? font.weight(.semibold) : font).foregroundStyle(textColor)
+                            Text(t.cells[r][c].isEmpty && r == 0 ? "Column \(c + 1)" : t.cells[r][c])
+                                .font(r == 0 ? font.weight(.semibold) : font)
+                                .foregroundStyle(t.cells[r][c].isEmpty ? textColor.opacity(0.3) : textColor)
                                 .frame(width: cw - 16, height: rh - 8, alignment: object.align.frame)
                                 .offset(x: CGFloat(c) * cw + 8, y: CGFloat(r) * rh + 4)
                         }
@@ -292,13 +297,14 @@ enum PaperDrawing {
         var step = paper.spacing.points * zoom
         var every: CGFloat = paper.spacing.points
         // Far out, fewer lines, so the paper doesn't turn grey.
-        while step < 10 { step *= 2; every *= 2 }
-        let color = dark ? Color.white.opacity(0.16) : Color.black.opacity(paper.style == .dots ? 0.22 : 0.09)
+        // Never denser than 16pt on screen, so the pattern stays even and readable at every zoom.
+        while step < 16 { step *= 2; every *= 2 }
+        let color = dark ? Color.white.opacity(paper.style == .dots ? 0.24 : 0.16) : Color.black.opacity(paper.style == .dots ? 0.28 : 0.10)
         let startX = (ceil(origin.x / every) * every - origin.x) * zoom
         let startY = (ceil(origin.y / every) * every - origin.y) * zoom
         switch paper.style {
         case .dots:
-            let d: CGFloat = max(1.6, min(2.6, 2.2 * zoom))
+            let d: CGFloat = max(2.2, min(2.8, 2.4 * zoom))
             var path = Path()
             var y = startY
             while y < size.height {
@@ -351,25 +357,30 @@ struct BoardStill: View {
             if showPattern {
                 Canvas { ctx, size in PaperDrawing.draw(paper, dark: darkPaper, in: ctx, size: size, origin: rect.origin, zoom: scale) }
             }
-            Canvas { ctx, _ in
-                var c = ctx
-                c.scaleBy(x: scale, y: scale)
-                c.translateBy(x: -rect.minX, y: -rect.minY)
-                for o in objects where o.isConnector { ConnectorGeometry.draw(o, in: &c, ink: darkPaper ? .white : .black) }
-            }
-            ForEach(objects.filter { !$0.isConnector && $0.frame.intersects(rect) }) { o in
-                ObjectContent(object: o, files: files, darkPaper: darkPaper)
-                    .frame(width: o.frame.width, height: o.frame.height)
-                    .scaleEffect(scale, anchor: .topLeading)
-                    .offset(x: (o.frame.minX - rect.minX) * scale, y: (o.frame.minY - rect.minY) * scale)
-            }
+            objectsLayer(above: false, darkPaper: darkPaper)
             if let ink = inkImage {
                 Image(uiImage: ink).resizable().frame(width: rect.width * scale, height: rect.height * scale)
             }
+            objectsLayer(above: true, darkPaper: darkPaper)
         }
         .frame(width: rect.width * scale, height: rect.height * scale, alignment: .topLeading)
         .clipped()
         .environment(\.colorScheme, darkPaper ? .dark : .light)
+    }
+
+    @ViewBuilder private func objectsLayer(above: Bool, darkPaper: Bool) -> some View {
+        Canvas { ctx, _ in
+            var c = ctx
+            c.scaleBy(x: scale, y: scale)
+            c.translateBy(x: -rect.minX, y: -rect.minY)
+            for o in objects where o.isConnector && o.isAboveInk == above { ConnectorGeometry.draw(o, in: &c, ink: darkPaper ? .white : .black) }
+        }
+        ForEach(objects.filter { !$0.isConnector && $0.isAboveInk == above && $0.frame.intersects(rect) }) { o in
+            ObjectContent(object: o, files: files, darkPaper: darkPaper)
+                .frame(width: o.frame.width, height: o.frame.height)
+                .scaleEffect(scale, anchor: .topLeading)
+                .offset(x: (o.frame.minX - rect.minX) * scale, y: (o.frame.minY - rect.minY) * scale)
+        }
     }
 
     private var inkImage: UIImage? {
