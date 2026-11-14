@@ -311,6 +311,26 @@ final class BoardSession {
             }
             if let best = spots.filter(clear).min(by: { hypot($0.x - c.x, $0.y - c.y) < hypot($1.x - c.x, $1.y - c.y) }) { return best }
         }
+        // Nothing fully clear (a big image, a crowded view): take the visible spot that covers least.
+        func covered(_ p: CGPoint) -> CGFloat {
+            let f = CGRect(x: p.x - size.width / 2, y: p.y - size.height / 2, width: size.width, height: size.height)
+            return objects.filter { !$0.isConnector }.reduce(0) { sum, o in
+                let i = o.frame.intersection(f)
+                return sum + (i.isNull ? 0 : i.width * i.height)
+            }
+        }
+        let step = max(min(size.width, size.height) / 2, 60)
+        var candidates: [CGPoint] = []
+        var y = view.minY + 60 + size.height / 2
+        while y <= view.maxY - 90 - size.height / 2 {
+            var x = view.minX + 20 + size.width / 2
+            while x <= view.maxX - 20 - size.width / 2 { candidates.append(CGPoint(x: x, y: y)); x += step }
+            y += step
+        }
+        if let best = candidates.min(by: { (covered($0), hypot($0.x - c.x, $0.y - c.y)) < (covered($1), hypot($1.x - c.x, $1.y - c.y)) }),
+           covered(best) < covered(c) {
+            return best
+        }
         if let last = lastInsertCenter, view.contains(last) {
             lastInsertCenter = CGPoint(x: last.x + gap, y: last.y + gap)
             return lastInsertCenter!
@@ -523,6 +543,9 @@ final class BoardSession {
         if !selectedStrokes.isEmpty { ink.beginLiveEdit() }
     }
 
+    @ObservationIgnored private var wasSnapped = false
+    @ObservationIgnored private lazy var snapHaptic = UIImpactFeedbackGenerator(style: .light)
+
     /// Moves the selection by a translation in Space points, with guides and snapping.
     func move(by t: CGSize, guidesOn: GuideSettings) {
         let movable = gestureStart.filter { id, _ in object(id).map { !$0.locked } ?? false }
@@ -534,6 +557,10 @@ final class BoardSession {
             let (adjust, lines) = snap(moved, settings: guidesOn, excluding: Set(movable.keys))
             d.x += adjust.x
             d.y += adjust.y
+            // A light tap when a guide catches the object, as in Freeform.
+            let snapped = !lines.x.isEmpty || !lines.y.isEmpty
+            if snapped && !wasSnapped { snapHaptic.impactOccurred(intensity: 0.6) }
+            wasSnapped = snapped
             guides = lines
         }
         for i in objects.indices {
@@ -877,7 +904,9 @@ final class BoardSession {
         } catch { say("Could not save the Send image: \(error.localizedDescription)"); return }
         reserved.formUnion(ids)
         let previous = sending
+        preparingSends += 1
         sending = Task {
+            defer { preparingSends -= 1 }
             await previous?.value
             let hints = await Handwriting.hints(pk)
             if !hints.isEmpty { raw["hints"] = hints }
@@ -894,6 +923,8 @@ final class BoardSession {
 
     /// When the last Send was saved, for the button's checkmark.
     var lastSendOK: Date?
+    /// Sends being put together (handwriting hints, crop) before they're saved.
+    var preparingSends = 0
 }
 
 /// What the screen shows in one rectangle of the Space, as a PNG.

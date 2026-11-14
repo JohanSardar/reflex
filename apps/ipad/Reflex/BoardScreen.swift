@@ -315,6 +315,7 @@ struct BoardScreen: View {
         Button("Choose Photo", systemImage: "photo") { showPhotos = true }
         Button("Take Photo", systemImage: "camera") { showCamera = true }
             .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+            .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
         Button("Choose File", systemImage: "folder") { showFiles = true }
         Button("Paste", systemImage: "doc.on.clipboard") { session.paste() }.disabled(!session.canPaste)
         Divider()
@@ -457,7 +458,7 @@ struct BoardScreen: View {
 
     private var bottomRight: some View {
         HStack(spacing: 12) {
-            VoiceSendDock(voice: voice, pending: link.pendingSends, lastSend: session.lastSendOK, onFail: { session.say($0) }) { said, words in
+            VoiceSendDock(voice: voice, pending: link.pendingSends, lastSend: session.lastSendOK, preparing: session.preparingSends > 0, onFail: { session.say($0) }) { said, words in
                 session.send(trigger: "voice", said: said, words: words)
             } send: {
                 session.send(trigger: "button")

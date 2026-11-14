@@ -72,11 +72,16 @@ struct MiniToolbar: View {
                 .popover(item: binding(.arrange)) { _ in arrangePicker }
                 .accessibilityIdentifier("arrange-button")
             if objects.count > 1 {
-                if session.selectionIsGroup {
-                    button("rectangle.3.group.bubble", "Ungroup", on: true) { session.ungroup() }
-                } else {
-                    button("rectangle.3.group", "Group") { session.group() }
+                // Spelled out, as in Freeform: an icon alone doesn't say which one it does.
+                Button { session.selectionIsGroup ? session.ungroup() : session.group() } label: {
+                    Label(session.selectionIsGroup ? "Ungroup" : "Group",
+                          systemImage: session.selectionIsGroup ? "rectangle.3.group.bubble" : "rectangle.3.group")
+                        .labelStyle(.titleAndIcon)
+                        .font(.system(size: 15, weight: .medium))
+                        .padding(.horizontal, 10).frame(height: 44)
                 }
+                .foregroundStyle(session.selectionIsGroup ? Color.accentColor : .primary)
+                .accessibilityIdentifier("group-button")
             }
         }
     }

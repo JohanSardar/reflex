@@ -300,10 +300,23 @@ struct BrowserView: View {
 
     // MARK: Cards
 
+    /// Why a board turned up in a search: the line of its text that holds the words, when
+    /// the title alone doesn't.
+    private func matchLine(_ b: BoardMeta) -> String? {
+        guard !query.isEmpty, !b.title.localizedCaseInsensitiveContains(query) else { return nil }
+        guard let line = b.text.split(separator: "\n").first(where: { $0.localizedCaseInsensitiveContains(query) }) else { return nil }
+        let s = String(line).trimmingCharacters(in: .whitespaces)
+        guard s.count > 42, let r = s.range(of: query, options: .caseInsensitive) else { return "“\(s)”" }
+        let start = s.index(r.lowerBound, offsetBy: -14, limitedBy: s.startIndex) ?? s.startIndex
+        let end = s.index(start, offsetBy: 42, limitedBy: s.endIndex) ?? s.endIndex
+        return "“" + (start > s.startIndex ? "…" : "") + s[start ..< end] + (end < s.endIndex ? "…" : "") + "”"
+    }
+
     private func grid(_ boards: [BoardMeta]) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 400), spacing: 20)], spacing: 22) {
             ForEach(boards) { b in
-                BoardCard(meta: b, library: library, folderName: library.folder(b.folder)?.name, selecting: selecting, picked: picked.contains(b.id))
+                BoardCard(meta: b, library: library, folderName: library.folder(b.folder)?.name, selecting: selecting, picked: picked.contains(b.id),
+                          match: matchLine(b))
                     .onTapGesture { tapped(b.id) }
                     .contextMenu { boardMenu(b) } preview: {
                         BoardThumbnail(id: b.id, library: library).frame(width: 420, height: 300)
@@ -330,6 +343,9 @@ struct BrowserView: View {
                         HStack(spacing: 6) {
                             Text(b.title).font(.headline).lineLimit(1)
                             if b.favorite { Image(systemName: "heart.fill").font(.caption).foregroundStyle(.pink) }
+                        }
+                        if let m = matchLine(b) {
+                            Label(m, systemImage: "text.magnifyingglass").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                         }
                         HStack(spacing: 8) {
                             Text(b.modified.formatted(date: .abbreviated, time: .shortened))
@@ -384,6 +400,7 @@ struct BoardCard: View {
     let folderName: String?
     let selecting: Bool
     let picked: Bool
+    var match: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -392,6 +409,9 @@ struct BoardCard: View {
                 .clipped()
             VStack(alignment: .leading, spacing: 3) {
                 Text(meta.title).font(.headline).lineLimit(1)
+                if let match {
+                    Label(match, systemImage: "text.magnifyingglass").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                }
                 Text(meta.modified.formatted(date: .numeric, time: .shortened)).font(.subheadline).foregroundStyle(.secondary)
                 if let folderName {
                     Label(folderName, systemImage: "folder").font(.caption).foregroundStyle(.secondary)

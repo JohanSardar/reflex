@@ -238,6 +238,7 @@ struct VoiceSendDock: View {
     let voice: VoiceCapture
     let pending: Int
     let lastSend: Date?
+    var preparing = false
     let onFail: (String) -> Void
     let onRelease: (_ said: String, _ words: [[String: Any]]) -> Void
     let send: () -> Void
@@ -341,7 +342,10 @@ struct VoiceSendDock: View {
             HStack(spacing: 8) {
                 Image(systemName: sentPulse ? "checkmark" : "paperplane.fill")
                     .frame(width: 20)
-                Text(sentPulse ? "Sent" : "Send")
+                Text(sentPulse ? "Sent" : preparing ? "Sending" : "Send")
+                if preparing && !sentPulse {
+                    ProgressView().controlSize(.small).tint(.white)
+                }
             }
             .font(.system(size: 17, weight: .semibold))
             .padding(.horizontal, 22).frame(height: 56)
