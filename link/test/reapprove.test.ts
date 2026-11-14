@@ -87,7 +87,7 @@ test("a revoked Agent is asked about again, and the person can let it back in", 
   const who = { name: "Claude Code · test", credential: "c".repeat(40) };
   try {
     const first = new Surface(join(dir, "agent.sock"), "t".repeat(32));
-    const r1 = await first.call("list_spaces", {}, who);
+    const r1 = await first.call("wait_for_user", { timeout_s: 0 }, who);
     assert.equal(r1.isError, false, `the person's Allow did not let the Agent in: ${JSON.stringify(r1.json)}`);
     first.close();
 
@@ -95,7 +95,7 @@ test("a revoked Agent is asked about again, and the person can let it back in", 
     catalog.decide(asked[0].id, "revoked", "command");
 
     const second = new Surface(join(dir, "agent.sock"), "t".repeat(32));
-    const r2 = await second.call("list_spaces", {}, who);
+    const r2 = await second.call("wait_for_user", { timeout_s: 0 }, who);
     second.close();
     assert.equal(asked.length, 2, "the person was never asked about the revoked Agent again");
     assert.equal(r2.isError, false, `the revoked Agent could not be let back in: ${JSON.stringify(r2.json)}`);

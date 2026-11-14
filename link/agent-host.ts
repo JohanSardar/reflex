@@ -6,8 +6,8 @@
 // every Send is indexed in the durable Inbox in the same transaction that
 // makes it durable, so a Link that is killed and restarted still delivers it.
 import type { Space } from "@reflex/kernel/node";
-import { Core, ReflexError, type Identity } from "../agent/src/capabilities/index.ts";
 import { SvgRenderer } from "../agent/src/render.ts";
+import { Core, ReflexError, type Identity } from "../agent/src/capabilities/index.ts";
 import { serveHost, type Listener } from "../agent/src/host/server.ts";
 import type { Who } from "../agent/src/host/rpc.ts";
 import type { Assets, Bounds, Delivery, FrozenSend, Inbox as AgentInbox, SpaceEntry, SpaceStore as AgentSpaces, WaitFilter, WriteOrigin } from "../agent/src/store.ts";
@@ -18,9 +18,7 @@ import type { Inbox } from "./storage/inbox.ts";
 import type { SpaceStore } from "./storage/journal.ts";
 
 import { recipient, route } from "./routing.ts";
-import { Watcher } from "./watch.ts";
 import { ClaudeChannel } from "./adapters/claude-channel.ts";
-import { McpApp } from "./adapters/mcp-app.ts";
 import { Webhook } from "./adapters/webhook.ts";
 import { Dispatcher } from "./adapters/dispatch.ts";
 import { PushStore } from "./adapters/store.ts";
@@ -71,22 +69,8 @@ class LinkSpaces implements AgentSpaces {
     return this.#store.has(name) && !this.#hidden(name) ? this.#entry(name) : undefined;
   }
 
-  create(name: string, o: { kind?: "space" | "library"; title?: string; size?: SpaceEntry["size"]; width?: number }) {
-    // A Space someone else shared with this person: their Agents join only once its owner approves them.
-    if (this.#hidden(name)) throw new ReflexError("invalid_input", [{ code: "invalid_input", msg: `'${name}' is a Space someone else shared with this person; Agents join it only through its owner.`, fix: "Open a Space with another name." }]);
-    this.#store.ensure(name, o.kind ?? "space");
-    this.#db
-      .prepare("INSERT INTO space_meta (space, title, size, width) VALUES (?, ?, ?, ?) ON CONFLICT (space) DO NOTHING")
-      .run(name, o.title ?? null, o.size ?? "infinite", o.width ?? null);
-    return this.#entry(name);
-  }
-
   list() {
     return this.#store.ids().filter((id) => !this.#hidden(id)).map((id) => this.#entry(id));
-  }
-
-  write<T>(entry: SpaceEntry, origin: WriteOrigin, fn: (s: Space) => T): T {
-    return this.#store.commit(entry.name, origin, fn);
   }
 
   attach(entry: SpaceEntry, agent: string) {
@@ -216,44 +200,14 @@ export async function startAgentHost(o: AgentHostOptions) {
   const inbox = new LinkInbox(o.inbox, o.store);
   const core = new Core({
     spaces,
+    renderer: new SvgRenderer(),
     inbox,
     assets: new LinkAssets(o.assets, o.assetAdded),
-    renderer: new SvgRenderer(),
     person: { person: o.person.id, name: o.person.name },
     names,
     progressEvery: Number(process.env.REFLEX_PROGRESS_S ?? 15),
     log: o.log,
-    presence: o.presence,
-    localFiles: true,
   });
-
-  // Behavior actions the Link runs (set, apply_recipe) as the Element's owner, for Sends that come
-  // from a device or the dev person, and once at start for any that arrived while it was down.
-  const behaviors = (space: string) => {
-    const sends: string[] = o.store.read(space, (s) => JSON.parse(s.scene(JSON.stringify({ detail: "full", ids: [] }))).sends ?? []);
-    for (const send of sends) {
-      const frozen = o.store.read(space, (s) => JSON.parse(s.send(send)));
-      const has = frozen?.actions?.some((b: any) => b.do === "set" || b.do === "apply_recipe");
-      // The actions run as the Element's owner, so only while the person approves that Agent.
-      if (has && frozen.owner?.agent && !approved(frozen.owner.agent)) {
-        o.log("behavior_skipped", { send, agent: frozen.owner.agent, why: "the Agent is not approved" });
-        continue;
-      }
-      if (has) void core.runBehaviors(space, send).catch((e) => o.log("behavior_failed", { send, error: String(e) }));
-    }
-  };
-  const approved = (agent: string) => o.catalog.agent(agent)?.status === "approved";
-  o.store.onChange((space, origin) => {
-    if (origin === "send" || origin.startsWith("sync:")) behaviors(space);
-  });
-  for (const space of o.store.ids()) behaviors(space);
-
-  // Watch mode: snapshots of watched Regions as the person writes in them (watch.ts).
-  const watcher = new Watcher({ core, store: o.store, inbox: o.inbox, log: o.log, writing: o.writing, hints: o.deviceHints });
-  o.store.onChange((space, origin) => {
-    if (origin !== "send") watcher.changed(space);
-  });
-  for (const space of o.store.ids()) watcher.changed(space);
 
   const notApproved = (a: AgentRecord, msg: string, fix: string) =>
     new ReflexError("not_approved", [{ code: "not_approved", msg, fix }]);
@@ -318,15 +272,14 @@ export async function startAgentHost(o: AgentHostOptions) {
   }
 
   // Push Send Adapters (link/adapters/): targets, secrets and attempts are kept here, outside the adapters.
+  const approved = (agent: string) => o.catalog.agent(agent)?.status === "approved";
   const pushes = new PushStore(o.db, o.home);
   const channel = new ClaudeChannel();
-  const app = new McpApp();
   const webhook = new Webhook();
-  const adapters = [channel, app, webhook];
+  const adapters = [channel, webhook];
   // Adapters whose live end is a surface's connection (a `listen` frame), and how each reports opening.
   const surfaces = new Map([
     [channel.name, { adapter: channel, event: "channel", fix: "Connect through `reflex mcp --channel`." }],
-    [app.name, { adapter: app, event: "app", fix: "Connect through `reflex mcp` from an MCP Apps host." }],
   ]);
   const ajv = new Ajv2020({ strict: false });
   const validConfig = new Map(adapters.map((a) => [a.name, ajv.compile(a.config)]));

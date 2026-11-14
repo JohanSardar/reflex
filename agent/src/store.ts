@@ -24,10 +24,7 @@ export type WriteOrigin = "agent" | "person" | "send";
 
 export interface SpaceStore {
   get(name: string): SpaceEntry | undefined;
-  create(name: string, opts: { kind?: "space" | "library"; title?: string; size?: SpaceEntry["size"]; width?: number }): SpaceEntry;
   list(): SpaceEntry[];
-  /** Runs one kernel write and makes it durable before returning. A Send it freezes is indexed in the Inbox. */
-  write<T>(entry: SpaceEntry, origin: WriteOrigin, fn: (s: Space) => T): T;
   /** Records that an Agent opened a Space, so its Sends reach that Agent. */
   attach(entry: SpaceEntry, agent: string): void;
 }

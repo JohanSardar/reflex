@@ -2,7 +2,7 @@
   "name": "@reflex/link",
   "version": "0.1.0",
   "private": true,
-  "description": "Reflex Link: the companion process that keeps every Space durable and in sync with your other devices.",
+  "description": "Pair the iPad, approve local agents and deliver Sends.",
   "type": "module",
   "bin": {
     "reflex-link": "./bin/reflex-link.ts"

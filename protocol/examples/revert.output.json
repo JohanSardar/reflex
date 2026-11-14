@@ -1,7 +1,0 @@
-{
-  "ok": true,
-  "batch": "b_35",
-  "reverted": ["b_31"],
-  "kept": [ { "id": "n-db", "why": "Ana moved it after b_31, so it stays where she put it." } ],
-  "pending_sends": 0
-}

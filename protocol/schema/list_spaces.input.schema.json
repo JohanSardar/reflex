@@ -1,8 +1,0 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://reflex.eilmer.si/protocol/v1/list_spaces.input.schema.json",
-  "title": "list_spaces input",
-  "type": "object",
-  "properties": {},
-  "additionalProperties": false
-}

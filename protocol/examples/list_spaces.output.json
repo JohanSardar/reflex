@@ -1,9 +1,0 @@
-{
-  "spaces": [
-    { "space": "auth-plan", "title": "Auth service plan", "unread": true, "pending_sends": 1,
-      "agents": ["Claude Code · reflex repo", "Codex · api"], "people": ["Ana"], "viewing": true },
-    { "space": "physics-hw", "title": "Physics homework", "unread": false, "pending_sends": 0,
-      "agents": ["Claude Code · reflex repo"], "people": ["Ana"], "viewing": false }
-  ],
-  "pending_sends": 1
-}

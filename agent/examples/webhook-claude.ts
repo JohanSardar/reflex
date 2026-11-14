@@ -6,8 +6,8 @@
 // It checks each request's signature, answers 202 at once (the Link counts
 // that as the Send delivered), drops a delivery it already took, and runs
 // `claude -p` with the Bundle and Reflex's MCP server under the same Agent
-// name, so Claude answers in the Space with apply(in_reply_to). Any harness
-// works the same way: take the POST, start a turn, reply with Reflex tools.
+// name, so Claude answers in its own session. Any harness
+// works the same way: take the POST, start a turn, acknowledge with wait_for_user(after).
 import { spawn } from "node:child_process";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -42,8 +42,8 @@ function turn(bundle: Record<string, any>) {
     delete img.data;
   }
   const mcp = { mcpServers: { reflex: { command: process.execPath, args: [reflex, "mcp"], env: { REFLEX_AGENT_NAME: agent, ...(process.env.REFLEX_HOME ? { REFLEX_HOME: process.env.REFLEX_HOME } : {}) } } } };
-  const prompt = `The person pressed Send in their Reflex Space. Here is the Send Bundle (its crops are PNG files at images[].file):\n\n${JSON.stringify(bundle)}\n\nFollow its next: answer in the Space with the reflex tools, then stop.`;
-  const args = ["-p", prompt, "--mcp-config", JSON.stringify(mcp), "--allowedTools", "mcp__reflex__apply,mcp__reflex__read,mcp__reflex__look,mcp__reflex__wait_for_user,mcp__reflex__open_space,Read", "--output-format", "text"];
+  const prompt = `The person pressed Send in their Reflex Space. Here is the Send Bundle (its crops are PNG files at images[].file):\n\n${JSON.stringify(bundle)}\n\nFollow its next: answer in your session and acknowledge with wait_for_user(after), then stop.`;
+  const args = ["-p", prompt, "--mcp-config", JSON.stringify(mcp), "--allowedTools", "mcp__reflex__wait_for_user,Read", "--output-format", "text"];
   console.log(`${new Date().toISOString()} ${bundle.space}/${bundle.send}: starting claude -p`);
   const child = spawn(process.env.CLAUDE_BIN ?? "claude", args, { stdio: ["ignore", "pipe", "inherit"] });
   child.stdout.on("data", (d) => process.stdout.write(`  claude: ${d}`));

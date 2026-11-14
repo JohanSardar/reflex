@@ -1,13 +1,11 @@
 // A room: where one person's devices meet (relay/domain/wire.ts). It
-// authenticates each device by its key, keeps presence, forwards end-to-end
-// sealed frames between devices that accept each other, and passes log and
-// grant requests on to the right log. It never sees a Space or a key.
+// authenticates device keys, keeps presence and forwards end-to-end sealed frames.
 //
 // All its state lives on the sockets (`Sock.state`), so a Durable Object that
 // hibernates between messages loses nothing.
-import type { Hubs, Sock } from "./ports.ts";
+import type { Sock } from "./ports.ts";
 import { deviceIdFor, hex, random, unb64url, verifyEd25519 } from "./seal.ts";
-import { DEVICE_ID, frame, helloText, LOG_ID, MAX_FRAME, unframe, type Grant } from "./wire.ts";
+import { DEVICE_ID, frame, helloText, MAX_FRAME, unframe } from "./wire.ts";
 
 type Msg = Record<string, unknown> & { t?: string; req?: unknown };
 
@@ -17,20 +15,18 @@ const watches = (s: Sock, device: string): boolean => s.state.watch.includes(dev
 export class Room {
   readonly id: string;
   #sockets: () => Sock[];
-  #hubs: Hubs;
   #log: (m: string) => void;
 
-  constructor(id: string, sockets: () => Sock[], hubs: Hubs, log: (m: string) => void = () => {}) {
+  constructor(id: string, sockets: () => Sock[], log: (m: string) => void = () => {}) {
     this.id = id;
     this.#sockets = sockets;
-    this.#hubs = hubs;
     this.#log = log;
   }
 
   /** A new WebSocket: challenge it. */
   open(s: Sock): void {
     const nonce = hex(random(16));
-    s.state = { nonce, watch: [], logs: [] };
+    s.state = { nonce, watch: [] };
     s.send(JSON.stringify({ t: "challenge", nonce, room: this.id }));
   }
 
@@ -77,7 +73,7 @@ export class Room {
     if (!ok) return s.close(4403, "the hello's signature or device ID does not check out");
     // One socket per device: a reconnect replaces the old one.
     for (const old of this.#authed()) if (old.state.device === device && old !== s) old.close(4409, "replaced by a newer connection");
-    s.state = { ...st, device, watch: [], logs: [] };
+    s.state = { ...st, device, watch: [] };
     s.send(JSON.stringify({ t: "welcome", device }));
     this.#log(`${device} joined room ${this.id}`);
     // `joined`: a new socket, so channels to the device's old one are gone.
@@ -112,11 +108,6 @@ export class Room {
   async #control(s: Sock, m: Msg): Promise<void> {
     const st = s.state;
     const reply = (body: Record<string, unknown>) => s.send(JSON.stringify({ t: "result", req: m.req, ok: true, ...body }));
-    const logId = (): string => {
-      const id = String(m.log ?? "");
-      if (!LOG_ID.test(id)) throw new Error("not a log ID");
-      return id;
-    };
     switch (m.t) {
       case "watch": {
         const devices = (Array.isArray(m.devices) ? m.devices : []).map(String).filter((d) => DEVICE_ID.test(d) || d === "*").slice(0, 256);
@@ -131,31 +122,6 @@ export class Room {
         if (to && watches(to, st.device!)) to.send(JSON.stringify({ t: "close", device: st.device, ch: Number(m.ch) }));
         return;
       }
-      case "log.append":
-        return reply(await this.#hubs.log(logId()).append(String(m.token), this.id, (m.entries as string[]) ?? [], m.snapshot === true));
-      case "log.read":
-        return reply(await this.#hubs.log(logId()).read(String(m.token), Number(m.after ?? 0), Math.min(Number(m.limit ?? 500), 1000)));
-      case "log.watch": {
-        const log = logId();
-        const r = await this.#hubs.log(log).watch(String(m.token), this.id);
-        const now = s.state;
-        if (!now.logs.includes(log)) s.state = { ...now, logs: [...now.logs, log].slice(-1024) };
-        return reply(r);
-      }
-      case "log.assets":
-        return reply(await this.#hubs.log(logId()).assetsHave(String(m.token), ((m.ids as string[]) ?? []).slice(0, 1000)));
-      case "auth.lookup":
-        return reply(await this.#hubs.auth().lookup(String(m.code ?? "")));
-      case "grant.issue": {
-        const g = m.grant as Grant;
-        // The grant must come from the device on this socket.
-        if (g?.device !== st.device) throw new Error("a grant must be issued by the device that sends it");
-        await this.#hubs.log(logId()).issueGrant(String(m.token), g, String(m.sig), String(m.key), String(m.code));
-        return reply({ grant: g.grant });
-      }
-      case "grant.revoke":
-        await this.#hubs.log(logId()).revokeGrant(String(m.token), String(m.grant));
-        return reply({});
       case "ping":
         return reply({ at: m.at });
       default:
@@ -163,8 +129,4 @@ export class Room {
     }
   }
 
-  /** A log says it has new entries: tell every socket watching it. */
-  notify(log: string, last: number): void {
-    for (const s of this.#authed()) if (s.state.logs.includes(log)) s.send(JSON.stringify({ t: "log.new", log, last }));
-  }
 }

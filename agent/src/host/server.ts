@@ -126,27 +126,7 @@ export function serveHost(o: HostOptions): Promise<Server> {
           const json = o.adapters(who, String(f.action), f.args && typeof f.args === "object" ? f.args : {});
           log("adapters", { client, who: who.name, action: f.action });
           send({ t: "result", id: f.id, json, images: [], isError: false });
-        } else if (f.t === "person") {
-          if (!o.devPerson)
-            throw new ReflexError("unavailable", [{ code: "unavailable", msg: "Acting as the person needs a Link started with --dev.", fix: "Draw and press Send on the iPad, or restart the Link with `reflex link --dev`." }]);
-          const a = f.args;
-          let json: Record<string, any>;
-          if (f.action === "circle") json = core.personCircle(a.space, a.target);
-          else if (f.action === "underline") json = core.personUnderline(a.space, a.target);
-          else if (f.action === "strike") json = core.personStrike(a.space, a.target);
-          else if (f.action === "arrow") json = core.personArrow(a.space, a.target, a.to);
-          else if (f.action === "write") json = core.personWrite(a.space, a.target, a.text, { confidence: a.confidence });
-          else if (f.action === "say") json = core.personSay(a.space, a.text);
-          else if (f.action === "move") json = core.personMove(a.space, a.target, a.by);
-          else if (f.action === "add-file") json = core.personAddFile(a.space, { name: a.name, bytes: Buffer.from(a.data, "base64"), mime: a.mime }, { near: a.near });
-          else if (f.action === "tap") json = core.personFire(a.space, a.target, a.on ?? "tap", { values: a.values });
-          else if (f.action === "revert") json = core.personRevert(a.space, a.agent);
-          else if (f.action === "history") json = core.timeline(a.space);
-          else if (f.action === "stroke") json = core.personStroke(a.space, a.points);
-          else if (f.action === "write-line") json = core.personWriteLine(a.space, a.target, a.text, { confidence: a.confidence });
-          else if (f.action === "send") json = core.personSend(a.space, { said: a.said, trigger: a.trigger, region: a.region });
-          else throw new Error(`unknown person action ${f.action}`);
-          send({ t: "result", id: f.id, json, images: [], isError: false });
+
         }
       } catch (e) {
         if (e instanceof ReflexError) send({ t: "result", id: f.id, json: { ok: false, ...e.body }, images: [], isError: true });

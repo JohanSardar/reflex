@@ -1,3 +1,0 @@
-# Each Agent works in one stable coordinate space and places things relatively by default
-
-SPEC §7 originally said Agent coordinates "match the most recent `look` image". That needs expiring view handles, and forces a new screenshot before an Agent can place a single note. Instead, each Agent has one stable integer coordinate space per Space, with an origin that never moves. Every `look` image is labeled with the bounds it covers. Placement is relative by default (`near`, `right_of`, `below`, including next to the user's marks), and Reflex computes the geometry. Absolute coordinates remain available. This follows tldraw's and Excalidraw's lesson that models handle named relationships much better than computed geometry.

@@ -2,7 +2,7 @@
   "name": "@reflex/agent",
   "version": "0.1.0",
   "private": true,
-  "description": "The Reflex Agent layer: the capability table behind the MCP server and the reflex CLI.",
+  "description": "Receive iPad Sends through MCP or the reflex CLI.",
   "type": "module",
   "bin": {
     "reflex": "./bin/reflex.mjs"
@@ -13,10 +13,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
     "@reflex/kernel": "0.1.0",
-    "@reflex/protocol": "1.0.0",
-    "@resvg/resvg-js": "2.6.2",
     "ajv": "8.17.1",
-    "quickjs-emscripten": "0.32.0"
+    "@resvg/resvg-js": "2.6.2"
   },
   "devDependencies": {
     "@types/node": "26.6.5",

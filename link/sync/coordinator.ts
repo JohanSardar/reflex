@@ -44,7 +44,6 @@
 // two, changes nothing the second time (`everyPath` sends every change over
 // every live path, to show it).
 import { mayApprove, type Catalog, type PairedDevice } from "../pairing/catalog.ts";
-import type { Shares } from "../sharing.ts";
 import { handshake, HandshakeError, type Me, type Message, type PeerInfo, type ScannedOffer, type Session } from "../pairing/handshake.ts";
 import type { Offers, ParsedOffer } from "../pairing/offer.ts";
 import type { AssetStore } from "../storage/assets.ts";
@@ -136,7 +135,6 @@ export class Coordinator {
   #assets: AssetStore;
   #catalog: Catalog;
   #offers: Offers;
-  #shares: Shares;
   #transports: Transport[];
   #log: Log;
   #peers = new Map<string, Peer>();
@@ -163,26 +161,17 @@ export class Coordinator {
   approvalHint: () => string = () => "";
   /** Messages the coordinator itself doesn't handle (the Relay's `relay_keys`, link/relay/sync.ts). */
   onMessage: (p: Peer, h: Record<string, unknown>, body: Uint8Array) => void = () => {};
-  /** The secret of a live invite to a shared Space (link/sharing.ts). */
-  inviteSecret: (invite: string) => Uint8Array | undefined = () => undefined;
-  /** Someone presented a live invite and proved it: record them before the session starts. Throws to refuse. */
-  onInvited: (peer: PeerInfo, invite: string) => void = () => {};
-  /** Wraps taking in another person's changes to a Space (link/relay/sync.ts keeps them out of this Link's log entries). */
-  receiving: (space: string, apply: () => string) => string = (_space, apply) => apply();
-
   constructor(opts: {
     me: Me;
     store: SpaceStore;
     assets: AssetStore;
     catalog: Catalog;
     offers: Offers;
-    shares: Shares;
     transports: Transport[];
     log: Log;
     /** Send every change over every live path, not just the fastest (duplicates are harmless). */
     everyPath?: boolean;
   }) {
-    this.#shares = opts.shares;
     this.#me = opts.me;
     this.#store = opts.store;
     this.#assets = opts.assets;
@@ -210,19 +199,6 @@ export class Coordinator {
     this.#transports = this.#transports.filter((x) => x !== t);
     for (const [d, list] of this.#candidates) this.#candidates.set(d, list.filter((c) => c.transport !== t.name));
     await t.close();
-  }
-
-  /** Who is in which shared Space changed: say again which Spaces each peer gets, and drop peers left with none. */
-  refresh(): void {
-    for (const p of [...this.#peers.values()]) {
-      const d = this.#catalog.device(p.device);
-      if (!d || (d.person.id !== this.#me.person.id && !this.#store.ids().some((id) => this.#shares.allowed(d, id)))) {
-        for (const e of p.paths.all()) e.session.close("no longer shares a Space with this Link");
-        continue;
-      }
-      this.#sendSpaces(p);
-      for (const id of this.#store.ids()) this.#pump(id, p);
-    }
   }
 
   onPaired(fn: (d: PairedDevice) => void): void {
@@ -255,7 +231,6 @@ export class Coordinator {
     return {
       pairedKey: (device: string) => this.#catalog.device(device)?.key,
       offerSecret: (offer: string) => this.#offers.secret(offer),
-      inviteSecret: (invite: string) => this.inviteSecret(invite),
     };
   }
 
@@ -274,7 +249,6 @@ export class Coordinator {
           for (const f of this.#onPaired) f(this.#catalog.device(r.peer.device)!);
         }
       }
-      if (r.invite) this.onInvited(r.peer, r.invite);
       this.#quiet.clear(`${hostOf(path.remote)}|`);
       this.#quiet.clear(`${r.peer.device}|`);
       this.#bind(r.session, r.peer.device, r.peer.name, r.peer.device);
@@ -365,60 +339,6 @@ export class Coordinator {
     this.#log(`forgot ${d.name} (${device})`);
     this.#sendApproverRequests();
     return d;
-  }
-
-  /** Records another person's Link met through an invite: it syncs only the Spaces it shares with this one. */
-  rememberGuest(peer: PeerInfo): void {
-    const known = this.#catalog.device(peer.device);
-    if (known && known.person.id === this.#me.person.id) throw new Error(`${peer.name} is already one of this person's devices`);
-    if (!known) this.#remember(peer, null, "invite");
-  }
-
-  /** Forgets another person's Link (it shares nothing with this one any more) and ends its session. */
-  forgetGuest(device: string): void {
-    const d = this.#catalog.device(device);
-    if (!d || d.via !== "invite") return;
-    this.#catalog.forget("device", device);
-    this.#candidates.delete(device);
-    for (const e of this.#peers.get(device)?.paths.all() ?? []) e.session.close("removed from every shared Space");
-    this.#log(`forgot ${d.name} (${device}): it shares no Space with this Link any more`);
-  }
-
-  /**
-   * Presents an invite to the owner's Link: over the LAN at the addresses in it, then through `relay`
-   * (a path in the invite's Relay room). Resolves once the owner's Link took it.
-   */
-  async presentInvite(inv: { invite: string; device: string; key: string; secret: Uint8Array; hosts: string[]; port: number; name: string }, relay?: () => Promise<Path>): Promise<PeerInfo> {
-    const scanned: ScannedOffer = { offer: inv.invite, device: inv.device, key: inv.key, secret: inv.secret, invite: true };
-    const errors: string[] = [];
-    const lan = this.#transports.find((t) => t.name === "lan");
-    const ways: { what: string; c: Candidate | null; dial: () => Promise<Path> }[] = [];
-    if (lan)
-      for (const host of inv.hosts) {
-        const c: Candidate = { transport: "lan", device: inv.device, host, port: inv.port };
-        ways.push({ what: host, c, dial: () => lan.dial(c) });
-      }
-    if (relay) ways.push({ what: "the Relay", c: null, dial: relay });
-    for (const w of ways) {
-      let path: Path;
-      try {
-        path = await w.dial();
-      } catch (e) {
-        errors.push(`${w.what}: ${(e as Error).message}`);
-        continue;
-      }
-      try {
-        const r = await handshake(path, this.#me, this.#trust(), scanned);
-        this.rememberGuest(r.peer);
-        if (w.c) this.#catalog.seen(r.peer.device, w.c.host, w.c.port);
-        this.#bind(r.session, r.peer.device, r.peer.name, this.#me.key.device);
-        return r.peer;
-      } catch (e) {
-        path.close("invite refused");
-        errors.push(`${w.what}: ${(e as Error).message}`);
-      }
-    }
-    throw new Error(`Could not reach ${inv.name}'s Link: ${errors.join("; ") || "no address to try"}`);
   }
 
   /** Scans a pairing code: reaches the offering device and pairs with it. */
@@ -606,12 +526,7 @@ export class Coordinator {
     return this.#catalog.device(p.device)?.person.id === this.#me.person.id;
   }
 
-  /** Whether an asset may go to a peer: any to this person's devices; to someone else's, only what the Spaces it shares refer to. */
-  #assetOk(p: Peer, hash: string): boolean {
-    if (this.#own(p)) return true;
-    const d = this.#catalog.device(p.device);
-    return this.#store.ids().some((id) => this.#shares.allowed(d, id) && this.#refs(id).includes(hash));
-  }
+  #assetOk(p: Peer, _hash: string): boolean { return this.#own(p); }
 
   /** Everything a Space's Elements and Sends say, where the assets they refer to are named. */
   #refs(space: string): string {
@@ -666,11 +581,12 @@ export class Coordinator {
 
   /** Who a peer's changes to a Space may be written for, from its pairing record and its role there. */
   #writers(device: string, space: string): string {
-    return this.#shares.writers(this.#catalog.device(device), space);
+    const d = this.#catalog.device(device);
+    return JSON.stringify(d?.person.id === this.#me.person.id ? { people: [d.person.id] } : { people: [], agents: [] });
   }
 
   #allowed(p: Peer, space: string): boolean {
-    return !p.refused.has(space) && this.#shares.allowed(this.#catalog.device(p.device), space);
+    return !p.refused.has(space) && this.#own(p);
   }
 
   #sendSpaces(p: Peer): void {
@@ -742,7 +658,7 @@ export class Coordinator {
         const space = String(h.space);
         if (!this.#store.has(space) || !this.#allowed(p, space)) return; // not announced, or not shared with this peer
         const apply = () => this.#store.commit(space, `sync:${p.device}`, (s) => s.receiveSyncMessageChecked(p.device, body, this.#writers(p.device, space)));
-        const r = JSON.parse(this.#own(p) ? apply() : this.receiving(space, apply));
+        const r = JSON.parse(this.#own(p) ? apply() : apply());
         if (!r.ok) {
           const reason = r.errors.map((e: { msg: string }) => e.msg).join(" ");
           // An iPad holding a Space from an earlier pairing (another person) offers it on every connect: once is enough.
@@ -849,14 +765,7 @@ export class Coordinator {
         return;
       }
       case "refused": {
-        // This side's changes to a Space it doesn't own were refused (its person is a viewer there, or was
-        // removed): start that Space over from the peer, dropping them, and say so.
-        const space = String(h.space ?? "");
-        if (!this.#store.has(space) || this.#shares.owns(space)) return this.#log(`${p.name} refused changes to '${space}': ${String(h.reason ?? "")}`);
-        this.#log(`${p.name} refused this Link's changes to '${space}' (${String(h.reason ?? "")}); starting it over from ${p.name}`);
-        this.#store.reset(space);
-        for (const x of this.#peers.values()) this.#store.read(space, (s) => s.resetSync(x.device));
-        this.#send(p, { t: "reset", space });
+        this.#log(`${p.name} refused changes: ${String(h.reason ?? "")}`);
         return;
       }
       case "reset": {

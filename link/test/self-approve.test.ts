@@ -61,7 +61,7 @@ async function decide(ipad: { session: Session; got: Record<string, any>[] }, a:
 
 async function withLink(fn: (link: Link, dir: string, admin: LinkClient, log: string[]) => Promise<void>, dir = mkdtempSync(join(tmpdir(), "reflex-approve-"))): Promise<void> {
   const log: string[] = [];
-  const link = new Link({ dir, port: 0, prompt: false, p2p: false, webPort: null, log: (m) => log.push(m) });
+  const link = new Link({ dir, port: 0, prompt: false, p2p: false, log: (m) => log.push(m) });
   await link.start();
   const admin = await LinkClient.connect(dir, "admin");
   try {

@@ -1,1 +1,0 @@
-{ "t": "shares", "shares": [ { "space": "auth-plan", "owner": { "id": "p_4c1e9a7b2d30", "name": "Ana" }, "role": "owner", "members": [ { "person": { "id": "p_b7e2c9d10f43", "name": "Ben" }, "role": "editor" } ], "epoch": 0 } ], "invites": ["i_5d1e2f3a4b6c"] }

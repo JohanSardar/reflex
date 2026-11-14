@@ -1,1 +1,0 @@
-{ "t": "hello", "person": { "id": "p_4c1e9a7b2d30", "name": "Ana" }, "names": { "p_4c1e9a7b2d30": "Ana", "a_7Kq2": "Claude Code" }, "spaces": [ { "id": "auth-plan", "kind": "space" }, { "id": "library", "kind": "library" } ] }
