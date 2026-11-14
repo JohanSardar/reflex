@@ -11,4 +11,4 @@ node agent/bin/reflex.mjs mcp --channel
 
 The agent presents a stable credential and waits for approval. Acknowledge a Send with `after` on a later wait, and answer in your own session. Claude Code channels can push Sends between waits. Register webhooks with `reflex adapters add webhook --url <url>`; see `examples/webhook-claude.ts`.
 
-Local RPC reconnects after a Link restart. The kernel-backed Send projection and fallback renderer remain for today's iPad; T25 replaces these. No web or MCP App viewer remains. Check with `npm run typecheck` from the root.
+Local RPC reconnects after a Link restart. Immutable native Sends supply marks, their targets, words and screen crops to every delivery surface. No web or MCP App viewer remains. Check with `npm run typecheck` from the root.

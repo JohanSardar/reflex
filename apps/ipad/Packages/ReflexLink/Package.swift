@@ -7,10 +7,7 @@ let package = Package(
     products: [
         .library(name: "ReflexLink", targets: ["ReflexLink"]),
     ],
-    dependencies: [
-        .package(name: "ReflexKernel", path: "../../../../kernel/swift"),
-    ],
     targets: [
-        .target(name: "ReflexLink", dependencies: [.product(name: "ReflexKernel", package: "ReflexKernel")]),
+        .target(name: "ReflexLink"),
     ]
 )

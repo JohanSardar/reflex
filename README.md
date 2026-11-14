@@ -10,7 +10,7 @@ Use Node 26 or newer. From this checkout:
 node agent/bin/reflex.mjs setup
 ```
 
-Setup installs packages, builds the compatibility kernel and optional Apple peer-to-peer helper, configures the chosen harness, and starts the Link. Scan its pairing code in the iPad app and tap Allow when the agent asks. Use `node agent/bin/reflex.mjs pair` for a fresh code.
+Setup installs packages, builds the optional Apple peer-to-peer helper, configures the chosen harness, and starts the Link. Scan its pairing code in the iPad app and tap Allow when the agent asks. Use `node agent/bin/reflex.mjs pair` for a fresh code.
 
 Pairing and agent approval are separate. Only an approving iPad, or the Link terminal before an approving iPad exists, grants agent access. Shell commands can deny or revoke access.
 
@@ -31,7 +31,6 @@ node agent/bin/reflex.mjs link status
 - `agent/`: MCP/CLI receivers and local RPC client.
 - `link/`: pairing, approval, Mac connection, durable Inbox and delivery.
 - `relay/`: authenticated forwarding of live encrypted device connections.
-- `kernel/`: temporary compatibility bridge for today's document-carried Sends; T25 replaces it with native envelopes.
 
 No agent writing API, shared Spaces/invites, web viewer, author kit, protocol package, conformance suite, encrypted cloud log or cloud agent session remains. The full earlier product is preserved on GitLab branch `archive/canvas-v0`.
 
@@ -39,7 +38,6 @@ No agent writing API, shared Spaces/invites, web viewer, author kit, protocol pa
 
 ```sh
 npm install --no-audit --no-fund
-npm run build:kernel-wasm
 npm run typecheck
 ```
 

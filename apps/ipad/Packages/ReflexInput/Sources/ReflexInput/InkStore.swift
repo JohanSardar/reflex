@@ -4,18 +4,14 @@ import PencilKit
 
 let inkLog = Logger(subsystem: "si.eilmer.reflex", category: "ink")
 
-/// Keeps one Space's user Ink on disk: the native PencilKit archive, and next to
-/// it the portable strokes with their Reflex IDs, in the same order.
-///
-/// This is local storage only. Syncing finished strokes through the kernel
-/// comes with the round-trip ticket (T6); the whole drawing archive is never
-/// what gets synced.
+/// Native PencilKit archive and local stroke identity. Nothing here has a network path.
 struct InkStore {
     struct Saved: Codable, Sendable {
         var version = 1
         var strokes: [PortableStroke]
         /// Strokes erased or undone, kept for lineage.
         var retired: [StrokeRecord]
+        var unsent: [String]?
     }
 
     let directory: URL
@@ -23,8 +19,9 @@ struct InkStore {
     private var strokesURL: URL { directory.appending(path: "ink.json") }
 
     init(space: String) {
-        let base = URL.applicationSupportDirectory.appending(path: "Reflex/Spaces", directoryHint: .isDirectory)
-        directory = base.appending(path: space, directoryHint: .isDirectory)
+        let local = space.hasPrefix("local-only:")
+        let base = URL.applicationSupportDirectory.appending(path: local ? "Reflex/LocalOnly" : "Reflex/Spaces", directoryHint: .isDirectory)
+        directory = base.appending(path: local ? String(space.dropFirst("local-only:".count)) : space, directoryHint: .isDirectory)
     }
 
     func load() -> (PKDrawing, StrokeLedger) {
@@ -67,22 +64,27 @@ struct InkStore {
 
     /// Writes on a serial background queue, so saves land in order and drawing
     /// never waits on the disk.
-    func save(_ drawing: PKDrawing, portable: [PortableStroke], retired: [StrokeRecord]) {
-        let archive = drawing.dataRepresentation()
-        let saved = Saved(strokes: portable, retired: retired)
+    func loadUnsent(fallback: [String]) -> [String] {
+        (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: strokesURL)))?.unsent ?? fallback
+    }
+
+    func save(_ drawing: PKDrawing, portable: [PortableStroke], retired: [StrokeRecord], unsent: [String]) {
+        let saved = Saved(strokes: portable, retired: retired, unsent: unsent)
         let directory = directory, strokesURL = strokesURL, drawingURL = drawingURL
         Self.queue.async {
             do {
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 // If the app dies between these two writes, load() still pairs the
                 // strokes both files share; only the difference gets new IDs.
+                try drawing.dataRepresentation().write(to: drawingURL, options: .atomic)
                 try JSONEncoder().encode(saved).write(to: strokesURL, options: .atomic)
-                try archive.write(to: drawingURL, options: .atomic)
             } catch {
                 inkLog.error("Could not save Ink: \(error.localizedDescription)")
             }
         }
     }
+
+    static func finishSaving() { queue.sync {} }
 
     private static let queue = DispatchQueue(label: "si.eilmer.reflex.ink-store", qos: .utility)
 }

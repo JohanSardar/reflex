@@ -35,10 +35,10 @@ import { Offers, parseOffer, qrText } from "./pairing/offer.ts";
 import { AssetStore } from "./storage/assets.ts";
 import { openDb } from "./storage/db.ts";
 import { Inbox } from "./storage/inbox.ts";
-import { SpaceStore } from "./storage/journal.ts";
+import { SendStore } from "./storage/sends.ts";
 import { Coordinator, type Peer } from "./sync/coordinator.ts";
 import { startAgentHost } from "./agent-host.ts";
-import { route } from "./routing.ts";
+import { recipient } from "./routing.ts";
 import { socketPath as agentSocketPath } from "../agent/src/host/rpc.ts";
 import { FaultTransport, parseFaults } from "./transports/fault.ts";
 import { LanTransport } from "./transports/lan.ts";
@@ -114,7 +114,7 @@ export class Link {
   #id!: Identity;
   #me!: Me;
   #inbox!: Inbox;
-  #store!: SpaceStore;
+  #store!: SendStore;
   #assets!: AssetStore;
   #catalog!: Catalog;
   #offers = new Offers();
@@ -165,12 +165,12 @@ export class Link {
     const db = openDb(this.home.db);
     this.#db = db;
     this.#inbox = new Inbox(db);
-    this.#store = new SpaceStore(db, this.#id.actor, this.#inbox);
+    this.#store = new SendStore(db, this.#inbox);
     this.#assets = new AssetStore(this.home.assets);
     this.#catalog = new Catalog(db, this.#id.key);
     // Who each recovered Send goes to (link/routing.ts).
-    this.#inbox.recipientsFor = (space, send) => route(db, this.#store, space, send);
-    const rec = this.#store.recover();
+    this.#inbox.recipientsFor = () => this.#catalog.agents().filter((a) => a.status === "approved").map((a) => recipient(a.id));
+    const rec = { spaces: new Set(this.#store.list().map((s) => s.space)).size, replayed: 0 };
     const devices = this.#catalog.devices();
     if (this.#catalog.rejected > 0) this.#log(`ignored ${this.#catalog.rejected} catalog records with bad signatures`);
 
@@ -193,7 +193,6 @@ export class Link {
     }
     this.#coord = new Coordinator({
       me: this.#me,
-      store: this.#store,
       assets: this.#assets,
       catalog: this.#catalog,
       offers: this.#offers,
@@ -201,6 +200,7 @@ export class Link {
       log: this.#log,
       everyPath: this.#opts.everyPath,
     });
+    this.#coord.onSend = (send) => { this.#store.ingest(send); };
     // Generic session messages stay available for T25's send/send_ack transport.
     this.#coord.onBound = (p) => {
       if (this.#relayT && this.#catalog.device(p.device)?.person.id === this.#id.person.id)
@@ -222,7 +222,6 @@ export class Link {
       store: this.#store,
       inbox: this.#inbox,
       assets: this.#assets,
-      assetAdded: (hash) => this.#coord.announceAsset(hash),
       catalog: this.#catalog,
       person: this.#id.person,
       socket: agentSocketPath(this.dir),
@@ -241,8 +240,8 @@ export class Link {
       JSON.stringify({ pid: process.pid, socket: this.home.socket, lan: this.#ports.lan, p2p: this.#ports.p2p, device: this.#id.key.device }, null, 2),
     );
     this.#log(
-      `${this.#id.name} (${this.#id.key.device}) for ${this.#id.person.name} · ${rec.spaces} Spaces, ` +
-        `${rec.replayed} journal entries replayed, ${this.#inbox.all().length} Sends in the Inbox, ` +
+      `${this.#id.name} (${this.#id.key.device}) for ${this.#id.person.name} · ${rec.spaces} pages with Sends, ` +
+        `${this.#inbox.all().length} Sends in the Inbox, ` +
         `${devices.length} paired devices · ${this.#ports.lan !== undefined ? `LAN :${this.#ports.lan}` : "no LAN"}` +
         `${this.#ports.p2p ? ` · peer-to-peer :${this.#ports.p2p}` : ""}${this.#relayT ? ` · Relay ${this.#relayT.url}` : ""} · ${this.home.socket}`,
     );
@@ -617,7 +616,6 @@ export class Link {
         return this.#join(String(p.uri));
       case "assets.put": {
         const hash = this.#assets.put(Buffer.from(String(p.base64 ?? ""), "base64"));
-        this.#coord.announceAsset(hash);
         return { hash };
       }
       case "assets.get":
@@ -651,7 +649,7 @@ export class Link {
     }
     if (offer.device === this.#id.key.device) throw new LinkError("own_code", "That is this Link's own pairing code.", "Scan it from the other device.");
     // A device that holds nothing yet becomes the offering person's device.
-    if (offer.person.id !== this.#id.person.id && this.#store.ids().length === 0 && this.#catalog.devices().length === 0) {
+    if (offer.person.id !== this.#id.person.id && this.#store.list().length === 0 && this.#catalog.devices().length === 0) {
       adoptPerson(this.dir, offer.person);
       this.#id.person = offer.person;
       this.#me.person = offer.person;
@@ -672,8 +670,7 @@ export class Link {
       lan_port: this.#ports.lan,
       p2p_port: this.#ports.p2p ?? null,
       socket: this.home.socket,
-      spaces: this.#store.ids().map((id) => this.#store.info(id)),
-      journal: this.#store.journalStats(),
+      pages: [...new Set(this.#store.list().map((s) => s.space))],
       assets: this.#assets.list().length,
       inbox: this.#inbox.all().map((e) => ({ space: e.space, send: e.send, via: e.via, receipts: this.#inbox.receipts(e.space, e.send) })),
       paired: this.#catalog.devices().map((d) => ({ device: d.device, name: d.name, person: d.person, connected: this.#coord.peers().some((p) => p.device === d.device) })),

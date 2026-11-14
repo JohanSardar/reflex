@@ -33,8 +33,8 @@ struct PairSheet: View {
                         Button { scanning = true } label: { Label("Scan the QR code", systemImage: "qrcode.viewfinder") }
                     }
                 }
-                Section("Or type the code, or an invite someone sent you") {
-                    TextField("reflex://pair?… or reflex://invite?…", text: $code, axis: .vertical)
+                Section("Or type the code") {
+                    TextField("reflex://pair?…", text: $code, axis: .vertical)
                         .font(.system(.body, design: .monospaced))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -43,7 +43,7 @@ struct PairSheet: View {
                     Button {
                         Task { await pair(code) }
                     } label: {
-                        if busy { ProgressView() } else { Text(isInvite ? "Join" : "Pair") }
+                        if busy { ProgressView() } else { Text("Pair") }
                     }
                     .disabled(busy || code.isEmpty)
                     .accessibilityIdentifier("pair-button")
@@ -65,19 +65,12 @@ struct PairSheet: View {
         }
     }
 
-    private var isInvite: Bool { code.trimmingCharacters(in: .whitespaces).hasPrefix("reflex://invite") }
-
     private func pair(_ text: String) async {
         busy = true
         error = nil
         defer { busy = false }
         do {
-            // An invite to someone's shared Space: this iPad's Link presents it to theirs.
-            if text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("reflex://invite") {
-                _ = try await link.join(invite: text)
-            } else {
-                try await link.pair(code: text)
-            }
+            try await link.pair(code: text)
             dismiss()
         } catch {
             self.error = error.localizedDescription

@@ -1,4 +1,4 @@
-// The Link's one SQLite database: journal, checkpoints, Inbox index and the
+// The Link's one SQLite database: immutable Sends, Inbox index and the
 // signed control catalog. WAL with synchronous=FULL, so a committed
 // transaction survives a crash or power loss.
 import { DatabaseSync } from "node:sqlite";
@@ -7,14 +7,6 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS spaces (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, created_at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS checkpoints (
-  space TEXT PRIMARY KEY REFERENCES spaces(id), bytes BLOB NOT NULL, upto INTEGER NOT NULL, at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS journal (
-  seq INTEGER PRIMARY KEY AUTOINCREMENT, space TEXT NOT NULL REFERENCES spaces(id),
-  origin TEXT NOT NULL, bytes BLOB NOT NULL, heads TEXT NOT NULL, at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS journal_space ON journal(space, seq);
 CREATE TABLE IF NOT EXISTS inbox (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, space TEXT NOT NULL, send TEXT NOT NULL,
   arrived_at INTEGER NOT NULL, via TEXT NOT NULL, UNIQUE(space, send)
@@ -26,13 +18,6 @@ CREATE TABLE IF NOT EXISTS receipts (
 );
 CREATE TABLE IF NOT EXISTS inbox_to (
   space TEXT NOT NULL, send TEXT NOT NULL, recipient TEXT NOT NULL, PRIMARY KEY (space, send, recipient)
-);
-CREATE TABLE IF NOT EXISTS space_meta (
-  space TEXT PRIMARY KEY REFERENCES spaces(id), title TEXT, size TEXT NOT NULL DEFAULT 'infinite', width INTEGER,
-  viewport TEXT NOT NULL DEFAULT '[0,0,1366,1024]'
-);
-CREATE TABLE IF NOT EXISTS space_agents (
-  space TEXT NOT NULL REFERENCES spaces(id), agent TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (space, agent)
 );
 CREATE TABLE IF NOT EXISTS catalog (
   kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, sig TEXT NOT NULL, PRIMARY KEY (kind, id)

@@ -3,13 +3,11 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "kernel/wasm",
     "agent",
     "link",
     "relay"
   ],
   "scripts": {
-    "build:kernel-wasm": "sh kernel/wasm/build.sh",
     "build:p2p": "swift build -c release --package-path link/transports/p2p",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p agent --noEmit && tsc -p relay --noEmit",
     "reflex-link": "node link/bin/reflex-link.ts",

@@ -12,7 +12,7 @@ import { newDeviceKey } from "../pairing/crypto.ts";
 import { AssetStore } from "../storage/assets.ts";
 import { openDb } from "../storage/db.ts";
 import { Inbox } from "../storage/inbox.ts";
-import { SpaceStore } from "../storage/journal.ts";
+import { SendStore } from "../storage/sends.ts";
 
 // These tests are about asking again, not about how long the Link waits before it may (agent-host.ts).
 process.env.REFLEX_REASK_S = "0";
@@ -59,7 +59,7 @@ test("a revoked Agent is asked about again, and the person can let it back in", 
   const dir = mkdtempSync("/tmp/reflex-reapprove-");
   const db = openDb(join(dir, "link.db"));
   const inbox = new Inbox(db);
-  const store = new SpaceStore(db, "aa".repeat(16), inbox);
+  const store = new SendStore(db, inbox);
   const catalog = new Catalog(db, newDeviceKey().key);
   const asked: AgentRecord[] = [];
   const host = await startAgentHost({
