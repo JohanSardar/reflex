@@ -103,7 +103,16 @@ export interface AgentHostOptions {
   /** Resolves once the person decides about this Agent, or after `ms`. */
   decision: (id: string, ms: number, signal: AbortSignal) => Promise<void>;
   log: (event: string, data?: Record<string, unknown>) => void;
+  /** The live typed code with this Agent added to the ones it approves (a new one if none is live). */
+  code?: (agent: string) => { code: string; expires: number };
+  /** The live typed code this Agent waits on, if any. */
+  codeFor?: (agent: string) => string | undefined;
+  /** Names of the iPads paired with this Link. */
+  ipads?: () => string[];
 }
+
+/** "482913" as the person reads it: "482 913". */
+const spaced = (code: string) => `${code.slice(0, 3)} ${code.slice(3)}`;
 
 /**
  * How long a call waits for the person to approve the Agent before it answers "still waiting, call again".
@@ -130,10 +139,48 @@ export async function startAgentHost(o: AgentHostOptions) {
   const notApproved = (a: AgentRecord, msg: string, fix: string) =>
     new ReflexError("not_approved", [{ code: "not_approved", msg, fix }]);
 
-  async function authorize(who: Who, signal: AbortSignal, progress?: (p: { elapsed_s: number; timeout_s: number; message: string }) => void): Promise<Identity> {
+  function caller(who: Who): { name: string; credential: string } {
     const name = String(who?.name ?? "").trim().slice(0, 80);
     const credential = String(who?.credential ?? "");
     if (!name || credential.length < 32) throw new ReflexError("invalid_input", [{ code: "invalid_input", msg: "An Agent must say its name and present its credential.", fix: "Connect through `reflex mcp` or the reflex CLI." }]);
+    return { name, credential };
+  }
+
+  /** The `connect` tool: a code for the person to type on their iPad, which pairs it and approves this Agent. */
+  function connect(who: Who): Record<string, any> {
+    let name: string, credential: string;
+    try {
+      ({ name, credential } = caller(who));
+    } catch (e) {
+      return { ok: false, ...(e as ReflexError).body };
+    }
+    let a = o.catalog.byCredential(credential);
+    if (!a) {
+      a = o.catalog.request(name, credential);
+      o.log("agent_requested", { agent: a.id, name, via: "connect" });
+    }
+    const ipads = o.ipads?.() ?? [];
+    if (a.status === "approved" && ipads.length)
+      return { connected: true, ipads, next: "You're connected. Call wait_for_user to receive the person's next Send, and call it again after you answer each one." };
+    if (!o.code) return { ok: false, reason: "unavailable", errors: [{ code: "unavailable", msg: "This Link can't make pairing codes.", fix: "Restart the Link without --no-lan." }] };
+    let c: { code: string; expires: number };
+    try {
+      c = o.code(a.id);
+    } catch (e) {
+      const err = e as Error & { fix?: string };
+      return { ok: false, reason: "unavailable", errors: [{ code: "unavailable", msg: err.message, fix: err.fix ?? "" }] };
+    }
+    o.log("code_given", { agent: a.id, name: a.name });
+    return {
+      code: spaced(c.code),
+      expires_in_s: Math.round((c.expires - Date.now()) / 1000),
+      tell_the_person: `Open Reflex on your iPad, tap Pair with Mac, and type ${spaced(c.code)}. The iPad needs to be on the same Wi-Fi as this Mac. The code works once, for 10 minutes.`,
+      next: "Tell the person the code exactly as tell_the_person says. Then call wait_for_user: it returns once they have typed the code and pressed Send. Keep calling it after you answer each Send.",
+    };
+  }
+
+  async function authorize(who: Who, signal: AbortSignal, progress?: (p: { elapsed_s: number; timeout_s: number; message: string }) => void): Promise<Identity> {
+    const { name, credential } = caller(who);
     let a = o.catalog.byCredential(credential);
     if (!a) {
       a = o.catalog.request(name, credential);
@@ -162,7 +209,8 @@ export async function startAgentHost(o: AgentHostOptions) {
       o.remind?.(a);
       const ms = approvalWaitMs();
       const started = Date.now();
-      const message = `Waiting for you to tap Allow on your iPad for ${a.name}`;
+      const code = o.codeFor?.(a.id);
+      const message = code ? `Waiting for you to type ${spaced(code)} in Reflex on your iPad` : `Waiting for you to tap Allow on your iPad for ${a.name}`;
       const tick = setInterval(() => progress?.({ elapsed_s: Math.round((Date.now() - started) / 1000), timeout_s: ms / 1000, message }), 10_000);
       try {
         await o.decision(a.id, ms, signal);
@@ -170,6 +218,20 @@ export async function startAgentHost(o: AgentHostOptions) {
         clearInterval(tick);
       }
       a = o.catalog.agent(a.id)!;
+    }
+    if (a.status === "pending" && o.codeFor?.(a.id)) {
+      const code = spaced(o.codeFor(a.id)!);
+      throw new ReflexError(
+        "not_approved",
+        [
+          {
+            code: "not_approved",
+            msg: `Still waiting for the person to type the code ${code} in Reflex on their iPad. Nothing is wrong.`,
+            fix: `If they haven't yet, tell them: "Open Reflex on your iPad, tap Pair with Mac, and type ${code}." Then call wait_for_user again: you're let in as soon as they type it.`,
+          },
+        ],
+        ["Call wait_for_user again: it waits for the code."],
+      );
     }
     if (a.status === "pending") {
       const asked = Math.max(1, Math.round((Date.now() - a.requested_at) / 60_000));
@@ -179,7 +241,7 @@ export async function startAgentHost(o: AgentHostOptions) {
           {
             code: "not_approved",
             msg: `Still waiting for the person to tap Allow for ${a.name} on their iPad (asked ${asked} min ago). Nothing is wrong; the question stays up until they answer.`,
-            fix: `Tell the person: "Tap Allow in Reflex on your iPad." Then call this tool again. Don't give up or switch tools: you are let in as soon as they tap.`,
+            fix: `Call connect to get a code for the person to type on their iPad, or tell them: "Tap Allow in Reflex on your iPad." Then call this tool again: you are let in as soon as they do.`,
           },
         ],
         ["Call the same tool again: it waits for the person's answer."],
@@ -258,6 +320,6 @@ export async function startAgentHost(o: AgentHostOptions) {
     return { ok: true, ...shown(pushes.get(t.id)!), secret, next: "Keep the secret in your receiver to check each request's reflex-signature. It is not shown again; adding the same URL again makes a new one." };
   };
 
-  const server = await serveHost({ core, socket: o.socket, token: o.token, authorize, listen, adapters: manage, log: o.log });
+  const server = await serveHost({ core, socket: o.socket, token: o.token, authorize, connect, listen, adapters: manage, log: o.log });
   return { core, server, pushes, dispatcher, live: (t: PushTarget) => adapters.some((a) => a.name === t.adapter && a.liveSince(t) !== undefined) };
 }

@@ -392,57 +392,158 @@ public final class LinkSync {
 
     // MARK: Pairing and connecting
 
-    /// Pairs with the Link whose code was scanned or typed, then stays connected.
+    /// Pairs with the Link whose code was typed (6 digits, found over Bonjour) or pasted (a reflex://pair link),
+    /// then stays connected.
     public func pair(code: String) async throws {
+        if let digits = PairingOffer.typedCode(code) { return try await pair(typed: digits) }
         let offer = try PairingOffer(code)
         state = .connecting
-        // A device that holds nothing of its own yet becomes the offering person's device (ADR-0008).
-        identity.person = offer.person
         var errors: [String] = []
         for host in offer.hosts {
             let conn = FramedConnection(endpoint: .hostPort(host: .init(host), port: .init(rawValue: offer.port)!))
             do {
                 try await conn.start()
-                let s = try await handshake(conn, me: identity, pairedKey: nil, offer: offer)
-                // Spaces made under another person (an earlier Link) aren't this person's to sync: the new Link
-                // would refuse every change in them. They stay here, offered to no Link.
-                if let old = person, old.id != offer.person.id {
-                    beforeChangingPerson?()
-                    // Moved to their own folder and key: the new Link's Library ("library") and any Space of its with
-                    // the same ID get fresh replicas, and these are never offered to it.
-                    var shown = 0
-                    for id in spaces.filter({ localOnly[$0] == nil }) {
-                        let key = Self.keep(id)
-                        localOnly[key] = old.name.isEmpty ? old.id : old.name
-                        shown += 1
-                    }
-                    saveLocalOnly()
-                    loadPages()
-                    if shown > 0 { localOnlyNotice = (shown, old.name.isEmpty ? "an earlier pairing" : old.name) }
-                    decisions = [:]
-                    saveDecisions()
-                }
-                changedHosts = []
-                paired = Paired(device: s.peer.device, key: s.peer.key, name: offer.name, person: offer.person, hosts: offer.hosts, port: offer.port)
-                Self.writeSecret(paired!, to: Self.linkDir.appending(path: "paired.json"))
-                person = offer.person
-                Self.writeSecret(Saved(key: B64.encode(identity.key.rawRepresentation), actor: actor, name: identity.name, person: offer.person), to: Self.linkDir.appending(path: "identity.json"))
-                linkLog.info("Paired with \(offer.name, privacy: .public) at \(host, privacy: .public)")
-                // The peer-to-peer browser looks for one Link by its device ID: a new Link needs a new one.
-                p2p?.stop()
-                p2p = nil
-                discovered = nil
-                browse()
-                for old in paths.all where old.peer.device != s.peer.device { old.close() }
-                bind(s)
+                try await pair(conn, offer: offer, hosts: offer.hosts, port: offer.port)
                 return
             } catch {
                 conn.close()
                 errors.append("\(host): \(error.localizedDescription)")
             }
         }
-        state = .offline("Could not pair")
+        state = paired == nil ? .unpaired : .offline("Could not pair")
         throw LinkError.unreachable("Could not reach the Link. \(errors.joined(separator: "; "))")
+    }
+
+    /// A typed code: finds every Link on this network (and nearby, over peer-to-peer Wi-Fi) and tries the code on each.
+    private func pair(typed code: String) async throws {
+        let before = state
+        state = .connecting
+        let found = await findLinks()
+        guard !found.isEmpty else {
+            state = paired == nil ? .unpaired : before
+            throw LinkError.unreachable("No Mac with Reflex found. Make sure this iPad is on the same Wi-Fi as your Mac, and that Reflex is allowed to find devices on your local network (Settings › Privacy & Security › Local Network).")
+        }
+        var wrong = false
+        var errors: [String] = []
+        for f in found {
+            let conn = FramedConnection(endpoint: f.endpoint, peerToPeer: f.interface)
+            do {
+                try await conn.start(timeout: 5)
+                let offer = PairingOffer(code: code, device: f.device, key: f.key, name: f.name, person: f.person)
+                let at = conn.resolvedIPv4
+                try await pair(conn, offer: offer, hosts: at.map { [$0.host] } ?? [], port: at?.port ?? 0)
+                return
+            } catch {
+                conn.close()
+                if "\(error.localizedDescription)".contains("wrong pairing code") { wrong = true }
+                errors.append("\(f.name): \(error.localizedDescription)")
+            }
+        }
+        state = paired == nil ? .unpaired : before
+        if wrong { throw LinkError.badCode("That code didn't work. Check the 6 digits, or ask your agent for a new code.") }
+        throw LinkError.unreachable("Could not pair. \(errors.joined(separator: "; "))")
+    }
+
+    struct FoundLink: Sendable {
+        var endpoint: NWEndpoint
+        var interface: NWInterface?
+        var device: String
+        var key: String
+        var name: String
+        var person: Person
+
+        /// A Bonjour result whose record says who the Link is (a key and a person); over peer-to-peer, only on that interface.
+        nonisolated static func read(_ r: NWBrowser.Result, p2p: Bool) -> FoundLink? {
+            guard case .bonjour(let txt) = r.metadata, let device = txt["dev"], let key = txt["k"], let pi = txt["pi"] else { return nil }
+            let iface = p2p ? r.interfaces.first(where: { $0.name.hasPrefix("awdl") || $0.name.hasPrefix("llw") }) : nil
+            if p2p && iface == nil { return nil }
+            return FoundLink(endpoint: r.endpoint, interface: iface, device: device, key: key, name: txt["n"] ?? "your Mac", person: Person(id: pi, name: txt["pn"] ?? ""))
+        }
+    }
+
+    @MainActor private final class Found {
+        var lan: [String: FoundLink] = [:]
+        var near: [String: FoundLink] = [:]
+    }
+
+    /// The Links that answer on Bonjour within a few seconds: on the local network, then over peer-to-peer Wi-Fi.
+    /// Only Links whose record says who they are count; the handshake proves the key.
+    private func findLinks(seconds: Double = 4) async -> [FoundLink] {
+        let found = Found()
+        let a = NWBrowser(for: .bonjourWithTXTRecord(type: "_reflex-link._tcp", domain: nil), using: .tcp)
+        a.browseResultsChangedHandler = { results, _ in
+            let links = results.compactMap { FoundLink.read($0, p2p: false) }
+            Task { @MainActor in for f in links { found.lan[f.device] = f } }
+        }
+        a.start(queue: .main)
+        var b: NWBrowser?
+        if !Self.simulator {
+            let params = NWParameters()
+            params.includePeerToPeer = true
+            let nb = NWBrowser(for: .bonjourWithTXTRecord(type: "_reflex-p2p._tcp", domain: nil), using: params)
+            nb.browseResultsChangedHandler = { results, _ in
+                let links = results.compactMap { FoundLink.read($0, p2p: true) }
+                Task { @MainActor in for f in links { found.near[f.device] = f } }
+            }
+            nb.start(queue: .main)
+            b = nb
+        }
+        // Stop early once a Link is found and others have had a moment to show up too.
+        let start = Date()
+        while Date().timeIntervalSince(start) < seconds {
+            try? await Task.sleep(for: .milliseconds(250))
+            if !found.lan.isEmpty && Date().timeIntervalSince(start) > 1.5 { break }
+        }
+        a.cancel()
+        b?.cancel()
+        // The paired Link first, then the rest of the LAN, then peer-to-peer for Links not seen on the LAN.
+        let mine = paired?.device
+        let ordered = found.lan.values.sorted { ($0.device == mine ? 0 : 1, $0.name) < ($1.device == mine ? 0 : 1, $1.name) }
+        return ordered + found.near.values.filter { found.lan[$0.device] == nil }
+    }
+
+    /// Pairs over a connected channel with this offer, then stays connected.
+    private func pair(_ conn: FramedConnection, offer: PairingOffer, hosts: [String], port: UInt16) async throws {
+        // A device that holds nothing of its own yet becomes the offering person's device (ADR-0008).
+        let wasPerson = identity.person
+        identity.person = offer.person
+        do {
+            let s = try await handshake(conn, me: identity, pairedKey: nil, offer: offer)
+            // Spaces made under another person (an earlier Link) aren't this person's to sync: the new Link
+            // would refuse every change in them. They stay here, offered to no Link.
+            if let old = person, old.id != offer.person.id {
+                beforeChangingPerson?()
+                // Moved to their own folder and key: the new Link's Library ("library") and any Space of its with
+                // the same ID get fresh replicas, and these are never offered to it.
+                var shown = 0
+                for id in spaces.filter({ localOnly[$0] == nil }) {
+                    let key = Self.keep(id)
+                    localOnly[key] = old.name.isEmpty ? old.id : old.name
+                    shown += 1
+                }
+                saveLocalOnly()
+                loadPages()
+                if shown > 0 { localOnlyNotice = (shown, old.name.isEmpty ? "an earlier pairing" : old.name) }
+                decisions = [:]
+                saveDecisions()
+            }
+            changedHosts = []
+            paired = Paired(device: s.peer.device, key: s.peer.key, name: offer.name, person: offer.person, hosts: hosts, port: port)
+            Self.writeSecret(paired!, to: Self.linkDir.appending(path: "paired.json"))
+            person = offer.person
+            Self.writeSecret(Saved(key: B64.encode(identity.key.rawRepresentation), actor: actor, name: identity.name, person: offer.person), to: Self.linkDir.appending(path: "identity.json"))
+            linkLog.info("Paired with \(offer.name, privacy: .public) at \(conn.remote, privacy: .public)")
+            // The peer-to-peer browser looks for one Link by its device ID: a new Link needs a new one.
+            p2p?.stop()
+            p2p = nil
+            discovered = nil
+            browse()
+            for old in paths.all where old.peer.device != s.peer.device { old.close() }
+            bind(s)
+        } catch {
+            identity.person = wasPerson
+            throw error
+        }
     }
 
     /// Finds the paired Link again over Bonjour; discovery is never authentication.

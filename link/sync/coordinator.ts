@@ -110,6 +110,8 @@ export class Coordinator {
   onUnbound: (p: Peer) => void = () => {};
   /** Whether a code from this source makes the iPad that scans it approve now (link.ts): only while none does. */
   grantsApproval: (source: "terminal" | "admin") => boolean = () => false;
+  /** A device paired (or connected again) with a typed code; `agents` asked for that code. */
+  onCodePaired: (d: PairedDevice, agents: string[]) => void = () => {};
   /** What to do so an iPad may approve, for logs and for the iPad (link.ts). */
   approvalHint: () => string = () => "";
   onSend: (send: NativeSend) => void = () => { throw new Error("Send receiver is not ready"); };
@@ -180,13 +182,30 @@ export class Coordinator {
     return {
       pairedKey: (device: string) => this.#catalog.device(device)?.key,
       offerSecret: (offer: string) => this.#offers.secret(offer),
+      liveCode: () => this.#offers.liveCode(),
+      codeFailed: () => {
+        this.#offers.codeFailed();
+        this.#log(this.#offers.liveCode() ? "someone typed a wrong pairing code" : "a pairing code was typed wrong too many times and stopped working");
+      },
     };
   }
 
   async #accept(path: Path): Promise<void> {
     try {
       const r = await handshake(path, this.#me, this.#trust());
-      if (r.offer) {
+      if (r.code) {
+        // A typed code: the iPad that typed it may approve, and the Agents that asked for it are approved (the
+        // person read the code off that Agent and typed it, which is the approval).
+        const agents = this.#offers.consumeCode(r.peer.device);
+        if (r.paired) this.#remember(r.peer, null, "code");
+        const d = this.#catalog.device(r.peer.device)!;
+        if (d.kind === "ipad" && d.person.id === this.#me.person.id && !mayApprove(d, this.#me.person.id)) {
+          const { approver_asked: _, ...rest } = d;
+          this.#catalog.pairDevice({ ...rest, approves: true });
+        }
+        if (!r.paired) for (const f of this.#onPaired) f(this.#catalog.device(r.peer.device)!);
+        this.onCodePaired(this.#catalog.device(r.peer.device)!, agents);
+      } else if (r.offer) {
         // A code is single-use, even when the device that used it was already paired.
         const source = this.#offers.source(r.offer) ?? "terminal";
         this.#offers.consume(r.offer, r.peer.device);

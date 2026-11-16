@@ -1,6 +1,5 @@
 import ReflexLink
 import SwiftUI
-import VisionKit
 
 /// What the status capsule says about the Mac and the approved Agents.
 @MainActor struct LinkStatus {
@@ -29,7 +28,7 @@ import VisionKit
         case .connecting: "Connecting to \(macName)…"
         case .connected: macName
         case .offline: "\(macName) is offline"
-        case .linkChanged: "Scan the code again"
+        case .linkChanged: "Pair again with a new code"
         }
     }
 }
@@ -70,27 +69,23 @@ struct StatusCapsule: View {
         case .unpaired: "Pair with Mac"
         case .offline: compact ? "Offline" : "\(s.macName) offline"
         case .connecting: "Connecting…"
-        case .linkChanged: "Scan again"
+        case .linkChanged: "Pair again"
         case .connected: s.macName
         }
     }
 }
 
-/// Pairing and approvals: the Mac, the Agents, and pairing a new Mac by scanning the code
-/// `reflex setup` shows (or typing it where there is no camera, such as the Simulator).
+/// Pairing and approvals: the Mac, the Agents, and pairing a Mac by typing the 6-digit code an Agent gives
+/// (its `connect` tool) or `reflex pair` shows.
 struct PairSheet: View {
     let link: LinkSync
     @State var code: String
-    @State private var scanning = false
     @State private var busy = false
     @State private var error: String?
-    @State private var typing = false
     @State private var renamingAgent: String?
     @State private var renameDraft = ""
     @AppStorage("agentNicknames") private var nicknamesData = Data()
     @Environment(\.dismiss) private var dismiss
-
-    private var canScan: Bool { DataScannerViewController.isSupported && DataScannerViewController.isAvailable }
 
     var body: some View {
         let s = LinkStatus(link: link)
@@ -168,39 +163,33 @@ struct PairSheet: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Image("Logo").resizable().frame(width: 56, height: 56).clipShape(.rect(cornerRadius: 13, style: .continuous)).accessibilityHidden(true)
                             Text("Pair with your Mac").font(.title3.bold())
-                            Text("On your Mac, run `reflex setup`. It shows a QR code. Scan it here once, and your Sends go to the Agents you allow.")
+                            Text("Ask your agent on the Mac to connect your iPad. It gives you a 6-digit code: type it here.")
                                 .foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 6)
                     }
-                    // No camera: no Scan row at all, and typing the code is the way in.
-                    if canScan {
-                        Button { scanning = true } label: {
-                            Label("Scan QR Code", systemImage: "qrcode.viewfinder")
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .accessibilityIdentifier("scan-button")
-                    }
-                    DisclosureGroup(canScan ? "Enter the code instead" : "Enter the pairing code", isExpanded: $typing) {
-                        TextField("reflex://pair?…", text: $code, axis: .vertical)
-                            .font(.system(.body, design: .monospaced))
-                            .textInputAutocapitalization(.never)
+                    HStack(spacing: 12) {
+                        TextField("000 000", text: Binding(get: { spaced(code) }, set: { code = digitsOnly($0) }))
+                            .font(.system(size: 34, weight: .semibold, design: .monospaced))
+                            .keyboardType(.numberPad)
+                            .textContentType(.oneTimeCode)
                             .autocorrectionDisabled()
-                            .lineLimit(2 ... 6)
                             .accessibilityIdentifier("pair-code")
+                            .onChange(of: code) { _, c in if c.count == 6, !busy { Task { await pair(c) } } }
                         Button {
                             Task { await pair(code) }
                         } label: {
                             if busy { ProgressView() } else { Text("Pair") }
                         }
-                        .disabled(busy || code.isEmpty)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(busy || code.count != 6)
                         .accessibilityIdentifier("pair-button")
                     }
-                    .accessibilityIdentifier("type-code")
+                    .padding(.vertical, 4)
                 } header: {
-                    Text(s.paired ? "Pair a Different Mac" : "")
+                    Text(s.paired ? "Pair Again or Another Mac" : "Pairing Code")
                 } footer: {
-                    Text(LocalizedStringKey((s.paired ? "Run `reflex pair` on the Mac for a new code." : "Pairing never approves an Agent by itself: each one asks first.")))
+                    Text("Your iPad looks for the Mac on this Wi-Fi, and nearby. Typing the code also lets in the agent that gave it to you.")
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("pair-error") }
@@ -209,21 +198,11 @@ struct PairSheet: View {
             .navigationTitle(s.paired ? "Connection" : "Connect to Your Mac")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .sheet(isPresented: $scanning) {
-                QRScanner { found in
-                    scanning = false
-                    code = found
-                    Task { await pair(found) }
-                }
-                .ignoresSafeArea()
-            }
             .onAppear {
-                // A code typed earlier stays until pairing works.
-                if code.isEmpty, link.destinationKey == nil { code = UserDefaults.standard.string(forKey: "pairCodeDraft") ?? "" }
-                if !code.isEmpty || !canScan { typing = true }
+                // A pasted or opened reflex://pair link pairs straight away; a stray value is cleared.
+                if code.hasPrefix("reflex://") { let c = code; code = ""; Task { await pair(c) } }
+                else { code = digitsOnly(code) }
             }
-            .onChange(of: code) { _, c in UserDefaults.standard.set(c, forKey: "pairCodeDraft") }
-            .onChange(of: link.destinationKey) { _, k in if k != nil { UserDefaults.standard.removeObject(forKey: "pairCodeDraft") } }
             .alert("Rename Agent", isPresented: Binding(get: { renamingAgent != nil }, set: { if !$0 { renamingAgent = nil } })) {
                 TextField("Name", text: $renameDraft).accessibilityIdentifier("rename-field")
                 Button("Cancel", role: .cancel) {}
@@ -240,7 +219,7 @@ struct PairSheet: View {
             return "Connected over \(path)"
         case .connecting: return "Connecting…"
         case .offline: return "Not reachable right now. Sends wait here until it's back."
-        case .linkChanged: return "Its pairing was reset. Scan its code again."
+        case .linkChanged: return "Its pairing was reset. Ask your agent for a new code and type it below."
         case .unpaired: return "Not paired"
         }
     }
@@ -303,41 +282,13 @@ struct PairSheet: View {
         defer { busy = false }
         do {
             try await link.pair(code: text)
+            code = ""
             dismiss()
         } catch {
             self.error = error.localizedDescription
         }
     }
-}
 
-/// The camera, looking for a reflex://pair code.
-struct QRScanner: UIViewControllerRepresentable {
-    let found: (String) -> Void
-
-    func makeUIViewController(context: Context) -> DataScannerViewController {
-        let vc = DataScannerViewController(recognizedDataTypes: [.barcode(symbologies: [.qr])], isHighlightingEnabled: true)
-        vc.delegate = context.coordinator
-        try? vc.startScanning()
-        return vc
-    }
-
-    func updateUIViewController(_ vc: DataScannerViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(found: found) }
-
-    final class Coordinator: NSObject, DataScannerViewControllerDelegate {
-        let found: (String) -> Void
-        var done = false
-        init(found: @escaping (String) -> Void) { self.found = found }
-
-        func dataScanner(_ scanner: DataScannerViewController, didAdd items: [RecognizedItem], allItems: [RecognizedItem]) {
-            for item in items {
-                if case .barcode(let b) = item, let s = b.payloadStringValue, s.hasPrefix("reflex://pair") || s.hasPrefix("reflex://invite"), !done {
-                    done = true
-                    scanner.stopScanning()
-                    found(s)
-                }
-            }
-        }
-    }
+    private func digitsOnly(_ s: String) -> String { String(s.filter { $0.isASCII && $0.isNumber }.prefix(6)) }
+    private func spaced(_ d: String) -> String { d.count > 3 ? "\(d.prefix(3)) \(d.dropFirst(3))" : d }
 }

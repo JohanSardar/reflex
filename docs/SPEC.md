@@ -66,8 +66,8 @@ It is for people who direct coding agents and think better with a pen. It feels 
 - A Send made while the Mac is out of reach waits on the iPad and goes out once the Mac is back.
 
 ### Pairing and connection
-- On the Mac, `reflex setup` gets everything ready and shows a pairing code. You scan it once on the iPad.
-- The first time an agent connects, the iPad asks whether to allow it. Pairing never approves an agent by itself.
+- You add Reflex to your agent with one line, and tell it "connect my iPad". It gives you a 6-digit code, and you type it once on the iPad.
+- Typing the code also lets in the agent that gave it. Any other agent that asks later needs Allow on the iPad.
 - A small status capsule in one corner shows whether the Mac is connected and which agents are approved. Tapping it opens pairing and approvals. The pairing sheet appears only the first time.
 
 ### Delivery on the Mac
@@ -93,9 +93,9 @@ It is for people who direct coding agents and think better with a pen. It feels 
 3. Codex gets the screen and your words.
 
 **Setting it up the first time.**
-1. You run `reflex setup` on the Mac.
-2. You install Reflex on the iPad and scan the code it shows.
-3. Claude Code connects, the iPad asks whether to allow it, and you tap Allow.
+1. You paste one line into Claude Code to add Reflex, start `claude` and say "connect my iPad".
+2. You install Reflex on the iPad and type the 6-digit code Claude Code gives you.
+3. You draw and press Send, and Claude Code answers. There was no second approval and no flag to start it with.
 
 **Keeping boards in order.**
 1. You keep a folder per project and star the boards you use daily.

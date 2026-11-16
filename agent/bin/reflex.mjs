@@ -10,7 +10,7 @@ if (cmd === "link") {
 } else if (cmd === "setup" || cmd === "pair") {
   // First-time setup and a fresh pairing code (link/bin/setup.ts). A fresh clone has no packages and no
   // dependencies yet: get them first, so this one command is all it takes.
-  if (cmd === "setup") await prepare();
+  if (cmd === "setup" && !process.env.REFLEX_BIN) await prepare(); // the single-file build has nothing to install
   process.argv = [process.argv[0], `reflex ${cmd}`, cmd, ...rest];
   await import("../../link/bin/setup.ts");
 } else {
@@ -34,7 +34,7 @@ async function prepare() {
       process.exit(1);
     }
   };
-  if (!existsSync(at("node_modules/qrcode"))) run("installing packages (npm install)", "npm", ["install", "--no-audit", "--no-fund"]);
+  if (!existsSync(at("node_modules/bonjour-service"))) run("installing packages (npm install)", "npm", ["install", "--no-audit", "--no-fund"]);
   // Apple peer-to-peer Wi-Fi: the iPad reaches this Mac even on a network that keeps devices apart (campus, hotel).
   if (process.platform === "darwin" && !existsSync(at("link/transports/p2p/.build/release/reflex-p2p"))) {
     try {

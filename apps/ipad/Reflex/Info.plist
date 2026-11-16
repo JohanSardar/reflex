@@ -35,7 +35,7 @@
 		<string>_reflex-p2p._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Reflex uses the camera to scan the pairing code your Reflex Link shows, and to take photos you add to a Space.</string>
+	<string>Reflex uses the camera to take photos you add to a board.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Reflex finds and syncs with the Reflex Link on your computer over the local network, or directly over peer-to-peer Wi-Fi.</string>
 	<key>NSMicrophoneUsageDescription</key>

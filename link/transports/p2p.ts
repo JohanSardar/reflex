@@ -82,11 +82,11 @@ class Helper {
   #log: (m: string) => void;
   readonly exited: Promise<string>;
 
-  constructor(args: string[], on: { ready: (port: number) => void; path: (p: Path) => void; log: (m: string) => void }) {
+  constructor(args: string[], on: { ready: (port: number) => void; path: (p: Path) => void; log: (m: string) => void; txt?: Record<string, string> }) {
     this.#onReady = on.ready;
     this.#onPath = on.path;
     this.#log = on.log;
-    this.#child = spawn(HELPER, args, { stdio: ["pipe", "pipe", "inherit"] });
+    this.#child = spawn(HELPER, args, { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, REFLEX_P2P_TXT: JSON.stringify(on.txt ?? {}) } });
     this.#child.stdout!.on("data", (d: Buffer) => this.#data(d));
     this.#child.stdin!.on("error", () => {}); // the helper died; `exited` says so
     this.exited = new Promise((r) => {
@@ -151,9 +151,11 @@ export class P2pTransport implements Transport {
   #log: (m: string) => void;
   #helper: Helper | null = null;
   #closing = false;
+  #txt: Record<string, string>;
 
-  constructor(opts: { device: string; port?: number; log: (m: string) => void }) {
+  constructor(opts: { device: string; port?: number; log: (m: string) => void; txt?: Record<string, string> }) {
     this.#device = opts.device;
+    this.#txt = opts.txt ?? {};
     this.#port = opts.port ?? 0;
     this.#log = opts.log;
   }
@@ -178,6 +180,7 @@ export class P2pTransport implements Transport {
           },
           path: onPath,
           log: this.#log,
+          txt: this.#txt,
         });
         this.#helper = h;
         void h.exited.then((why) => {

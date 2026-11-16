@@ -32,7 +32,7 @@ export interface PairedDevice {
    * person's shell can make. "invite": another person's Link, met through an invite to a shared Space (link/sharing.ts);
    * it syncs only those Spaces.
    */
-  via?: "offer" | "admin-offer" | "join" | "invite";
+  via?: "offer" | "admin-offer" | "join" | "invite" | "code";
   /**
    * Whether this iPad's Allow and Deny count (mayApprove). Set when it pairs: the first approving iPad is the one paired
    * from the Link's terminal, or with a `reflex pair` code while the first-pairing window is open (link.ts). Once one
@@ -50,7 +50,7 @@ export interface PairedDevice {
 
 /** Whether this device's Allow and Deny count: an iPad of the person's that paired as the person. */
 export function mayApprove(d: PairedDevice | undefined, person: string): boolean {
-  return d?.kind === "ipad" && d.person.id === person && (d.approves ?? d.via === "offer");
+  return d?.kind === "ipad" && d.person.id === person && (d.approves ?? (d.via === "offer" || d.via === "code"));
 }
 
 export type AgentStatus = "pending" | "approved" | "denied" | "revoked";

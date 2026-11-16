@@ -13,6 +13,20 @@
 // invite to a shared Space (link/sharing.ts), which makes it a peer for that
 // Space only. Everything after the handshake is encrypted with keys from the
 // X25519 exchange.
+//
+// A typed 6-digit code (`pair: "code"`) is too short to use as an HMAC key:
+// whoever saw one MAC could try all million codes offline. So the code is
+// checked one digit per round, commit before reveal (Bluetooth's passkey entry):
+//
+//   I → R  commit  HMAC(nI, "code i <round> <digit>" ‖ transcript)
+//   R → I  commit  HMAC(nR, "code r <round> <digit>" ‖ transcript)
+//   I → R  reveal  nI        R checks it against its own digit
+//   R → I  reveal  nR        I checks it against its own digit
+//
+// Neither side learns a digit before committing to its own guess of it, so
+// someone in the middle gets through a round with 1 chance in 10, and through
+// all six with 1 in a million. Then the code and transcript make the secret
+// the auth MACs use, as for a scanned code.
 import {
   b64,
   deviceIdFor,
@@ -28,6 +42,7 @@ import {
   verifyFrom,
   type DeviceKey,
 } from "./crypto.ts";
+import { randomBytes } from "node:crypto";
 import type { Person } from "./catalog.ts";
 import type { Path, PathMeasurements, Priority } from "../transports/transport.ts";
 
@@ -59,7 +74,10 @@ export interface Trust {
   pairedKey(device: string): string | undefined;
   /** The secret of a live pairing offer, if `offer` names one (responder side). */
   offerSecret(offer: string): Uint8Array | undefined;
-  /** The secret of a live invite, if `invite` names one (responder side). */
+  /** The live typed code, if there is one (responder side). */
+  liveCode?(): string | undefined;
+  /** A typed code that failed a round (responder side): counts toward its limit. */
+  codeFailed?(): void;
 }
 
 /** A pairing offer read from a QR code (initiator side). */
@@ -68,7 +86,8 @@ export interface ScannedOffer {
   device: string;
   key: string;
   secret: Uint8Array;
-  /** An invite to a shared Space rather than a pairing code. */
+  /** A typed 6-digit code instead of a scanned secret: `offer` is "code" and `secret` is unused. */
+  code?: string;
 }
 
 export interface Me {
@@ -110,7 +129,8 @@ export interface HandshakeResult {
   /** True when this connection paired a new device (the caller stores it). */
   paired: boolean;
   offer?: string;
-  /** The invite this connection presented (responder) or used (initiator). */
+  /** True when the device paired with a typed code. */
+  code?: boolean;
 }
 
 /** A failed handshake, with what the other side said about itself if its hello arrived (for a log line that names it). */
@@ -144,7 +164,7 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
     person: me.person,
     name: me.name,
     kind: me.kind,
-    ...(scanned && role === "i" ? { pair: scanned.offer } : {}),
+    ...(scanned && role === "i" ? { pair: scanned.code !== undefined ? "code" : scanned.offer } : {}),
   };
   const mine = enc(hello);
   let theirsRaw: Uint8Array;
@@ -173,6 +193,17 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
       throw new Error("the device that answered is not the one in the pairing code");
     secret = scanned.secret;
     offer = scanned.offer;
+    if (scanned.code !== undefined) secret = await codeRounds(path, role, scanned.code, transcript);
+  } else if (role === "r" && theirs.pair === "code") {
+    const code = trust.liveCode?.();
+    if (!code) throw new Error("no pairing code is live on this Link (they last 10 minutes; ask your agent for a new one)");
+    try {
+      secret = await codeRounds(path, role, code, transcript);
+    } catch (e) {
+      if (e instanceof WrongCode) trust.codeFailed?.();
+      throw e;
+    }
+    offer = "code";
   } else if (role === "r" && typeof theirs.pair === "string") {
     secret = trust.offerSecret(theirs.pair);
     if (!secret) throw new Error("unknown or expired pairing offer");
@@ -209,7 +240,43 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
     new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript),
   );
   const kind = theirs.kind === "ipad" ? "ipad" : "link";
-  return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind }, paired, offer };
+  return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind }, paired, offer, ...(offer === "code" ? { code: true } : {}) };
+}
+
+/** A typed code that doesn't match, as opposed to a connection that broke. */
+export class WrongCode extends Error {}
+
+/** The six commit-then-reveal rounds (see the top of this file). Returns the secret the auth MACs use. */
+async function codeRounds(path: Path, role: "i" | "r", code: string, transcript: Buffer): Promise<Buffer> {
+  if (!/^\d{6}$/.test(code)) throw new WrongCode("a pairing code is 6 digits");
+  const other = role === "i" ? "r" : "i";
+  const commit = (n: Uint8Array, who: string, round: number, digit: string): string =>
+    mac(n, Buffer.concat([Buffer.from(`${PROTOCOL} code ${who} ${round} ${digit} `), transcript]));
+  const want = async (t: string, field: string): Promise<string> => {
+    const { msg } = await nextJson(path, 10_000);
+    if (msg.t !== t || typeof msg[field] !== "string") throw new Error(`expected ${t} during the code check`);
+    return msg[field] as string;
+  };
+  for (let round = 0; round < 6; round++) {
+    const digit = code[round];
+    const n = randomBytes(16);
+    const mine = commit(n, role, round, digit);
+    let theirC: string;
+    if (role === "i") {
+      await path.send(enc({ t: "commit", c: mine }), "control");
+      theirC = await want("commit", "c");
+      await path.send(enc({ t: "reveal", n: b64(n) }), "control");
+      const theirN = unb64(await want("reveal", "n"));
+      if (!macEqual(theirC, commit(theirN, other, round, digit))) throw new WrongCode("wrong pairing code");
+    } else {
+      theirC = await want("commit", "c");
+      await path.send(enc({ t: "commit", c: mine }), "control");
+      const theirN = unb64(await want("reveal", "n"));
+      if (!macEqual(theirC, commit(theirN, other, round, digit))) throw new WrongCode("wrong pairing code");
+      await path.send(enc({ t: "reveal", n: b64(n) }), "control");
+    }
+  }
+  return sha256(PROTOCOL, " code secret ", code, transcript);
 }
 
 export interface Message {

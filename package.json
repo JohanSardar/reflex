@@ -1,7 +1,15 @@
 {
   "name": "reflex",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "Send your marks, words and screen from an iPad to Claude Code, Codex or any MCP agent.",
+  "bin": {
+    "reflex": "dist/reflex.mjs"
+  },
+  "files": [
+    "dist/"
+  ],
   "workspaces": [
     "agent",
     "link",
@@ -11,11 +19,13 @@
     "build:p2p": "swift build -c release --package-path link/transports/p2p",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p agent --noEmit && tsc -p relay --noEmit",
     "reflex-link": "node link/bin/reflex-link.ts",
-    "reflex-relay": "node relay/node/bin/reflex-relay.ts"
+    "reflex-relay": "node relay/node/bin/reflex-relay.ts",
+    "build": "node agent/build.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261024.1",
     "@types/node": "26.6.5",
+    "esbuild": "0.28.2",
     "typescript": "7.0.2",
     "wrangler": "4.152.0"
   }
