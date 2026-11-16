@@ -107,6 +107,12 @@ final class FramedConnection: FrameChannel, @unchecked Sendable {
     func close() {
         conn.cancel()
     }
+
+    /// The IPv4 address and port a Bonjour endpoint resolved to, once connected: kept to dial the Link directly later.
+    var resolvedIPv4: (host: String, port: UInt16)? {
+        guard case .hostPort(let host, let port) = conn.currentPath?.remoteEndpoint, case .ipv4(let a) = host else { return nil }
+        return ("\(a)".split(separator: "%").first.map(String.init) ?? "\(a)", port.rawValue)
+    }
 }
 
 /// Resumes a continuation at most once.
@@ -196,6 +202,9 @@ struct DeviceIdentity {
     var device: String { deviceID(for: publicRaw) }
 }
 
+/// Set once this side has revealed a digit of a typed code to the other device (`handshake` with a code).
+final class CodeExposure: @unchecked Sendable { var revealed = false }
+
 /// The handshake, as the side that dials (`link/pairing/handshake.ts`):
 ///
 ///     I → R  hello  { device, key, eph, person, name, kind, pair? }
@@ -205,7 +214,7 @@ struct DeviceIdentity {
 ///
 /// `pairedKey` is the Link's key when already paired; `offer` when pairing.
 @MainActor
-func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?, offer: PairingOffer?) async throws -> Session {
+func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?, offer: PairingOffer?, exposure: CodeExposure? = nil) async throws -> Session {
     var it = conn.frames.makeAsyncIterator()
     func next() async throws -> (raw: Data, msg: [String: Any]) {
         // A Link that never answers is cut off; its stream then ends.
@@ -227,7 +236,7 @@ func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?,
         "eph": B64.encode(eph.publicKey.rawRepresentation), "person": ["id": me.person.id, "name": me.person.name],
         "name": me.name, "kind": "ipad",
     ]
-    if let offer { hello["pair"] = offer.offer }
+    if let offer { hello["pair"] = offer.code != nil ? "code" : offer.offer }
     let mine = try JSONSerialization.data(withJSONObject: hello)
     conn.send(mine)
     let (theirsRaw, theirs) = try await next()
@@ -249,9 +258,28 @@ func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?,
 
     let transcript = sha256(Data(linkProtocol.utf8), mine, theirsRaw)
     let label = { (s: String) in Data("\(linkProtocol) \(s) ".utf8) + transcript }
+    // A typed code is checked digit by digit first (link/pairing/handshake.ts), then makes the secret the MACs use.
+    var secret = offer?.secret ?? Data()
+    if let code = offer?.code {
+        for (round, digit) in code.enumerated() {
+            let commit = { (n: Data, who: String) in
+                Data(HMAC<SHA256>.authenticationCode(for: Data("\(linkProtocol) code \(who) \(round) \(digit) ".utf8) + transcript, using: SymmetricKey(data: n)))
+            }
+            let n = SymmetricKey(size: .bits128).withUnsafeBytes { Data($0) }
+            conn.send(try JSONSerialization.data(withJSONObject: ["t": "commit", "c": B64.encode(commit(n, "i"))]))
+            let (_, c) = try await next()
+            guard c["t"] as? String == "commit", let theirC = (c["c"] as? String).flatMap(B64.decode) else { throw LinkError.protocolError("The Link broke off the code check.") }
+            exposure?.revealed = true
+            conn.send(try JSONSerialization.data(withJSONObject: ["t": "reveal", "n": B64.encode(n)]))
+            let (_, r) = try await next()
+            guard r["t"] as? String == "reveal", let theirN = (r["n"] as? String).flatMap(B64.decode) else { throw LinkError.protocolError("The Link broke off the code check.") }
+            guard commit(theirN, "r") == theirC else { throw LinkError.refused("The Link refused: wrong pairing code") }
+        }
+        secret = Data(SHA256.hash(data: Data(linkProtocol.utf8) + Data(" code secret ".utf8) + Data(code.utf8) + transcript))
+    }
     var auth: [String: Any] = ["t": "auth", "sig": B64.encode(try me.key.signature(for: label("auth i")))]
-    if let offer {
-        auth["mac"] = B64.encode(Data(HMAC<SHA256>.authenticationCode(for: label("pair i"), using: SymmetricKey(data: offer.secret))))
+    if offer != nil {
+        auth["mac"] = B64.encode(Data(HMAC<SHA256>.authenticationCode(for: label("pair i"), using: SymmetricKey(data: secret))))
     }
     conn.send(try JSONSerialization.data(withJSONObject: auth))
     let (_, a) = try await next()
@@ -259,7 +287,7 @@ func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?,
           try Curve25519.Signing.PublicKey(rawRepresentation: keyRaw).isValidSignature(sig, for: label("auth r"))
     else { throw LinkError.refused("The Link did not prove its key.") }
     if let offer {
-        let want = Data(HMAC<SHA256>.authenticationCode(for: label("pair r"), using: SymmetricKey(data: offer.secret)))
+        let want = Data(HMAC<SHA256>.authenticationCode(for: label("pair r"), using: SymmetricKey(data: secret)))
         guard let mac = (a["mac"] as? String).flatMap(B64.decode), mac == want else { throw LinkError.refused("The Link does not know this pairing code's secret.") }
     }
 

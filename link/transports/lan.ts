@@ -108,9 +108,12 @@ export class LanTransport implements Transport {
   #device: string;
   #port: number;
   #advertise: boolean;
+  #txt: Record<string, string>;
 
-  constructor(opts: { device: string; port: number; advertise?: boolean }) {
+  /** `txt`: more of the Bonjour record. A Link puts its key, name and person there, so an iPad with a typed code knows whose Link it reached. */
+  constructor(opts: { device: string; port: number; advertise?: boolean; txt?: Record<string, string> }) {
     this.#device = opts.device;
+    this.#txt = opts.txt ?? {};
     this.#port = opts.port;
     this.#advertise = opts.advertise ?? true;
   }
@@ -134,7 +137,7 @@ export class LanTransport implements Transport {
               name: `Reflex Link ${this.#device}`,
               type: SERVICE_TYPE,
               port: actual,
-              txt: { dev: this.#device, v: "0" },
+              txt: { ...this.#txt, dev: this.#device, v: "0" },
               probe: false, // names carry the device ID, so they are unique by construction
             });
           }

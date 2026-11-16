@@ -72,12 +72,12 @@ public enum LinkError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .badCode(let m), .protocolError(let m), .refused(let m), .unreachable(let m): m
-        case .linkChanged: "This Mac's Link changed. Scan its code again."
+        case .linkChanged: "This Mac's Reflex was reset. Ask your agent for a new code and type it."
         }
     }
 }
 
-/// A pairing code: what the Link's QR code carries.
+/// A pairing code: a pasted reflex://pair link, or a typed 6-digit code for a Link found over Bonjour.
 ///
 ///     reflex://pair?v=0&o=<offer>&d=<device>&k=<key>&s=<secret>&h=<host,host>&p=<port>&n=<name>&pi=<person>&pn=<person name>
 public struct PairingOffer: Sendable {
@@ -89,6 +89,27 @@ public struct PairingOffer: Sendable {
     public var port: UInt16
     public var name: String
     public var person: Person
+    /// A typed 6-digit code instead of a scanned secret: the Link was found over Bonjour, and its record named it.
+    public var code: String?
+
+    /// A typed code, for a Link found over Bonjour whose record says who it is.
+    public init(code: String, device: String, key: String, name: String, person: Person) {
+        offer = "code"
+        self.device = device
+        self.key = key
+        secret = Data()
+        hosts = []
+        port = 0
+        self.name = name
+        self.person = person
+        self.code = code
+    }
+
+    /// The 6 digits of a typed code ("482 913", "482-913"), or nil when the text isn't one.
+    public static func typedCode(_ text: String) -> String? {
+        let digits = text.filter { !$0.isWhitespace && $0 != "-" }
+        return digits.count == 6 && digits.allSatisfy(\.isASCII) && digits.allSatisfy(\.isNumber) ? digits : nil
+    }
 
     public init(_ text: String) throws {
         guard let u = URLComponents(string: text.trimmingCharacters(in: .whitespacesAndNewlines)), u.scheme == "reflex", u.host == "pair" else {

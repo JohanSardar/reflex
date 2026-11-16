@@ -8,6 +8,7 @@
 //   link.db         Sends, Inbox, control catalog
 //   assets/         content-addressed asset store
 //   link.json       where the running Link listens (socket, LAN port, pid)
+import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
@@ -51,6 +52,17 @@ function writeSecret(path: string, text: string): void {
   chmodSync(path, 0o600);
 }
 
+/** What the person calls this computer ("MacBook Pro"): macOS's computer name, else the host name. */
+function computerName(): string {
+  if (process.platform === "darwin") {
+    try {
+      const n = execFileSync("scutil", ["--get", "ComputerName"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+      if (n) return n;
+    } catch {}
+  }
+  return hostname().replace(/\.local$/, "");
+}
+
 /** Loads this device's identity, making one on first run. */
 export function identity(dir: string, opts: { name?: string; person?: string } = {}): Identity {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -63,14 +75,17 @@ export function identity(dir: string, opts: { name?: string; person?: string } =
       v: 0,
       key: pem,
       person: { id: "p_" + randomBytes(6).toString("hex"), name: personName },
-      name: opts.name ?? hostname().replace(/\.local$/, ""),
+      name: opts.name ?? computerName(),
       actor: randomBytes(16).toString("hex"),
       created_at: Date.now(),
     };
     writeSecret(path, JSON.stringify(body, null, 2));
   }
   const j = JSON.parse(readFileSync(path, "utf8"));
-  return { key: loadDeviceKey(j.key), person: j.person, name: opts.name ?? j.name, actor: j.actor, ...(j.created_at ? { created_at: j.created_at } : {}) };
+  // Profiles made before the computer name was used are named after a network host name ("wirelessprv-10-….edu"),
+  // which changes with the network and means nothing on the iPad: show the computer name instead.
+  const name = opts.name ?? (/^[\w-]+(\.[\w-]+)+$/.test(j.name) ? computerName() : j.name);
+  return { key: loadDeviceKey(j.key), person: j.person, name, actor: j.actor, ...(j.created_at ? { created_at: j.created_at } : {}) };
 }
 
 /** A per-profile local RPC credential: `rpc.key` for Agents, `admin.key` for the user's commands. */

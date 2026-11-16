@@ -31,7 +31,7 @@ import { adoptPerson, home, identity, localKey, type Home, type Identity } from 
 import { Catalog, mayApprove, type AgentRecord, type PairedDevice } from "./pairing/catalog.ts";
 import { b64 } from "./pairing/crypto.ts";
 import type { Me } from "./pairing/handshake.ts";
-import { Offers, parseOffer, qrText } from "./pairing/offer.ts";
+import { Offers, parseOffer } from "./pairing/offer.ts";
 import { AssetStore } from "./storage/assets.ts";
 import { openDb } from "./storage/db.ts";
 import { Inbox } from "./storage/inbox.ts";
@@ -99,10 +99,7 @@ function answering(socket: string, ms = 1000): Promise<boolean> {
 
 const APPROVAL_WAIT_S = 300;
 /** The one line under a pairing code: what to do on the iPad. */
-export const PAIR_LINE = "On your iPad: open Reflex Canvas, tap Connect, then Scan the QR code (single use, 10 minutes). Then tap Allow when your Agent asks.";
-/** Under a code once an iPad approves: the new one syncs, and approves too only if that iPad says so. */
-export const PAIR_LINE_MORE =
-  "On the other iPad: open Reflex Canvas, tap Connect, then Scan the QR code. It connects to this Mac. To let it approve Agents too, tap Allow on your first iPad when it asks.";
+export const PAIR_LINE = "On your iPad: open Reflex, tap Pair with Mac, and type the code. The iPad needs to be on the same Wi-Fi as this Mac. Single use, 10 minutes.";
 /** How long after the profile is made (or its last approving iPad is forgotten) a `reflex pair` code pairs an approving iPad. */
 const firstPairMs = (): number => Number(process.env.REFLEX_FIRST_PAIR_S ?? 900) * 1000;
 type Decision = "approved" | "denied" | "revoked";
@@ -175,10 +172,18 @@ export class Link {
     if (this.#catalog.rejected > 0) this.#log(`ignored ${this.#catalog.rejected} catalog records with bad signatures`);
 
     const transports: Transport[] = [];
-    if (this.#opts.lan !== false) transports.push(new LanTransport({ device: this.#id.key.device, port: this.#opts.port ?? 7420 }));
+    // Who this Link is, in its Bonjour records: an iPad with a typed code needs its key and person (and shows its name).
+    const txt = { k: b64(this.#id.key.publicRaw), n: this.#id.name.slice(0, 60), pi: this.#id.person.id, pn: this.#id.person.name.slice(0, 60) };
+    if (this.#opts.lan !== false) transports.push(
+        new LanTransport({
+          device: this.#id.key.device,
+          port: this.#opts.port ?? 7420,
+          txt,
+        }),
+      );
     if (this.#opts.p2p !== false) {
       const p2p = P2pTransport.available();
-      if (p2p.ok) transports.push(new P2pTransport({ device: this.#id.key.device, log: this.#log }));
+      if (p2p.ok) transports.push(new P2pTransport({ device: this.#id.key.device, log: this.#log, txt }));
       else this.#log(`peer-to-peer Wi-Fi is off: ${p2p.why}`);
     }
     if (this.#opts.relay) {
@@ -208,6 +213,10 @@ export class Link {
     };
     this.#coord.onPaired((d) => process.stdout.write(`\nPaired with ${d.name} (${d.device}).\n`));
     this.#coord.grantsApproval = (source) => this.#grantsApproval(source);
+    this.#coord.onCodePaired = (d, agents) => {
+      this.#log(`${d.name} (${d.device}) typed the pairing code${agents.length ? `; approving ${agents.length} Agent${agents.length === 1 ? "" : "s"} that asked for it` : ""}`);
+      for (const id of agents) if (this.#catalog.agent(id) && this.#catalog.agent(id)!.status !== "approved") this.#decide(id, "approved", d.device);
+    };
     this.#coord.approvalHint = () => this.#approvalHint();
     this.#coord.pendingAgents = () =>
       this.#catalog.agents().filter((a) => a.status === "pending").map(({ id, name, color, requested_at }) => ({ id, name, color, requested_at }));
@@ -227,6 +236,9 @@ export class Link {
       socket: agentSocketPath(this.dir),
       token: this.#keys.rpc,
       announce: (a) => this.#announce(a),
+      code: (agent) => this.typedCode(agent),
+      codeFor: (agent) => this.#offers.codeFor(agent)?.code,
+      ipads: () => this.#catalog.devices().filter((d) => d.kind === "ipad" && d.person.id === this.#id.person.id).map((d) => d.name),
       remind: (a) => this.#coord.askAboutAgent({ id: a.id, name: a.name, color: a.color, requested_at: a.requested_at }),
       decision: (id, ms, signal) => this.#waitDecision(id, ms, signal),
       log: (event, data = {}) => this.#log(`agent layer: ${event} ${JSON.stringify(data)}`),
@@ -278,9 +290,17 @@ export class Link {
   }
 
   async showPairingCode(): Promise<void> {
-    const uri = this.pairingCode("terminal");
-    const qr = await qrText(uri);
-    process.stdout.write(`\n${qr}\n${uri}\n\n${PAIR_LINE}\nPress Enter for a new code.\n`);
+    const { code } = this.typedCode();
+    process.stdout.write(`\nPairing code: ${code.slice(0, 3)} ${code.slice(3)}\n${PAIR_LINE}\nPress Enter for a new code.\n`);
+  }
+
+  /** The live 6-digit code (a new one if none is live), with `agent` among the Agents typing it approves. */
+  typedCode(agent?: string): { code: string; expires: number } {
+    if (this.#ports.lan === undefined) throw new LinkError("no_lan", "Pairing an iPad needs the local network, and this Link was started with --no-lan.", "Restart it without --no-lan.");
+    const before = this.#offers.liveCode();
+    const c = this.#offers.code(agent);
+    if (c.code !== before) this.#log("made a pairing code (6 digits, single use, 10 minutes)");
+    return { code: c.code, expires: c.expires };
   }
 
   #approvers(): PairedDevice[] {
@@ -566,20 +586,15 @@ export class Link {
         return this.#decide(String(p.id), status, "command");
       }
       case "pair.offer": {
-        // `reflex pair` and `reflex setup`, from any terminal. Anything with the person's shell can make one, so an
-        // iPad paired with it may approve Agents only if it is the first (catalog.ts mayApprove). Each code is logged
-        // here, and the person's iPads hear of each new device, so a code nobody asked for shows.
-        const uri = this.pairingCode("admin");
-        const offer = new URL(uri).searchParams.get("o")!;
-        const grants = this.#grantsApproval("admin");
-        const more = this.#approvers().length > 0;
-        this.#log(`made a pairing code for \`reflex pair\` (single use, 10 minutes)${grants ? "" : "; an iPad paired with it syncs, and approves only if your iPad lets it"}`);
-        const line = grants ? PAIR_LINE : more ? PAIR_LINE_MORE : `${PAIR_LINE_MORE.replace(/ To let it.*$/, "")} ${this.#approvalHint()}`;
-        return { uri, offer, expires: Date.now() + 10 * 60_000, line };
+        // `reflex pair` and `reflex setup`, from any terminal: the live 6-digit code. The iPad that types it may
+        // approve Agents. Each code is logged here, and the person's iPads hear of each new device.
+        const { code, expires } = this.typedCode();
+        return { code, offer: code, expires, line: PAIR_LINE };
       }
       case "pair.check": {
         // Whether a code from pair.offer was used, and by which device (it may have been paired already).
-        const device = this.#offers.usedBy(String(p.offer ?? ""));
+        const last = this.#offers.lastCode;
+        const device = last && last.code === String(p.offer ?? "") ? last.device : this.#offers.usedBy(String(p.offer ?? ""));
         const d = device ? this.#catalog.device(device) : undefined;
         return {
           used: Boolean(device),

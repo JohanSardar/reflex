@@ -66,7 +66,7 @@ final class Helper: @unchecked Sendable {
             exit(2)
         }
         // Bonjour only says where the Link might be; the Link authenticates every connection.
-        l.service = NWListener.Service(name: "Reflex Link \(device)", type: "_reflex-p2p._tcp", txtRecord: txt(["dev": device, "v": "0"]))
+        l.service = NWListener.Service(name: "Reflex Link \(device)", type: "_reflex-p2p._tcp", txtRecord: txt(extraTXT().merging(["dev": device, "v": "0"]) { _, mine in mine }))
         l.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
@@ -151,6 +151,15 @@ final class Helper: @unchecked Sendable {
 
 func be32(_ n: UInt32) -> Data {
     withUnsafeBytes(of: n.bigEndian) { Data($0) }
+}
+
+/// More of the Bonjour record, from the Link (REFLEX_P2P_TXT, a JSON object of strings): its key, name and person,
+/// so an iPad with a typed pairing code knows whose Link it found. An environment variable, not an argument, so an
+/// older helper simply ignores it.
+func extraTXT() -> [String: String] {
+    guard let raw = ProcessInfo.processInfo.environment["REFLEX_P2P_TXT"]?.data(using: .utf8),
+          let d = try? JSONSerialization.jsonObject(with: raw) as? [String: String] else { return [:] }
+    return d
 }
 
 func readBE32(_ d: Data, _ at: Int) -> UInt32 {

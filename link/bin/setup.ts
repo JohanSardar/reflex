@@ -15,7 +15,6 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { homeDir } from "../home.ts";
-import { qrText } from "../pairing/offer.ts";
 import { LinkClient, RpcError } from "../rpc/client.ts";
 import { ensureLink } from "../../agent/src/host/start.ts";
 import { claudeEntry, codexConfig, isReflex, sameEntry, unsupported, type ClaudeEntry, type Want } from "./harness-config.ts";
@@ -191,11 +190,10 @@ async function link(): Promise<void> {
 async function pair(): Promise<void> {
   const c = await LinkClient.connect(dir, "admin");
   try {
-    const o = await c.call<{ uri: string; offer: string; expires: number; line: string }>("pair.offer");
+    const o = await c.call<{ code: string; offer: string; expires: number; line: string }>("pair.offer");
     if (f.json) return say(JSON.stringify(o));
     say("");
-    say(await qrText(o.uri));
-    say(o.uri);
+    say(`  Pairing code: ${o.code.slice(0, 3)} ${o.code.slice(3)}`);
     say("");
     say(o.line);
     if (f["no-wait"] || !process.stdout.isTTY) return;
@@ -205,10 +203,7 @@ async function pair(): Promise<void> {
       // The code itself, so an iPad that was paired already and scans again counts too.
       const u = await c.call<{ used: boolean; name?: string; approves?: boolean; asked?: boolean; hint?: string }>("pair.check", { offer: o.offer });
       if (!u.used) continue;
-      say(`\nPaired with ${u.name ?? "your iPad"}. Done: start Claude Code (\`claude\`) or Codex and ask it to draw on your iPad.`);
-      if (u.approves) say(`The first time, your iPad asks "Allow … to use your Spaces?": tap Allow.`);
-      else if (u.asked) say(`To let it approve Agents too, tap Allow on your first iPad: it asks "Let ${u.name} approve Agents?".`);
-      else say(`It syncs, but can't approve Agents yet. ${u.hint ?? ""}`);
+      say(`\nPaired with ${u.name ?? "your iPad"}. Done: start Claude Code (\`claude\`) or Codex and say "connect my iPad".`);
       return;
     }
     say("The code expired. Run `reflex pair` for a new one.");
@@ -230,7 +225,7 @@ async function main(): Promise<void> {
   codex();
   await link();
   if (which("claude") && !f["no-claude"] && (!customHome || f.register))
-    note("for Sends pushed into Claude Code as new turns, start it with: claude --dangerously-load-development-channels server:reflex");
+    note("optional: to have Sends pushed into Claude Code as new turns, start it with: claude --dangerously-load-development-channels server:reflex");
   await pair();
 }
 

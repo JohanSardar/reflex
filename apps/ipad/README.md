@@ -4,9 +4,9 @@ Write with PencilKit, hold the mic to speak, then Send to the paired Link. The
 canvas, erasers, lasso and undo are native PencilKit. Drawing and moving the
 Pencil have no network callbacks. Voice recognition stays on the iPad.
 
-Pair with the QR code from `reflex setup` or `reflex pair`. Pairing and Agent
+Pair by typing the 6-digit code an agent gives (its `connect` tool) or `reflex pair` shows; the iPad finds the Mac over Bonjour. Pairing and Agent
 approval use the existing encrypted LAN, peer-to-peer Wi-Fi and Relay paths.
-The Link asks this iPad to approve Agents as before. Agents receive Sends in
+Typing the code lets in the Agent that gave it; others ask on this iPad. Agents receive Sends in
 Claude Code or Codex; they cannot write onto the iPad.
 
 ## Local pages and upgrades
