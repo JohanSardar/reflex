@@ -166,7 +166,7 @@ struct PairSheet: View {
                 Section {
                     if !s.paired {
                         VStack(alignment: .leading, spacing: 10) {
-                            Image(systemName: "qrcode.viewfinder").font(.system(size: 40)).foregroundStyle(Color.accentColor)
+                            Image("Logo").resizable().frame(width: 56, height: 56).clipShape(.rect(cornerRadius: 13, style: .continuous)).accessibilityHidden(true)
                             Text("Pair with your Mac").font(.title3.bold())
                             Text("On your Mac, run `reflex setup`. It shows a QR code. Scan it here once, and your Sends go to the Agents you allow.")
                                 .foregroundStyle(.secondary)
