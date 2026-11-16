@@ -1,5 +1,5 @@
 // Builds dist/reflex.mjs: the whole reflex CLI (MCP server, Link, everything) in one file with its packages, so
-//   npx -y github:jujdontbudge/reflex mcp
+//   npx -y github:jujdontbudge/reflex#npx mcp
 // runs it with nothing to install. Node won't strip types from files under node_modules, which is where npx puts
 // a package, so the TypeScript sources can't run from there. Rebuild with `npm run build` and commit the result.
 import { build } from "esbuild";
