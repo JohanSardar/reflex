@@ -384,9 +384,15 @@ var init_offer = __esm({
       #code = null;
       /** The device that used the last typed code, and which Agents it approved. */
       lastCode = null;
-      /** The live typed code, with this Agent added to the ones it approves; a new one if none is live. */
+      /**
+       * The live typed code, with this Agent added to the ones it approves; a new one if none is live, or if this Agent
+       * (or, with no Agent, a terminal) asks again: after a failed typing the person is told to ask for a new code, and a
+       * new one makes any digit a look-alike Link learned useless. The Agents waiting on the old code carry over.
+       */
       code(agent, now = Date.now()) {
-        if (!this.liveCode(now)) this.#code = { code: String(randomInt(0, 1e6)).padStart(6, "0"), expires: now + TTL_MS, agents: /* @__PURE__ */ new Set(), fails: 0 };
+        const again = this.liveCode(now) !== void 0 && (agent ? this.#code.agents.has(agent) : true);
+        if (!this.liveCode(now) || again)
+          this.#code = { code: String(randomInt(0, 1e6)).padStart(6, "0"), expires: now + TTL_MS, agents: new Set(again ? this.#code.agents : []), fails: 0 };
         if (agent) this.#code.agents.add(agent);
         return this.#code;
       }
@@ -14418,15 +14424,15 @@ Paired with ${d.name} (${d.device}).
         process.stdout.write(`
 Pairing code: ${code.slice(0, 3)} ${code.slice(3)}
 ${PAIR_LINE}
-Press Enter to show it again.
+Press Enter for a new code.
 `);
       }
       /** The live 6-digit code (a new one if none is live), with `agent` among the Agents typing it approves. */
       typedCode(agent) {
         if (this.#ports.lan === void 0) throw new LinkError("no_lan", "Pairing an iPad needs the local network, and this Link was started with --no-lan.", "Restart it without --no-lan.");
-        const fresh = !this.#offers.liveCode();
+        const before = this.#offers.liveCode();
         const c = this.#offers.code(agent);
-        if (fresh) this.#log("made a pairing code (6 digits, single use, 10 minutes)");
+        if (c.code !== before) this.#log("made a pairing code (6 digits, single use, 10 minutes)");
         return { code: c.code, expires: c.expires };
       }
       #approvers() {

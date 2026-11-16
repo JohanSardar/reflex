@@ -423,24 +423,28 @@ public final class LinkSync {
             state = paired == nil ? .unpaired : before
             throw LinkError.unreachable("No Mac with Reflex found. Make sure this iPad is on the same Wi-Fi as your Mac, and that Reflex is allowed to find devices on your local network (Settings › Privacy & Security › Local Network).")
         }
-        var wrong = false
         var errors: [String] = []
         for f in found {
             let conn = FramedConnection(endpoint: f.endpoint, peerToPeer: f.interface)
+            let exposure = CodeExposure()
             do {
                 try await conn.start(timeout: 5)
                 let offer = PairingOffer(code: code, device: f.device, key: f.key, name: f.name, person: f.person)
                 let at = conn.resolvedIPv4
-                try await pair(conn, offer: offer, hosts: at.map { [$0.host] } ?? [], port: at?.port ?? 0)
+                try await pair(conn, offer: offer, hosts: at.map { [$0.host] } ?? [], port: at?.port ?? 0, exposure: exposure)
                 return
             } catch {
                 conn.close()
-                if "\(error.localizedDescription)".contains("wrong pairing code") { wrong = true }
                 errors.append("\(f.name): \(error.localizedDescription)")
+                // Once a digit went to a Link, the code isn't tried on any other: a Link that isn't the person's Mac
+                // learns at most one digit per typing, and the new code the person is asked for makes it useless.
+                if exposure.revealed {
+                    state = paired == nil ? .unpaired : before
+                    throw LinkError.badCode("That code didn't work. Ask your agent for a new code and type that.")
+                }
             }
         }
         state = paired == nil ? .unpaired : before
-        if wrong { throw LinkError.badCode("That code didn't work. Check the 6 digits, or ask your agent for a new code.") }
         throw LinkError.unreachable("Could not pair. \(errors.joined(separator: "; "))")
     }
 
@@ -503,12 +507,12 @@ public final class LinkSync {
     }
 
     /// Pairs over a connected channel with this offer, then stays connected.
-    private func pair(_ conn: FramedConnection, offer: PairingOffer, hosts: [String], port: UInt16) async throws {
+    private func pair(_ conn: FramedConnection, offer: PairingOffer, hosts: [String], port: UInt16, exposure: CodeExposure? = nil) async throws {
         // A device that holds nothing of its own yet becomes the offering person's device (ADR-0008).
         let wasPerson = identity.person
         identity.person = offer.person
         do {
-            let s = try await handshake(conn, me: identity, pairedKey: nil, offer: offer)
+            let s = try await handshake(conn, me: identity, pairedKey: nil, offer: offer, exposure: exposure)
             // Spaces made under another person (an earlier Link) aren't this person's to sync: the new Link
             // would refuse every change in them. They stay here, offered to no Link.
             if let old = person, old.id != offer.person.id {

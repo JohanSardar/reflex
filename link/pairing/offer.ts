@@ -71,9 +71,15 @@ export class Offers {
   /** The device that used the last typed code, and which Agents it approved. */
   lastCode: { code: string; device: string; agents: string[] } | null = null;
 
-  /** The live typed code, with this Agent added to the ones it approves; a new one if none is live. */
+  /**
+   * The live typed code, with this Agent added to the ones it approves; a new one if none is live, or if this Agent
+   * (or, with no Agent, a terminal) asks again: after a failed typing the person is told to ask for a new code, and a
+   * new one makes any digit a look-alike Link learned useless. The Agents waiting on the old code carry over.
+   */
   code(agent?: string, now = Date.now()): Code {
-    if (!this.liveCode(now)) this.#code = { code: String(randomInt(0, 1_000_000)).padStart(6, "0"), expires: now + TTL_MS, agents: new Set(), fails: 0 };
+    const again = this.liveCode(now) !== undefined && (agent ? this.#code!.agents.has(agent) : true);
+    if (!this.liveCode(now) || again)
+      this.#code = { code: String(randomInt(0, 1_000_000)).padStart(6, "0"), expires: now + TTL_MS, agents: new Set(again ? this.#code!.agents : []), fails: 0 };
     if (agent) this.#code!.agents.add(agent);
     return this.#code!;
   }

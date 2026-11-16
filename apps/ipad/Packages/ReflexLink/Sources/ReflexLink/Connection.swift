@@ -202,6 +202,9 @@ struct DeviceIdentity {
     var device: String { deviceID(for: publicRaw) }
 }
 
+/// Set once this side has revealed a digit of a typed code to the other device (`handshake` with a code).
+final class CodeExposure: @unchecked Sendable { var revealed = false }
+
 /// The handshake, as the side that dials (`link/pairing/handshake.ts`):
 ///
 ///     I → R  hello  { device, key, eph, person, name, kind, pair? }
@@ -211,7 +214,7 @@ struct DeviceIdentity {
 ///
 /// `pairedKey` is the Link's key when already paired; `offer` when pairing.
 @MainActor
-func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?, offer: PairingOffer?) async throws -> Session {
+func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?, offer: PairingOffer?, exposure: CodeExposure? = nil) async throws -> Session {
     var it = conn.frames.makeAsyncIterator()
     func next() async throws -> (raw: Data, msg: [String: Any]) {
         // A Link that never answers is cut off; its stream then ends.
@@ -266,6 +269,7 @@ func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?,
             conn.send(try JSONSerialization.data(withJSONObject: ["t": "commit", "c": B64.encode(commit(n, "i"))]))
             let (_, c) = try await next()
             guard c["t"] as? String == "commit", let theirC = (c["c"] as? String).flatMap(B64.decode) else { throw LinkError.protocolError("The Link broke off the code check.") }
+            exposure?.revealed = true
             conn.send(try JSONSerialization.data(withJSONObject: ["t": "reveal", "n": B64.encode(n)]))
             let (_, r) = try await next()
             guard r["t"] as? String == "reveal", let theirN = (r["n"] as? String).flatMap(B64.decode) else { throw LinkError.protocolError("The Link broke off the code check.") }

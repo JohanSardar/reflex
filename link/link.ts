@@ -291,15 +291,15 @@ export class Link {
 
   async showPairingCode(): Promise<void> {
     const { code } = this.typedCode();
-    process.stdout.write(`\nPairing code: ${code.slice(0, 3)} ${code.slice(3)}\n${PAIR_LINE}\nPress Enter to show it again.\n`);
+    process.stdout.write(`\nPairing code: ${code.slice(0, 3)} ${code.slice(3)}\n${PAIR_LINE}\nPress Enter for a new code.\n`);
   }
 
   /** The live 6-digit code (a new one if none is live), with `agent` among the Agents typing it approves. */
   typedCode(agent?: string): { code: string; expires: number } {
     if (this.#ports.lan === undefined) throw new LinkError("no_lan", "Pairing an iPad needs the local network, and this Link was started with --no-lan.", "Restart it without --no-lan.");
-    const fresh = !this.#offers.liveCode();
+    const before = this.#offers.liveCode();
     const c = this.#offers.code(agent);
-    if (fresh) this.#log("made a pairing code (6 digits, single use, 10 minutes)");
+    if (c.code !== before) this.#log("made a pairing code (6 digits, single use, 10 minutes)");
     return { code: c.code, expires: c.expires };
   }
 
