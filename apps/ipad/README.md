@@ -24,7 +24,11 @@ person's Link.
 
 Only pressing Send, or releasing the voice button, exports ink. A Send holds
 new strokes, a snapshot of the page's ink for resolving marks and targets,
-Apple's handwriting hints, timed spoken words, viewport and PNG screen crops.
+Apple's handwriting hints, timed spoken words, viewport and PNG board images. Every Send includes the visible board plus a real
+15% margin on each side, rendered without controls at up to 2,000 pixels on the
+longest side. Sends with new strokes also include a close-up of those strokes.
+Image bounds and the viewport use board coordinates; image roles and mark links
+are shared by wait_for_user, Claude Code channel pushes and webhooks.
 The snapshot does not change while handwriting recognition finishes.
 
 The envelope is written atomically under `Reflex/Sends/` and bound to the

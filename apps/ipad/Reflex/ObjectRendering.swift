@@ -369,13 +369,21 @@ struct BoardStill: View {
     let dark: Bool
     let scale: CGFloat
     var showPattern = true
+    /// Keep the on-screen paper density when a Send is resized for the agent.
+    var viewportZoom: CGFloat?
 
     var body: some View {
         let darkPaper = paper.tint.isDark(system: dark)
         ZStack(alignment: .topLeading) {
             paper.tint.color(dark: dark)
             if showPattern {
-                Canvas { ctx, size in PaperDrawing.draw(paper, dark: darkPaper, in: ctx, size: size, origin: rect.origin, zoom: scale) }
+                Canvas { ctx, size in
+                    let zoom = viewportZoom ?? scale
+                    let ratio = scale / zoom
+                    var c = ctx
+                    c.scaleBy(x: ratio, y: ratio)
+                    PaperDrawing.draw(paper, dark: darkPaper, in: c, size: CGSize(width: size.width / ratio, height: size.height / ratio), origin: rect.origin, zoom: zoom)
+                }
             }
             objectsLayer(above: false, darkPaper: darkPaper)
             if let ink = inkImage {
@@ -407,7 +415,7 @@ struct BoardStill: View {
         guard !drawing.strokes.isEmpty else { return nil }
         var image: UIImage?
         UITraitCollection(userInterfaceStyle: paper.tint.isDark(system: dark) ? .dark : .light).performAsCurrent {
-            image = drawing.image(from: rect, scale: max(scale, 0.25) * 2)
+            image = drawing.image(from: rect, scale: scale * 2)
         }
         return image
     }
@@ -415,9 +423,9 @@ struct BoardStill: View {
 
 enum BoardRenderer {
     @MainActor
-    static func image(of rect: CGRect, drawing: PKDrawing, objects: [BoardObject], files: BoardFiles, paper: Paper, maxSide: CGFloat, dark: Bool) -> UIImage? {
+    static func image(of rect: CGRect, drawing: PKDrawing, objects: [BoardObject], files: BoardFiles, paper: Paper, maxSide: CGFloat, dark: Bool, viewportZoom: CGFloat? = nil) -> UIImage? {
         let scale = min(1, maxSide / max(rect.width, rect.height, 1))
-        let renderer = ImageRenderer(content: BoardStill(rect: rect, drawing: drawing, objects: objects, files: files, paper: paper, dark: dark, scale: scale))
+        let renderer = ImageRenderer(content: BoardStill(rect: rect, drawing: drawing, objects: objects, files: files, paper: paper, dark: dark, scale: scale, viewportZoom: viewportZoom))
         renderer.scale = 2
         return renderer.uiImage
     }

@@ -26,7 +26,7 @@ export interface NativeSend {
   said?: string;
   words?: { text: string; start_ms: number; end_ms?: number }[];
   hints?: { strokes: string[]; text: string; confidence: number }[];
-  crops?: { asset: string; bounds: Bounds; strokes?: string[] }[];
+  crops?: { asset: string; bounds: Bounds; strokes?: string[]; kind?: "screen" | "recent_strokes" }[];
 }
 
 const id = (v: unknown): v is string => typeof v === "string" && /^[\w-]{1,200}$/.test(v);
@@ -49,7 +49,9 @@ export function nativeSend(raw: unknown, space: unknown, person: string, device:
       || (s.said !== undefined && (typeof s.said !== "string" || s.said.length > 100_000))
       || (s.words !== undefined && (!Array.isArray(s.words) || !s.words.every((w) => typeof w.text === "string" && finite(w.start_ms) && (w.end_ms === undefined || finite(w.end_ms)))))
       || (s.hints !== undefined && (!Array.isArray(s.hints) || !s.hints.every((h) => Array.isArray(h.strokes) && h.strokes.every(id) && typeof h.text === "string" && finite(h.confidence))))
-      || (s.crops !== undefined && (!Array.isArray(s.crops) || !s.crops.every((c) => /^[a-f0-9]{64}$/.test(c.asset) && bounds(c.bounds))))) {
+      || (s.crops !== undefined && (!Array.isArray(s.crops) || !s.crops.every((c) => /^[a-f0-9]{64}$/.test(c.asset) && bounds(c.bounds)
+        && (c.kind === undefined || ["screen", "recent_strokes"].includes(c.kind))
+        && (c.strokes === undefined || (Array.isArray(c.strokes) && c.strokes.every(id))))))) {
     throw new Error("Invalid native Send");
   }
   // The authenticated session owns attribution, never untrusted envelope fields.
