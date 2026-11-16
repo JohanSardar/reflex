@@ -19,7 +19,11 @@ export const socketPath = (dir = home()) => {
   const p = join(dir, "agent.sock");
   return Buffer.byteLength(p) <= 100 ? p : join(tmpdir(), `reflex-agent-${createHash("sha256").update(dir).digest("hex").slice(0, 12)}.sock`);
 };
-export const logPath = (name: string) => join(home(), `${name}.log`);
+/** A surface's log in the profile folder, which a first run on a new computer makes (0700, as the Link does). */
+export const logPath = (name: string) => {
+  mkdirSync(home(), { recursive: true, mode: 0o700 });
+  return join(home(), `${name}.log`);
+};
 
 export class NoLink extends Error {}
 

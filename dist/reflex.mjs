@@ -1877,7 +1877,10 @@ var init_rpc = __esm({
       const p = join3(dir3, "agent.sock");
       return Buffer.byteLength(p) <= 100 ? p : join3(tmpdir2(), `reflex-agent-${createHash3("sha256").update(dir3).digest("hex").slice(0, 12)}.sock`);
     };
-    logPath = (name) => join3(home2(), `${name}.log`);
+    logPath = (name) => {
+      mkdirSync3(home2(), { recursive: true, mode: 448 });
+      return join3(home2(), `${name}.log`);
+    };
     NoLink = class extends Error {
     };
   }
