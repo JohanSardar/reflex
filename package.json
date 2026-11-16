@@ -1,0 +1,10 @@
+{
+  "name": "reflex",
+  "version": "0.1.0",
+  "description": "Reflex: send your marks, words and screen from an iPad to Claude Code, Codex or any MCP agent. Built from main by agent/build.mjs; source: https://github.com/jujdontbudge/reflex",
+  "type": "module",
+  "bin": {
+    "reflex": "dist/reflex.mjs"
+  },
+  "license": "UNLICENSED"
+}
