@@ -806,6 +806,41 @@ Use it the way the person does:
 
 Follow the `agent-testing` skill for all testing.
 
+# T27: Connect with one pasted line and a 6-digit code
+
+## Goal
+Make connecting Reflex as easy as it can be. Today it takes a checkout, `reflex setup`, a QR code in the terminal that the iPad scans, a second Allow on the iPad, and starting Claude Code with `--dangerously-load-development-channels` for Sends to arrive. The person's words: "the QR is extremely funky, it should be purely a 6-8 digit code. I should be able to paste the MCP into Claude Code and say connect up, it tells me the code and should be good. Also I shouldn't have to run Claude Code in development channel mode for it to work, it should work normally and smoothly with Claude. Same thing for other harnesses."
+
+When this is done:
+- **One pasted line adds Reflex** to Claude Code (`claude mcp add …`), and the same server command works in Codex and other MCP harnesses. No checkout and no `reflex setup` are needed. It runs from the public GitHub repo, with no npm publish.
+- **Saying "connect my iPad" is enough.** The agent asks Reflex for a code and tells the person a 6-digit code. The Link starts by itself if it isn't running.
+- **The person types the code on the iPad**, and the iPad finds the Mac by itself on the same Wi-Fi or nearby. Typing the code both pairs the iPad and approves the agent that asked for it: one step, not two. The QR code is gone from the flow.
+- **Sends reach the agent in a plain `claude` session** started with no flags, and in Codex, through `wait_for_user`, with the agent waiting for the next Send on its own after connecting. The person shouldn't have to tell it to listen.
+- **The Claude Code channel stays available** for anyone who sets it up locally with the dev flag. It is optional, not the way Reflex normally works.
+
+A short code is easy to guess, so a code seen on the network, or guessed a few times, must not pair someone else's device. A setup that still needs a terminal, a camera, or a flag for the normal path doesn't count. Ease of setup wins over keeping old behavior: the person said existing paired iPads, the old pairing rules, the channel and Codex may all get worse or go if they have to.
+
+## Context
+- The person's choices (2026-11-16): no Claude Code plugin for now ("too hard"). Keep the channel route open for local setups. Typing the code approves the asking agent in one step. Only the same Wi-Fi or nearby for now. An iPad that is far away needs the Relay, which is a later ticket.
+- Claude Code only accepts channels from Anthropic's allowlist (`claude-plugins-official`). Any other channel needs `--dangerously-load-development-channels` (https://code.claude.com/docs/en/channels). That is why the channel can't be the normal path.
+- The repo is public at https://github.com/jujdontbudge/reflex. Use `gh` over HTTPS for the PR.
+- The person's iPad gets builds through TestFlight.
+
+## Constraints
+- Nothing public beyond the GitHub repo: no npm publish, no tags or releases, and no Relay deploy without asking.
+- Don't run anything that prompts for a password or keychain approval, and don't turn off the Mac's network.
+
+## How to verify
+1. On a fresh profile, with no checkout on the PATH and no `reflex setup`, add Reflex to Claude Code with the one line. Start plain `claude` and say "connect my iPad". It answers with a 6-digit code.
+2. Type the code on the iPad (Simulator, paired to this Mac). It finds the Mac and connects, and the agent is approved with no second tap.
+3. Draw and press Send. The plain `claude` session receives it and answers, without being told to wait.
+4. Do steps 1–3 in Codex.
+5. Type a wrong code a few times. It doesn't pair, and the code stops working. An expired code doesn't pair either.
+6. Start Claude Code with the dev flag. Sends are pushed as channel turns, as before.
+
+## Evidence of done
+When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Go through every step in How to verify and check every guardrail. Follow the `agent-testing` skill for all testing. If you changed code, run the `sol-loop` skill on it and give Sol this ticket. In your report, show what you saw at each step: screenshots, a video, or the output. Then list anything you did not check.
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
