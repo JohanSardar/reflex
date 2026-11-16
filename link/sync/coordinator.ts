@@ -183,6 +183,7 @@ export class Coordinator {
       pairedKey: (device: string) => this.#catalog.device(device)?.key,
       offerSecret: (offer: string) => this.#offers.secret(offer),
       liveCode: () => this.#offers.liveCode(),
+      takeCode: (code: string, device: string) => this.#offers.takeCode(code, device),
       codeFailed: () => {
         this.#offers.codeFailed();
         this.#log(this.#offers.liveCode() ? "someone typed a wrong pairing code" : "a pairing code was typed wrong too many times and stopped working");
@@ -196,7 +197,7 @@ export class Coordinator {
       if (r.code) {
         // A typed code: the iPad that typed it may approve, and the Agents that asked for it are approved (the
         // person read the code off that Agent and typed it, which is the approval).
-        const agents = this.#offers.consumeCode(r.peer.device);
+        const agents = r.codeAgents ?? [];
         if (r.paired) this.#remember(r.peer, null, "code");
         const d = this.#catalog.device(r.peer.device)!;
         if (d.kind === "ipad" && d.person.id === this.#me.person.id && !mayApprove(d, this.#me.person.id)) {

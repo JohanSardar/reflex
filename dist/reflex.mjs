@@ -412,11 +412,11 @@ var init_offer = __esm({
       codeFailed() {
         if (this.#code) this.#code.fails++;
       }
-      /** A typed code is used up once a device pairs with it; returns the Agents it approves. */
-      consumeCode(device) {
+      /** Uses up the typed code if it is still the live one; returns the Agents it approves, or undefined. */
+      takeCode(code, device) {
+        if (this.liveCode() !== code) return void 0;
         const c = this.#code;
         this.#code = null;
-        if (!c) return [];
         this.lastCode = { code: c.code, device, agents: [...c.agents] };
         return [...c.agents];
       }
@@ -853,6 +853,7 @@ async function handshakeInner(path, me, trust, scanned, saw) {
   const other = role === "i" ? "r" : "i";
   let secret;
   let offer;
+  let codeAgents;
   if (role === "i" && scanned) {
     if (theirs.device !== scanned.device || theirs.key !== scanned.key)
       throw new Error("the device that answered is not the one in the pairing code");
@@ -868,6 +869,8 @@ async function handshakeInner(path, me, trust, scanned, saw) {
       if (e instanceof WrongCode) trust.codeFailed?.();
       throw e;
     }
+    codeAgents = trust.takeCode?.(code, theirs.device);
+    if (!codeAgents) throw new Error("the pairing code expired or was already used (ask your agent for a new one)");
     offer = "code";
   } else if (role === "r" && typeof theirs.pair === "string") {
     secret = trust.offerSecret(theirs.pair);
@@ -901,7 +904,7 @@ async function handshakeInner(path, me, trust, scanned, saw) {
     new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript)
   );
   const kind = theirs.kind === "ipad" ? "ipad" : "link";
-  return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind }, paired, offer, ...offer === "code" ? { code: true } : {} };
+  return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind }, paired, offer, ...offer === "code" ? { code: true, codeAgents: codeAgents ?? [] } : {} };
 }
 async function codeRounds(path, role, code, transcript) {
   if (!/^\d{6}$/.test(code)) throw new WrongCode("a pairing code is 6 digits");
@@ -1205,6 +1208,7 @@ var init_coordinator = __esm({
           pairedKey: (device) => this.#catalog.device(device)?.key,
           offerSecret: (offer) => this.#offers.secret(offer),
           liveCode: () => this.#offers.liveCode(),
+          takeCode: (code, device) => this.#offers.takeCode(code, device),
           codeFailed: () => {
             this.#offers.codeFailed();
             this.#log(this.#offers.liveCode() ? "someone typed a wrong pairing code" : "a pairing code was typed wrong too many times and stopped working");
@@ -1215,7 +1219,7 @@ var init_coordinator = __esm({
         try {
           const r = await handshake(path, this.#me, this.#trust());
           if (r.code) {
-            const agents = this.#offers.consumeCode(r.peer.device);
+            const agents = r.codeAgents ?? [];
             if (r.paired) this.#remember(r.peer, null, "code");
             const d = this.#catalog.device(r.peer.device);
             if (d.kind === "ipad" && d.person.id === this.#me.person.id && !mayApprove(d, this.#me.person.id)) {
@@ -14032,7 +14036,7 @@ var init_p2p = __esm({
     "use strict";
     init_framed();
     HERE = dirname2(fileURLToPath(import.meta.url));
-    HELPER = process.env.REFLEX_P2P_HELPER ?? join5(HERE, "p2p", ".build", "release", "reflex-p2p");
+    HELPER = process.env.REFLEX_P2P_HELPER ?? (process.env.REFLEX_BIN && existsSync5(join5(dirname2(process.env.REFLEX_BIN), "reflex-p2p")) ? join5(dirname2(process.env.REFLEX_BIN), "reflex-p2p") : join5(HERE, "p2p", ".build", "release", "reflex-p2p"));
     K = { ready: 1, open: 2, data: 3, closed: 4, log: 5, sent: 6 };
     HIGH_WATER2 = 1024 * 1024;
     HelperPath = class extends FramedPath {

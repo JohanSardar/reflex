@@ -16,7 +16,12 @@ import type { Candidate, Path, Transport } from "./transport.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** Where `npm run build:p2p` puts the helper; REFLEX_P2P_HELPER overrides it. */
-export const HELPER = process.env.REFLEX_P2P_HELPER ?? join(HERE, "p2p", ".build", "release", "reflex-p2p");
+// The single-file build (dist/reflex.mjs, REFLEX_BIN) finds a prebuilt helper next to itself: the npx branch ships one.
+export const HELPER =
+  process.env.REFLEX_P2P_HELPER ??
+  (process.env.REFLEX_BIN && existsSync(join(dirname(process.env.REFLEX_BIN), "reflex-p2p"))
+    ? join(dirname(process.env.REFLEX_BIN), "reflex-p2p")
+    : join(HERE, "p2p", ".build", "release", "reflex-p2p"));
 
 const K = { ready: 1, open: 2, data: 3, closed: 4, log: 5, sent: 6 } as const;
 /** Bytes handed to the helper but not yet taken by the network before `send` waits. */

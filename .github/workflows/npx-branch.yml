@@ -1,17 +1,19 @@
-# Keeps the `npx` branch in step with main's dist/reflex.mjs. That branch holds only package.json and the built CLI,
-# so `npx -y github:jujdontbudge/reflex#npx mcp` downloads about 1 MB instead of the whole repository, and starts
-# well inside a harness's wait for a new MCP server. Runs on GitHub's runners.
+# Keeps the `npx` branch in step with main: dist/reflex.mjs, and the peer-to-peer Wi-Fi helper built for both Mac
+# architectures (dist/reflex-p2p, so an npx install can pair with an iPad nearby, not only on the same Wi-Fi). That
+# branch holds only those and package.json, so `npx -y github:jujdontbudge/reflex#npx mcp` downloads about 1 MB
+# instead of the whole repository, and starts well inside a harness's wait for a new MCP server. Runs on GitHub's
+# runners.
 name: npx branch
 on:
   push:
     branches: [main]
-    paths: [dist/reflex.mjs]
+    paths: [dist/reflex.mjs, link/transports/p2p/**]
   workflow_dispatch:
 permissions:
   contents: write
 jobs:
   update:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,12 +22,16 @@ jobs:
         with:
           ref: npx
           path: npx
-      - name: Copy the build and push it if it changed
+      - name: Build the peer-to-peer helper
+        run: swift build -c release --arch arm64 --arch x86_64 --package-path main/link/transports/p2p
+      - name: Copy the builds and push them if they changed
         run: |
           mkdir -p npx/dist
           cp main/dist/reflex.mjs npx/dist/reflex.mjs
+          cp main/link/transports/p2p/.build/apple/Products/Release/reflex-p2p npx/dist/reflex-p2p
+          chmod +x npx/dist/reflex-p2p
           cd npx
-          git add dist/reflex.mjs
+          git add dist/reflex.mjs dist/reflex-p2p
           if git diff --cached --quiet; then echo "npx branch already current"; exit 0; fi
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -m "npx build of ${GITHUB_SHA::7}"

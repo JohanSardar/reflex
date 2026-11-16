@@ -103,11 +103,11 @@ export class Offers {
     if (this.#code) this.#code.fails++;
   }
 
-  /** A typed code is used up once a device pairs with it; returns the Agents it approves. */
-  consumeCode(device: string): string[] {
-    const c = this.#code;
+  /** Uses up the typed code if it is still the live one; returns the Agents it approves, or undefined. */
+  takeCode(code: string, device: string): string[] | undefined {
+    if (this.liveCode() !== code) return undefined;
+    const c = this.#code!;
     this.#code = null;
-    if (!c) return [];
     this.lastCode = { code: c.code, device, agents: [...c.agents] };
     return [...c.agents];
   }

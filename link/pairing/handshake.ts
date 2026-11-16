@@ -78,6 +78,8 @@ export interface Trust {
   liveCode?(): string | undefined;
   /** A typed code that failed a round (responder side): counts toward its limit. */
   codeFailed?(): void;
+  /** Uses up the typed code once its rounds pass, if it is still the live one; the Agents it approves, else undefined. */
+  takeCode?(code: string, device: string): string[] | undefined;
 }
 
 /** A pairing offer read from a QR code (initiator side). */
@@ -131,6 +133,8 @@ export interface HandshakeResult {
   offer?: string;
   /** True when the device paired with a typed code. */
   code?: boolean;
+  /** The Agents the typed code approves (responder side). */
+  codeAgents?: string[];
 }
 
 /** A failed handshake, with what the other side said about itself if its hello arrived (for a log line that names it). */
@@ -188,6 +192,7 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
   // Which secret, if any, this connection pairs with.
   let secret: Uint8Array | undefined;
   let offer: string | undefined;
+  let codeAgents: string[] | undefined;
   if (role === "i" && scanned) {
     if (theirs.device !== scanned.device || theirs.key !== scanned.key)
       throw new Error("the device that answered is not the one in the pairing code");
@@ -203,6 +208,9 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
       if (e instanceof WrongCode) trust.codeFailed?.();
       throw e;
     }
+    // Single use, checked when the rounds end: a code that expired, was replaced or was used by another device meanwhile doesn't pair.
+    codeAgents = trust.takeCode?.(code, theirs.device);
+    if (!codeAgents) throw new Error("the pairing code expired or was already used (ask your agent for a new one)");
     offer = "code";
   } else if (role === "r" && typeof theirs.pair === "string") {
     secret = trust.offerSecret(theirs.pair);
@@ -240,7 +248,7 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
     new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript),
   );
   const kind = theirs.kind === "ipad" ? "ipad" : "link";
-  return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind }, paired, offer, ...(offer === "code" ? { code: true } : {}) };
+  return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind }, paired, offer, ...(offer === "code" ? { code: true, codeAgents: codeAgents ?? [] } : {}) };
 }
 
 /** A typed code that doesn't match, as opposed to a connection that broke. */
