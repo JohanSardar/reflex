@@ -7,10 +7,10 @@ Send your marks, words and screen from an iPad to Claude Code or Codex on your M
 Add Reflex to your agent with one line (Node 22 or newer):
 
 ```sh
-claude mcp add reflex -- npx -y "github:jujdontbudge/reflex#npx" mcp
+claude mcp add reflex -- npx -y "github:JohanSardar/reflex#npx" mcp
 ```
 
-Other MCP harnesses (Codex, Cursor, …) take the same server command: `npx -y github:jujdontbudge/reflex#npx mcp`. In Codex, set `tool_timeout_sec = 300`.
+Other MCP harnesses (Codex, Cursor, …) take the same server command: `npx -y github:JohanSardar/reflex#npx mcp`. In Codex, set `tool_timeout_sec = 300`.
 
 Then tell your agent "connect my iPad" (in Codex, "connect my iPad to Reflex"). It gives you a 6-digit code. Open Reflex on the iPad, tap **Pair with Mac**, and type it. The iPad finds the Mac on the same Wi-Fi, and typing the code also lets that agent in. Codes work once, for 10 minutes, and stop working after 5 wrong tries.
 

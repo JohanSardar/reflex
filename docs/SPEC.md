@@ -118,7 +118,7 @@ The key words are defined in [GLOSSARY.md](../GLOSSARY.md):
 - **SF Symbols and the system's look,** which is Apple-native and replaces the hand-drawn icons.
 - **The Link on the Mac,** connecting to Claude Code and Codex. Both are the harnesses the person uses.
 - **TestFlight** to put builds on the person's iPad.
-- **GitHub** (github.com/jujdontbudge/reflex) for the code.
+- **GitHub** (github.com/JohanSardar/reflex) for the code.
 
 ## 7. Drafted
 
