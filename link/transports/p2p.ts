@@ -16,7 +16,12 @@ import type { Candidate, Path, Transport } from "./transport.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** Where `npm run build:p2p` puts the helper; REFLEX_P2P_HELPER overrides it. */
-export const HELPER = process.env.REFLEX_P2P_HELPER ?? join(HERE, "p2p", ".build", "release", "reflex-p2p");
+// The single-file build (dist/reflex.mjs, REFLEX_BIN) finds a prebuilt helper next to itself: the npx branch ships one.
+export const HELPER =
+  process.env.REFLEX_P2P_HELPER ??
+  (process.env.REFLEX_BIN && existsSync(join(dirname(process.env.REFLEX_BIN), "reflex-p2p"))
+    ? join(dirname(process.env.REFLEX_BIN), "reflex-p2p")
+    : join(HERE, "p2p", ".build", "release", "reflex-p2p"));
 
 const K = { ready: 1, open: 2, data: 3, closed: 4, log: 5, sent: 6 } as const;
 /** Bytes handed to the helper but not yet taken by the network before `send` waits. */
@@ -82,11 +87,11 @@ class Helper {
   #log: (m: string) => void;
   readonly exited: Promise<string>;
 
-  constructor(args: string[], on: { ready: (port: number) => void; path: (p: Path) => void; log: (m: string) => void }) {
+  constructor(args: string[], on: { ready: (port: number) => void; path: (p: Path) => void; log: (m: string) => void; txt?: Record<string, string> }) {
     this.#onReady = on.ready;
     this.#onPath = on.path;
     this.#log = on.log;
-    this.#child = spawn(HELPER, args, { stdio: ["pipe", "pipe", "inherit"] });
+    this.#child = spawn(HELPER, args, { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, REFLEX_P2P_TXT: JSON.stringify(on.txt ?? {}) } });
     this.#child.stdout!.on("data", (d: Buffer) => this.#data(d));
     this.#child.stdin!.on("error", () => {}); // the helper died; `exited` says so
     this.exited = new Promise((r) => {
@@ -151,9 +156,11 @@ export class P2pTransport implements Transport {
   #log: (m: string) => void;
   #helper: Helper | null = null;
   #closing = false;
+  #txt: Record<string, string>;
 
-  constructor(opts: { device: string; port?: number; log: (m: string) => void }) {
+  constructor(opts: { device: string; port?: number; log: (m: string) => void; txt?: Record<string, string> }) {
     this.#device = opts.device;
+    this.#txt = opts.txt ?? {};
     this.#port = opts.port ?? 0;
     this.#log = opts.log;
   }
@@ -178,6 +185,7 @@ export class P2pTransport implements Transport {
           },
           path: onPath,
           log: this.#log,
+          txt: this.#txt,
         });
         this.#helper = h;
         void h.exited.then((why) => {

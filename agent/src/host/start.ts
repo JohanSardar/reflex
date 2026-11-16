@@ -10,7 +10,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { home, socketPath } from "./rpc.ts";
 
-const BIN = fileURLToPath(new URL("../../bin/reflex.mjs", import.meta.url));
+// The CLI to run the Link with: this checkout's, or the single-file build itself when running from `dist/` (it sets REFLEX_BIN).
+const BIN = process.env.REFLEX_BIN ?? fileURLToPath(new URL("../../bin/reflex.mjs", import.meta.url));
 
 /** Whether something answers on the Agent socket. */
 export function listening(path = socketPath()): Promise<boolean> {

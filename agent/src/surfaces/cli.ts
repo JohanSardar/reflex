@@ -96,6 +96,17 @@ async function adapters(action: string, args: Record<string, unknown>, f: Flags,
 }
 
 const COMMANDS: Record<string, Cmd> = {
+  connect: {
+    usage: "reflex connect",
+    summary: "Get a 6-digit code to type in Reflex on your iPad (connect): it pairs the iPad and lets this Agent in",
+    flags: [],
+    run: (_p, f) =>
+      call("connect", {}, f, (r) => {
+        const j = r.json;
+        if (j.connected) return [`Connected to ${j.ipads.join(", ")}.`, j.next];
+        return [`Code: ${j.code}`, j.tell_the_person];
+      }),
+  },
   wait: {
     usage: "reflex wait [--timeout <seconds>] [--after <send>] [--space <space>]",
     summary: "Wait for the person's next Send (wait_for_user). --timeout 0 reads the Inbox",

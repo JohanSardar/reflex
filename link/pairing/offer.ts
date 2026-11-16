@@ -7,14 +7,26 @@
 // The secret is single-use and expires after ten minutes. Only someone who saw
 // the code knows it, and the device key in it lets the scanner check it
 // reached the right device, not whoever answered on that address.
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { networkInterfaces } from "node:os";
-import QRCode from "qrcode";
 import { b64, unb64 } from "./crypto.ts";
 import type { ScannedOffer } from "./handshake.ts";
 import type { Person } from "./catalog.ts";
 
 const TTL_MS = 10 * 60 * 1000;
+/** Wrong tries before a typed code stops working: 5 in a million for someone guessing. */
+const CODE_TRIES = 5;
+
+/**
+ * The typed code: 6 digits the person reads off their agent and types on the iPad. One is live at a time; an
+ * Agent that asks while one is live gets the same code, and typing it approves every Agent that asked for it.
+ */
+export interface Code {
+  code: string;
+  expires: number;
+  agents: Set<string>;
+  fails: number;
+}
 
 export interface Offer {
   offer: string;
@@ -55,6 +67,50 @@ export function lanAddresses(): string[] {
 
 export class Offers {
   #live = new Map<string, Offer>();
+  #code: Code | null = null;
+  /** The device that used the last typed code, and which Agents it approved. */
+  lastCode: { code: string; device: string; agents: string[] } | null = null;
+
+  /**
+   * The live typed code, with this Agent added to the ones it approves; a new one if none is live, or if this Agent
+   * (or, with no Agent, a terminal) asks again: after a failed typing the person is told to ask for a new code, and a
+   * new one makes any digit a look-alike Link learned useless. The Agents waiting on the old code carry over.
+   */
+  code(agent?: string, now = Date.now()): Code {
+    const again = this.liveCode(now) !== undefined && (agent ? this.#code!.agents.has(agent) : true);
+    if (!this.liveCode(now) || again)
+      this.#code = { code: String(randomInt(0, 1_000_000)).padStart(6, "0"), expires: now + TTL_MS, agents: new Set(again ? this.#code!.agents : []), fails: 0 };
+    if (agent) this.#code!.agents.add(agent);
+    return this.#code!;
+  }
+
+  liveCode(now = Date.now()): string | undefined {
+    const c = this.#code;
+    if (!c) return undefined;
+    if (c.expires < now || c.fails >= CODE_TRIES) {
+      this.#code = null;
+      return undefined;
+    }
+    return c.code;
+  }
+
+  /** Whether this Agent waits on the live code. */
+  codeFor(agent: string): Code | undefined {
+    return this.liveCode() && this.#code!.agents.has(agent) ? this.#code! : undefined;
+  }
+
+  codeFailed(): void {
+    if (this.#code) this.#code.fails++;
+  }
+
+  /** Uses up the typed code if it is still the live one; returns the Agents it approves, or undefined. */
+  takeCode(code: string, device: string): string[] | undefined {
+    if (this.liveCode() !== code) return undefined;
+    const c = this.#code!;
+    this.#code = null;
+    this.lastCode = { code: c.code, device, agents: [...c.agents] };
+    return [...c.agents];
+  }
   /** Codes used up, and by which device: `reflex pair` waits on this, so an iPad that was paired already and scans again counts. */
   #used = new Map<string, string>();
 
@@ -139,8 +195,4 @@ export function parseOffer(uri: string): ParsedOffer {
     name: u.searchParams.get("n") ?? "",
     person: { id: g("pi"), name: u.searchParams.get("pn") ?? "" },
   };
-}
-
-export function qrText(uri: string): Promise<string> {
-  return QRCode.toString(uri, { type: "terminal", small: true, errorCorrectionLevel: "M" });
 }

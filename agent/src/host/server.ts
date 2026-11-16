@@ -25,6 +25,8 @@ export type HostOptions = {
   token: string;
   /** Who a caller is, once the person approved it; throws a ReflexError otherwise. */
   authorize: (who: Who, signal: AbortSignal, progress?: (p: { elapsed_s: number; timeout_s: number; message: string }) => void) => Promise<Identity>;
+  /** `connect`: a code for the person to type on their iPad, or that it's connected. Needs no approval: it's how an Agent gets one. */
+  connect?: (who: Who) => Record<string, any>;
   /** Registers a push target; returns its ID, or throws a ReflexError when it isn't accepted. */
   listen?: (l: Listener) => string;
   /** Adds, lists or removes the caller's push targets that need no connection (`reflex adapters`). */
@@ -70,7 +72,12 @@ export function serveHost(o: HostOptions): Promise<Server> {
       const ac = new AbortController();
       calls.set(f.id, ac);
       try {
-        if (f.t === "call") {
+        if (f.t === "call" && f.tool === "connect") {
+          if (!o.connect) throw new ReflexError("unavailable", [{ code: "unavailable", msg: "This host can't pair an iPad.", fix: "Use wait_for_user." }]);
+          const json = o.connect(f.who);
+          log("call", { client, tool: "connect", connected: Boolean(json.connected) });
+          send({ t: "result", id: f.id, json, images: [], isError: json.ok === false });
+        } else if (f.t === "call") {
           // While the person hasn't answered yet, the surface shows why the call is waiting.
           const who = await o.authorize(f.who, ac.signal, (p) => send({ t: "progress", id: f.id, ...p }));
           const started = Date.now();

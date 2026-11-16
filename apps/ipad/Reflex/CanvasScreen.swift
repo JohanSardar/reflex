@@ -49,8 +49,8 @@ struct CanvasScreen: View {
             if case .linkChanged = link.state {
                 HStack(spacing: 12) {
                     Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.orange)
-                    Text("Your Mac's pairing changed. Scan its code again.").font(.callout)
-                    Button("Scan") { pairing = true }.buttonStyle(.glassProminent).accessibilityIdentifier("scan-again")
+                    Text("Your Mac's Reflex was reset. Ask your agent for a new code.").font(.callout)
+                    Button("Type Code") { pairing = true }.buttonStyle(.glassProminent).accessibilityIdentifier("scan-again")
                 }
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .glassEffect()

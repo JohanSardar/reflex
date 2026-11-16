@@ -4,26 +4,40 @@ Send your marks, words and screen from an iPad to Claude Code or Codex on your M
 
 ## Connect
 
-Use Node 26 or newer. From this checkout:
+Add Reflex to your agent with one line (Node 22 or newer):
 
 ```sh
-node agent/bin/reflex.mjs setup
+claude mcp add reflex -- npx -y "github:jujdontbudge/reflex#npx" mcp
 ```
 
-Setup installs packages, builds the optional Apple peer-to-peer helper, configures the chosen harness, and starts the Link. Scan its pairing code in the iPad app and tap Allow when the agent asks. Use `node agent/bin/reflex.mjs pair` for a fresh code.
+Other MCP harnesses (Codex, Cursor, …) take the same server command: `npx -y github:jujdontbudge/reflex#npx mcp`. In Codex, set `tool_timeout_sec = 300`.
 
-Pairing and agent approval are separate. Only an approving iPad, or the Link terminal before an approving iPad exists, grants agent access. Shell commands can deny or revoke access.
+Then tell your agent "connect my iPad" (in Codex, "connect my iPad to Reflex"). It gives you a 6-digit code. Open Reflex on the iPad, tap **Pair with Mac**, and type it. The iPad finds the Mac on the same Wi-Fi, and typing the code also lets that agent in. Codes work once, for 10 minutes, and stop working after 5 wrong tries.
+
+Sends then reach the agent through `wait_for_user`, in a plain `claude` session with no flags. The agent keeps waiting for the next Send by itself.
+
+### Pushed Sends (optional, local)
+
+Claude Code can also have each Send pushed in as a new turn, through a channel. Claude Code only loads channels from Anthropic's allowlist without a flag, so this needs a local setup:
+
+```sh
+node agent/bin/reflex.mjs setup          # from a checkout: PATH, Claude Code and Codex config, the Link
+claude --dangerously-load-development-channels server:reflex
+```
 
 ## Receive a Send
 
 ```sh
-node agent/bin/reflex.mjs wait --timeout 0 --json
-node agent/bin/reflex.mjs mcp
-node agent/bin/reflex.mjs mcp --channel
-node agent/bin/reflex.mjs link status
+reflex connect
+reflex wait --timeout 0 --json
+reflex mcp [--channel]
+reflex link status
+reflex pair                              # the live pairing code, from a terminal
 ```
 
-`wait_for_user` is the sole MCP tool. Claude Code can also receive channel pushes. An approved receiver can register a signed webhook with `reflex adapters add webhook --url <url>`. Acknowledge a Send with `wait_for_user(after: '<send>', timeout_s: 0)` and answer in your session.
+`connect` gives the pairing code and `wait_for_user` receives Sends. An approved receiver can register a signed webhook with `reflex adapters add webhook --url <url>`. Acknowledge a Send with `wait_for_user(after: '<send>', timeout_s: 0)` and answer in your session.
+
+`dist/reflex.mjs` is the whole CLI in one file, so `npx` can run it from GitHub with nothing to install. Rebuild it with `npm run build` after changing `agent/` or `link/`, and commit it. After a merge to `main`, a GitHub Action copies it to the `npx` branch, which holds only that file and `package.json` so the one-line install downloads about 1 MB.
 
 ## Repository
 

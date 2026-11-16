@@ -124,6 +124,8 @@ export function nativeBundle(send: NativeSend, opts: {
     ...(send.said ? { said: words.length ? transcript.join(" ") : send.said } : {}), ...(words.length ? { words } : {}),
     marks, strokes: send.strokes, scene: targets, changes: [], viewport: send.viewport, images: imageInfo,
     also_sent_to: opts.others, redelivered: opts.redelivered, pending_after: opts.pendingAfter,
-    next: `Acknowledge with wait_for_user(after: '${send.send}'${opts.pushed ? ", timeout_s: 0" : ""}).${opts.pushed ? " Then end your turn; the next Send is pushed to you." : ""}`,
+    next: opts.pushed
+      ? `Answer the person in your reply, then acknowledge with wait_for_user(after: '${send.send}', timeout_s: 0) and end your turn; the next Send is pushed to you.`
+      : `Do what the person asks and write your answer in your reply (they read only your reply). Then call wait_for_user(after: '${send.send}') to acknowledge this Send and wait for the next one.`,
   }, images };
 }
