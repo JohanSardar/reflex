@@ -94,16 +94,25 @@ export function nativeBundle(send: NativeSend, opts: {
 }): { json: Record<string, any>; images: Buffer[] } {
   const gs = groups(send);
   const targets: Target[] = (send.context ?? send.strokes).map((s) => ({ id: s.id, bounds: s.bounds }));
-  const images: Buffer[] = [], imageInfo: { n: number; shows: string; bounds: Bounds }[] = [];
+  const images: Buffer[] = [], imageInfo: { n: number; shows: string; bounds: Bounds; viewport?: Bounds; kind: string }[] = [];
   for (const crop of send.crops ?? []) {
     const bytes = opts.asset(crop.asset);
-    if (bytes) { images.push(bytes); imageInfo.push({ n: images.length, shows: "What the person saw when they pressed Send", bounds: crop.bounds }); }
+    if (bytes) {
+      images.push(bytes);
+      imageInfo.push({ n: images.length, kind: crop.kind ?? "recent_strokes",
+        shows: crop.kind === "screen" ? "Full visible board at Send, plus 15% on every side; no Reflex controls. viewport locates the visible screen in board coordinates within bounds."
+          : "Close-up of the recent strokes",
+        bounds: crop.bounds, ...(crop.kind === "screen" ? { viewport: send.viewport } : {}) });
+    }
   }
   const marks = gs.map((g, i) => {
     const mark = { id: `m${i + 1}`, ...classify(g, targets), strokes: g.strokes.map((s) => s.id), bounds: g.bounds,
       at: Math.min(...g.strokes.map((s) => s.at)), end: Math.max(...g.strokes.map((s) => s.at + (s.points.at(-1)?.[2] ?? 0))) };
-    const image = imageInfo.find((im) => area(im.bounds, g.bounds) > 0);
-    return { ...mark, ...(image ? { image: image.n } : {}) };
+    const containsMark = (im: typeof imageInfo[number]) => g.bounds[0] + g.bounds[2] >= im.bounds[0] && g.bounds[0] <= im.bounds[0] + im.bounds[2]
+      && g.bounds[1] + g.bounds[3] >= im.bounds[1] && g.bounds[1] <= im.bounds[1] + im.bounds[3];
+    const inImages = imageInfo.filter(containsMark);
+    const image = inImages.find((im) => im.kind === "recent_strokes") ?? inImages[0];
+    return { ...mark, ...(image ? { image: image.n, images: inImages.map((im) => im.n) } : {}) };
   });
   const words = [...(send.words ?? [])].sort((a, b) => a.start_ms - b.start_ms);
   const timed = [...marks].sort((a, b) => a.at - b.at), transcript: string[] = [];

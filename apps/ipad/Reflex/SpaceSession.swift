@@ -934,7 +934,7 @@ final class BoardSession {
             say("Pair with your Mac to send.", pair: true)
             return
         }
-        // The screen is captured as the person sees it, without selection handles.
+        // Freeze board content at Send time, without chrome or selection handles.
         clearSelection()
         let destination = link.destinationKey
         let ids = ink.pendingStrokes().filter { !reserved.contains($0) }
@@ -955,19 +955,36 @@ final class BoardSession {
         if let said, !said.isEmpty { raw["said"] = said }
         if !words.isEmpty { raw["words"] = words }
         let marked = ink.strokes.filter { ids.contains($0.id) }.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
-        let rect = marked.isNull ? view : marked.insetBy(dx: -60, dy: -60).intersection(view)
-        do {
-            if let crop = Crop.capture(space: rect, zoom: z, offset: o) {
-                let hash = try link.storeAsset(crop.png)
-                raw["crops"] = [["asset": hash, "bounds": ints(crop.bounds), "strokes": ids]]
-            }
-        } catch { say("Could not save the Send image: \(error.localizedDescription)"); return }
+        let full = view.insetBy(dx: -view.width * 0.15, dy: -view.height * 0.15)
+        let recent = marked.isNull ? nil : marked.insetBy(dx: -60, dy: -60)
+        let drawing = ink.drawing, objects = objects, paper = meta.paper, files = files
+        let dark = ink.canvasView.traitCollection.userInterfaceStyle == .dark
         reserved.formUnion(ids)
         let previous = sending
         preparingSends += 1
         sending = Task {
             defer { preparingSends -= 1 }
             await previous?.value
+            // ImageRenderer uses SwiftUI on the main actor. Bound its output, then
+            // compress PNGs off the UI thread. Both pictures use the frozen board.
+            let regions: [(String, CGRect)] = [("screen", full)] + (recent.map { [("recent_strokes", $0)] } ?? [])
+            var crops: [[String: Any]] = []
+            do {
+                for (kind, rect) in regions {
+                    guard let image = BoardRenderer.image(of: rect, drawing: drawing, objects: objects, files: files, paper: paper, maxSide: 1000, dark: dark, viewportZoom: z),
+                          let png = await Task.detached(priority: .userInitiated, operation: { image.pngData() }).value else {
+                        throw CocoaError(.fileWriteUnknown)
+                    }
+                    let hash = try link.storeAsset(png)
+                    crops.append(["asset": hash, "bounds": ints(rect), "kind": kind, "strokes": kind == "recent_strokes" ? ids : []])
+                    await Task.yield()
+                }
+                raw["crops"] = crops
+            } catch {
+                reserved.subtract(ids)
+                say("Could not save the Send image: \(error.localizedDescription)")
+                return
+            }
             let hints = await Handwriting.hints(pk)
             if !hints.isEmpty { raw["hints"] = hints }
             do {
@@ -987,21 +1004,4 @@ final class BoardSession {
     var paletteAfterEditing = false
     /// Sends being put together (handwriting hints, crop) before they're saved.
     var preparingSends = 0
-}
-
-/// What the screen shows in one rectangle of the Space, as a PNG.
-enum Crop {
-    @MainActor
-    static func capture(space rect: CGRect, zoom: CGFloat, offset: CGPoint) -> (png: Data, bounds: CGRect)? {
-        guard !rect.isNull, rect.width >= 1, rect.height >= 1,
-              let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
-        else { return nil }
-        let onScreen = CGRect(x: rect.minX * zoom - offset.x, y: rect.minY * zoom - offset.y, width: rect.width * zoom, height: rect.height * zoom)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 2
-        let image = UIGraphicsImageRenderer(size: onScreen.size, format: format).image { _ in
-            window.drawHierarchy(in: CGRect(origin: CGPoint(x: -onScreen.minX, y: -onScreen.minY), size: window.bounds.size), afterScreenUpdates: false)
-        }
-        return image.pngData().map { ($0, rect) }
-    }
 }
