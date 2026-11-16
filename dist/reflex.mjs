@@ -1741,7 +1741,7 @@ function nativeBundle(send, opts) {
     also_sent_to: opts.others,
     redelivered: opts.redelivered,
     pending_after: opts.pendingAfter,
-    next: `Acknowledge with wait_for_user(after: '${send.send}'${opts.pushed ? ", timeout_s: 0" : ""}).${opts.pushed ? " Then end your turn; the next Send is pushed to you." : ""}`
+    next: opts.pushed ? `Answer the person in your reply, then acknowledge with wait_for_user(after: '${send.send}', timeout_s: 0) and end your turn; the next Send is pushed to you.` : `Do what the person asks and write your answer in your reply (they read only your reply). Then call wait_for_user(after: '${send.send}') to acknowledge this Send and wait for the next one.`
   }, images };
 }
 var union, distance, length, straight, size, area, pad, center, boxDistance;
@@ -9873,7 +9873,7 @@ async function startAgentHost(o) {
       code: spaced(c.code),
       expires_in_s: Math.round((c.expires - Date.now()) / 1e3),
       tell_the_person: `Open Reflex on your iPad, tap Pair with Mac, and type ${spaced(c.code)}. The iPad needs to be on the same Wi-Fi as this Mac. The code works once, for 10 minutes.`,
-      next: "Tell the person the code exactly as tell_the_person says. Then call wait_for_user: it returns once they have typed the code and pressed Send. Keep calling it after you answer each Send."
+      next: "Write the code and tell_the_person in your reply now: the person can't see this tool result. Then call wait_for_user: it returns once they have typed the code and pressed Send."
     };
   }
   async function authorize(who2, signal, progress) {
@@ -15609,7 +15609,7 @@ var init_protocol = __esm({
   "agent/src/protocol.ts"() {
     "use strict";
     TOOLS = ["connect", "wait_for_user"];
-    instructions = "Receive the person's marks, words and screen from their iPad. When the person asks to connect, pair or set up their iPad (or Reflex), call connect and tell them the 6-digit code it gives, exactly as its tell_the_person says. Once connected, call wait_for_user to receive a Send, answer it in your own session, and call wait_for_user again with after set to that Send's ID, so you keep hearing from them without being asked. You cannot write to the canvas.";
+    instructions = "Receive the person's marks, words and screen from their iPad. The person reads only your reply text, never tool results. When they ask to connect, pair or set up their iPad (or Reflex), call connect, then write its 6-digit code and tell_the_person in your reply, and only then call wait_for_user. When wait_for_user returns a Send, do what it asks and write your answer in your reply, then call wait_for_user again with after set to that Send's ID, so you keep hearing from them without being asked. You cannot write to the canvas.";
     description = (tool) => tool === "connect" ? "Connect the person's iPad to this session. Returns a 6-digit code for them to type in Reflex on their iPad (or says it's connected already). Call it when they ask to connect, pair or set up their iPad." : "Wait for a Send from the paired iPad. after acknowledges a previous Send. timeout_s: 0 checks the Inbox immediately.";
     inputSchema = (tool) => tool === "connect" ? { type: "object", properties: {}, additionalProperties: false } : { type: "object", properties: { space: { type: "string" }, after: { type: "string" }, timeout_s: { type: "number", minimum: 0, maximum: 3600 } }, additionalProperties: false };
   }
