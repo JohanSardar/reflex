@@ -767,6 +767,45 @@ Why: the person's first complaint about the TestFlight build: "it is a bit laggy
 ## Evidence of done
 When you are done, use it yourself the way a user would: run the real app and go through it like they do. If it has no user, use it the way its real client would, such as a program calling the API or an agent calling the tool. Check that it works, that it does everything this ticket asks, and that you hit no other problems. Show what you saw: screenshots, a video, or the output. Follow the `agent-testing` skill for all testing.
 
+# T26: Send shows the agent the whole screen
+
+## Goal
+When the person presses Send (or lets go of the mic), the agent sees what the person saw. When this is done, every Send also carries:
+- **A picture of the full visible screen plus a margin around it.** It shows the board as it looks (paper, stickies, text, tables, images, shapes, connectors and ink), without Reflex's buttons and capsules, and with about 15% more of the board on every side than fits on screen. The margin has to show what's really there, even though it's off-screen. Keep it a reasonable size for an agent to read.
+- **The close-up picture of the recent strokes**, as today: a crop around the strokes since the last Send. When there are no new strokes, the full picture alone is enough.
+- **The recent strokes themselves**, as today.
+- **Everything else it already sends:** the words and their timing, handwriting guesses, the viewport, the marks, the outbox and `send_ack`.
+
+The agent has to know which picture is which:
+- Today the close-up is labelled "What the person saw when they pressed Send", which is false. Label the full picture as the screen plus a margin, and say where the visible screen sits inside it.
+- Label the close-up as the recent strokes.
+- Link each mark to the image it appears in.
+- This applies to `wait_for_user`, the Claude Code channel push and the webhook.
+
+Why: the person's agent kept replying "Each Send only shows me the area around the new marks, so I also haven't seen the handwriting higher up on the page." The person's words: "update to send the full visible screen plus a bit around that as well as the recent stroke picture and recent strokes and the other things it already does."
+
+## Context
+- How a Send is built: `send(trigger:said:words:)` and `Crop.capture` in `apps/ipad/Reflex/SpaceSession.swift`. `Crop.capture` snapshots the key window, so it includes chrome and can't see off-screen content. The full picture needs rendering from the board itself, its content view or the PencilKit drawing plus the object layer, so that the margin is real.
+- How the Link checks and shapes a Send: `link/storage/sends.ts` (`NativeSend`, validation) and `agent/src/capabilities/native-bundle.ts` (`nativeBundle`, `images`, the `shows` text, mark to image links). The channel writes images to files in `agent/src/surfaces/mcp.ts`, and the webhook is in `link/adapters/webhook.ts`.
+- An iPad on the old build may still send a Send without the new picture. The Link must still accept it.
+- The person's iPad gets builds through TestFlight. The parent uploads.
+
+## Constraints
+- Keep Send fast: rendering must not block the Pencil or the UI noticeably.
+- Don't change the outbox, `send_ack` or pairing.
+- Don't build or upload to TestFlight.
+- Don't run anything that prompts for a password or keychain approval, and don't turn off the Mac's network.
+
+## Evidence of done
+Use it the way the person does:
+1. Run the app on a simulator, paired to a real Link on this Mac.
+2. Make a board with handwriting near the top and stickies or images, some of them just off-screen.
+3. Draw a new small mark and press Send.
+4. Receive the Send as an agent would (`reflex wait --json` or the MCP tool), and open both images.
+5. Show that the full picture has the whole screen and the off-screen margin, with no chrome, and that the close-up and labels are right.
+
+Follow the `agent-testing` skill for all testing.
+
 ## Follow-ups carried into later tickets
 
 Found while building earlier tickets. Each goes into the named ticket's brief.
