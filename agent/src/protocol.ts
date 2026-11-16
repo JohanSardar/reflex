@@ -7,7 +7,7 @@ export const instructions =
   "When wait_for_user returns a Send, do what it asks and write your answer in your reply, then call wait_for_user again with after set to that Send's ID, so you keep hearing from them without being asked. You cannot write to the canvas.";
 export const description = (tool: Tool) =>
   tool === "connect"
-    ? "Connect the person's iPad to this session. Returns a 6-digit code for them to type in Reflex on their iPad (or says it's connected already). Call it when they ask to connect, pair or set up their iPad."
+    ? "Reflex: connect the person's iPad (the Reflex app) to you, so you receive what they draw, write and say. Returns a 6-digit code for them to type on the iPad, or says it's connected already. Use it whenever they ask to connect, pair, link or set up their iPad, even if they don't say Reflex."
     : "Wait for a Send from the paired iPad. after acknowledges a previous Send. timeout_s: 0 checks the Inbox immediately.";
 export const inputSchema = (tool: Tool) =>
   tool === "connect"
