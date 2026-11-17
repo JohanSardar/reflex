@@ -1,0 +1,33 @@
+name: Bug report
+description: Something in Reflex did not work as expected.
+title: "Bug: "
+body:
+  - type: markdown
+    attributes:
+      value: "For vulnerabilities, use [private reporting](https://github.com/JohanSardar/reflex/security/advisories/new). Remove private board content, credentials and pairing codes."
+  - type: textarea
+    id: problem
+    attributes:
+      label: What went wrong?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the exact command or UI steps, using synthetic content.
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Environment
+      description: iPad model, iPadOS, app build, macOS, Node, and Claude Code or Codex version. Same Wi-Fi, nearby, or remote?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: A screenshot or relevant redacted output. Never upload ~/.reflex/link/ or private keys.
