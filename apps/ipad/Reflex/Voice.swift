@@ -49,7 +49,7 @@ final class VoiceCapture {
 
     init() {
         // Have this language's speech model ready before the first hold.
-        if !Self.needsPermission { Task { _ = try? await SpeechModel.module(installing: true) } }
+        if !Self.needsPermission { Task { _ = try? await SpeechModel.module() } }
         let center = NotificationCenter.default
         for name in [AVAudioSession.interruptionNotification, .AVAudioEngineConfigurationChange] {
             observers.append(
@@ -73,7 +73,7 @@ final class VoiceCapture {
     /// language's on-device speech model if the iPad doesn't have it yet, so the first hold can use it.
     func requestPermission() async -> Bool {
         let ok = await Self.allowed()
-        if ok { Task { _ = try? await SpeechModel.module(installing: true) } }
+        if ok { Task { _ = try? await SpeechModel.module() } }
         return ok
     }
 
@@ -138,7 +138,7 @@ final class VoiceCapture {
     /// Transcribes a saved recording again, from its audio on this iPad.
     /// The audio goes through the same path as the mic's, in the format the recognizer asks for.
     static func transcribe(_ url: URL) async throws -> Heard {
-        _ = try await SpeechModel.module(installing: true)
+        _ = try await SpeechModel.module()
         let file = try AVAudioFile(forReading: url)
         let format = file.processingFormat
         let seconds = Double(file.length) / format.sampleRate
@@ -231,7 +231,7 @@ struct Heard: Sendable {
 
 /// The on-device speech model for the person's language, and its results as plain pieces.
 enum SpeechModel {
-    static func module(installing: Bool) async throws -> (any SpeechModule, AsyncThrowingStream<Heard.Piece, Error>) {
+    static func module() async throws -> (any SpeechModule, AsyncThrowingStream<Heard.Piece, Error>) {
         let locale = Locale.current
         let module: any SpeechModule
         let pieces: AsyncThrowingStream<Heard.Piece, Error>
@@ -260,7 +260,6 @@ enum SpeechModel {
         case .unsupported:
             throw VoiceError("On-device speech recognition isn't available on this iPad for \(locale.identifier).")
         case .supported, .downloading:
-            guard installing else { throw VoiceError("This iPad is still getting speech recognition ready.") }
             if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
                 log.info("Downloading the on-device speech model")
                 try await request.downloadAndInstall()
@@ -305,7 +304,9 @@ private final class Listener {
 
     private func run(_ format: AVAudioFormat, _ audio: AsyncStream<Tape.Chunk>) async {
         do {
-            let (module, pieces) = try await SpeechModel.module(installing: false)
+            // If the model is still downloading (the first hold after allowing the mic), wait for it: the
+            // audio queues in `audio` meanwhile, so the whole hold is still transcribed.
+            let (module, pieces) = try await SpeechModel.module()
             let target = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module], considering: format)
             let analyzer = SpeechAnalyzer(modules: [module])
             self.analyzer = analyzer
