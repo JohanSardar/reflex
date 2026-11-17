@@ -457,8 +457,10 @@ public final class LinkSync {
         do {
             try await pairThroughRelay(code)
         } catch LinkError.unreachable(let far) {
+            // Nothing far away either: the nearby answer is the one the person needs, worded as before.
+            linkLog.info("Through the relay: \(far, privacy: .public)")
             state = paired == nil ? .unpaired : before
-            throw LinkError.unreachable("Could not pair. \(errors.joined(separator: "; ")); \(far)")
+            throw LinkError.unreachable("Could not pair. \(errors.joined(separator: "; "))")
         } catch {
             state = paired == nil ? .unpaired : before
             throw error

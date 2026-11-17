@@ -22,7 +22,16 @@ The host checks approval for calls and push targets. `wait_for_user` reads the I
 
 ## Relay
 
-`/v0/connect?room=<room>` authenticates device keys, publishes watched-device presence and forwards encrypted frames. It stores no document log or assets and runs no OAuth or cloud agents. The forwarding wire remains compatible with existing paired clients.
+`/v0/connect?room=<room>` authenticates device keys and forwards encrypted frames. It tells presence only between devices that watch each other, and delivers a frame only to a device that watches its sender. It stores no document log or assets and runs no OAuth or cloud agents. The forwarding wire remains compatible with existing paired clients.
+
+Pairing from anywhere uses one fixed **pairing room**, `PAIRING_ROOM` in `relay/domain/wire.ts`; its name derives from no part of any code.
+- While a typed code is live, the Link waits there under a throwaway relay identity.
+- An iPad that finds no Mac nearby tries the code on each Link waiting there. The check is CPace over X25519 (`link/pairing/cpace.ts`, `Cpace.swift`), with the auth MACs as key confirmation.
+- A wrong try counts against the code's 5. Names are blanked on relay paths; each side sends a sealed `who` once the session is up.
+- After pairing, sessions use the person's room as before.
+- A Link on its own relay (`REFLEX_RELAY`, or `--relay`, remembered) also waits on the default relay, only to answer `moved` with its relay's URL.
+
+The Room caps sockets per room and per address, limits new pairing-room channels per socket and per address, rate-limits control messages, and closes sockets that don't say hello within 10 s. The Node server also limits connections per address. See docs/research/relay-croc-happy.md for how this compares with croc and Happy.
 
 Node and Cloudflare share the Room implementation. The Cloudflare migration retires LogDO and AuthDO, deleting their stored data when applied. Deployment requires explicit approval; this change does not deploy. Today's deployed Relay can still forward connections from the reduced Link.
 

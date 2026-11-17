@@ -4,7 +4,10 @@ A live forwarding service for paired iPads and Macs that cannot reach each other
 
 The wire endpoint `/v0/connect?room=<32 hex>` is unchanged, so the reduced Link works through today's deployed Relay. No document log, cloud asset storage, OAuth sign-in or cloud agent runtime remains.
 
+It also hosts the pairing room, where a Link with a live code waits for an iPad that isn't nearby (README, "The relay: pairing from anywhere"). It caps sockets per room and per address, rate-limits pairing tries and control messages, and closes sockets that don't say hello within 10 s.
+
 ```sh
+reflex relay --tunnel                    # one command: a Relay plus a free Cloudflare quick tunnel
 node relay/node/bin/reflex-relay.ts --help
 npm run dev -w @reflex/relay
 ```
