@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 // reflex link (also reflex-link): start the Link with the Agent layer inside
 // it, pair devices, see and revoke Agents, look inside.
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { homeDir } from "../home.ts";
 import { Link, LinkError } from "../link.ts";
-import { DEFAULT_RELAY } from "../transports/relay.ts";
 import { LinkClient, RpcError } from "../rpc/client.ts";
+import { DEFAULT_RELAY } from "../transports/relay.ts";
 
 const HELP = `Reflex Link — receive iPad Sends for local agents
 Usage: reflex link [status|stop|pair|forget <device>|agents|deny <agent>|revoke <agent>]
@@ -59,7 +58,12 @@ async function admin<T>(method: string, params: Record<string, unknown> = {}): P
 function relayUrl(): string | undefined {
   const file = join(dir, "relay.json");
   const check = (url: string, from: string): string => {
-    if (!/^wss?:\/\/[^/]+/.test(url)) throw new LinkError("usage", `${from} '${url}' is not a ws:// or wss:// URL.`, `For example: wss://relay.example.com (the default is ${DEFAULT_RELAY})`);
+    if (!/^wss?:\/\/[^/]+/.test(url))
+      throw new LinkError(
+        "usage",
+        `${from} '${url}' is not a ws:// or wss:// URL.`,
+        `For example: wss://relay.example.com (the default is ${DEFAULT_RELAY})`,
+      );
     return url.replace(/\/+$/, "");
   };
   if (flags.relay === "off") {
@@ -70,7 +74,7 @@ function relayUrl(): string | undefined {
   if (flags.relay) {
     const url = check(flags.relay, "--relay");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    writeFileSync(file, JSON.stringify({ url }) + "\n");
+    writeFileSync(file, `${JSON.stringify({ url })}\n`);
     return url;
   }
   const env = process.env.REFLEX_RELAY?.trim();
@@ -111,22 +115,46 @@ interface Status {
   assets: number;
   inbox: { space: string; send: string; via: string; receipts: { recipient: string; state: string }[] }[];
   paired: { device: string; name: string; connected: boolean }[];
-  peers: { device: string; name: string; paths: { transport: string; remote: string; rttMs: number | null; active: boolean; sentBytes: number; receivedBytes: number }[] }[];
+  peers: {
+    device: string;
+    name: string;
+    paths: {
+      transport: string;
+      remote: string;
+      rttMs: number | null;
+      active: boolean;
+      sentBytes: number;
+      receivedBytes: number;
+    }[];
+  }[];
   agents: { id: string; name: string; status: string }[];
   push?: {
     targets: { id: string; agent: string; adapter: string; config: Record<string, unknown>; live: boolean }[];
-    attempts: { space: string; send: string; recipient: string; target: string; started_at: number; outcome: string; reason: string | null }[];
+    attempts: {
+      space: string;
+      send: string;
+      recipient: string;
+      target: string;
+      started_at: number;
+      outcome: string;
+      reason: string | null;
+    }[];
   };
 }
 
 function showStatus(s: Status): string {
-  const lines = [`${s.name} (${s.device}) · ${s.person.name} · ${s.lan_port === undefined ? "no LAN" : `LAN :${s.lan_port}`}${s.p2p_port ? ` · peer-to-peer :${s.p2p_port}` : ""}`, ""];
+  const lines = [
+    `${s.name} (${s.device}) · ${s.person.name} · ${s.lan_port === undefined ? "no LAN" : `LAN :${s.lan_port}`}${s.p2p_port ? ` · peer-to-peer :${s.p2p_port}` : ""}`,
+    "",
+  ];
   lines.push(`Pages with Sends (${s.pages.length}), ${s.assets} assets`);
   for (const page of s.pages) lines.push(`  ${page}`);
   lines.push(`Paired devices (${s.paired.length})`);
   for (const d of s.paired) {
     const p = s.peers.find((x) => x.device === d.device);
-    lines.push(`  ${d.name.padEnd(20)} ${d.device}  ${p ? `connected over ${p.paths.length} path${p.paths.length === 1 ? "" : "s"}` : "not connected"}`);
+    lines.push(
+      `  ${d.name.padEnd(20)} ${d.device}  ${p ? `connected over ${p.paths.length} path${p.paths.length === 1 ? "" : "s"}` : "not connected"}`,
+    );
     for (const x of p?.paths ?? [])
       lines.push(
         `    ${x.active ? "→" : " "} ${x.transport.padEnd(4)} ${x.remote}${x.rttMs !== null ? `, ${x.rttMs} ms` : ""}, ` +
@@ -137,16 +165,22 @@ function showStatus(s: Status): string {
   for (const a of s.agents) lines.push(`  ${a.id.padEnd(28)} ${a.status.padEnd(9)} ${a.name}`);
   lines.push(`Inbox (${s.inbox.length})`);
   for (const i of s.inbox)
-    lines.push(`  ${i.space}/${i.send}  via ${i.via}  ${i.receipts.map((r) => `${r.recipient}: ${r.state}`).join(", ") || "not delivered yet"}`);
+    lines.push(
+      `  ${i.space}/${i.send}  via ${i.via}  ${i.receipts.map((r) => `${r.recipient}: ${r.state}`).join(", ") || "not delivered yet"}`,
+    );
   const push = s.push ?? { targets: [], attempts: [] };
   lines.push(`Push targets (${push.targets.length})`);
-  for (const t of push.targets) lines.push(`  ${t.id}  ${t.adapter.padEnd(15)} ${t.live ? "live   " : "offline"}  agent ${t.agent}  ${JSON.stringify(t.config)}`);
+  for (const t of push.targets)
+    lines.push(
+      `  ${t.id}  ${t.adapter.padEnd(15)} ${t.live ? "live   " : "offline"}  agent ${t.agent}  ${JSON.stringify(t.config)}`,
+    );
   if (push.attempts.length) lines.push(`Recent pushes`);
   for (const a of push.attempts)
-    lines.push(`  ${new Date(a.started_at).toISOString()}  ${a.space}/${a.send} → ${a.recipient} via ${a.target}: ${a.outcome}${a.reason ? ` (${a.reason})` : ""}`);
+    lines.push(
+      `  ${new Date(a.started_at).toISOString()}  ${a.space}/${a.send} → ${a.recipient} via ${a.target}: ${a.outcome}${a.reason ? ` (${a.reason})` : ""}`,
+    );
   return lines.join("\n");
 }
-
 
 async function main(): Promise<void> {
   if (flags.help) return void process.stdout.write(HELP);
@@ -154,13 +188,17 @@ async function main(): Promise<void> {
   switch (cmd) {
     case "start":
       return start();
-    case "status":
-    {
+    case "status": {
       const s = await admin<Status>("status");
       return out(showStatus(s), s);
     }
     case "pair": {
-      if (!args[1]) throw new LinkError("usage", "To pair an iPad, run `reflex pair`: it shows a fresh code to scan.", "To pair this Link with another Link, run: reflex link pair '<its code>'");
+      if (!args[1])
+        throw new LinkError(
+          "usage",
+          "To pair an iPad, run `reflex pair`: it shows a fresh code to scan.",
+          "To pair this Link with another Link, run: reflex link pair '<its code>'",
+        );
       const d = await admin<{ device: string; name: string }>("pair.join", { uri: args[1] });
       return out(`Paired with ${d.name} (${d.device}).`, d);
     }
@@ -180,10 +218,18 @@ async function main(): Promise<void> {
         c.close();
       }
       for (let i = 0; i < 100 && existsSync(join(dir, "link.json")); i++) await new Promise((r) => setTimeout(r, 100));
-      return out(`Stopped the Link (pid ${pid}). \`reflex mcp\` and the CLI start it again when they need it.`, { stopped: true, pid });
+      return out(`Stopped the Link (pid ${pid}). \`reflex mcp\` and the CLI start it again when they need it.`, {
+        stopped: true,
+        pid,
+      });
     }
     case "forget": {
-      if (!args[1]) throw new LinkError("usage", "Which device? reflex link forget <device>", "Run reflex link status to see them.");
+      if (!args[1])
+        throw new LinkError(
+          "usage",
+          "Which device? reflex link forget <device>",
+          "Run reflex link status to see them.",
+        );
       const d = await admin<{ device: string; name: string; window_until?: number }>("forget", { device: args[1] });
       return out(
         `Forgot ${d.name} (${d.device}).` +
@@ -195,20 +241,31 @@ async function main(): Promise<void> {
     }
     case "agents": {
       const list = await admin<{ id: string; name: string; status: string; color: string }[]>("agents.list");
-      return out(list.map((a) => `${a.id.padEnd(28)} ${a.status.padEnd(9)} ${a.name}`).join("\n") || "No Agents have connected yet.", list);
+      return out(
+        list.map((a) => `${a.id.padEnd(28)} ${a.status.padEnd(9)} ${a.name}`).join("\n") ||
+          "No Agents have connected yet.",
+        list,
+      );
     }
     case "approve":
     case "deny":
     case "revoke": {
-      if (!args[1]) throw new LinkError("usage", `Which Agent? reflex link ${cmd} <agent>`, "Run reflex link agents to see them.");
+      if (!args[1])
+        throw new LinkError("usage", `Which Agent? reflex link ${cmd} <agent>`, "Run reflex link agents to see them.");
       const status = { approve: "approved", deny: "denied", revoke: "revoked" }[cmd];
       const a = await admin<{ id: string; name: string; status: string }>("agents.decide", { id: args[1], status });
       return out(`${a.name} (${a.id}) ${a.status}.`, a);
     }
     case "fault": {
-      if (args[1] === undefined) throw new LinkError("usage", 'Which faults? reflex link fault "lan:drop=1" (or "" to clear)');
+      if (args[1] === undefined)
+        throw new LinkError("usage", 'Which faults? reflex link fault "lan:drop=1" (or "" to clear)');
       const f = await admin<Record<string, unknown>>("fault", { spec: args[1] });
-      return out(Object.entries(f).map(([t, v]) => `${t}: ${JSON.stringify(v)}`).join("\n"), f);
+      return out(
+        Object.entries(f)
+          .map(([t, v]) => `${t}: ${JSON.stringify(v)}`)
+          .join("\n"),
+        f,
+      );
     }
     default:
       throw new LinkError("usage", `Unknown command '${cmd}'.`, "Run reflex link --help.");

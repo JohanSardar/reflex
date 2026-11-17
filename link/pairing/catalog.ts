@@ -10,9 +10,10 @@
 //
 // Self-declared names are labels, never authentication: an Agent is known by
 // its credential, a device by its key.
-import type { DatabaseSync } from "node:sqlite";
+
 import { randomBytes } from "node:crypto";
-import { sha256, signWith, verifyFrom, type DeviceKey } from "./crypto.ts";
+import type { DatabaseSync } from "node:sqlite";
+import { type DeviceKey, sha256, signWith, verifyFrom } from "./crypto.ts";
 
 export interface Person {
   id: string;
@@ -84,7 +85,9 @@ export class Catalog {
     const text = JSON.stringify(body);
     const sig = signWith(this.#key, `${kind}\n${id}\n${text}`);
     this.#db
-      .prepare("INSERT INTO catalog (kind, id, body, sig) VALUES (?, ?, ?, ?) ON CONFLICT (kind, id) DO UPDATE SET body = excluded.body, sig = excluded.sig")
+      .prepare(
+        "INSERT INTO catalog (kind, id, body, sig) VALUES (?, ?, ?, ?) ON CONFLICT (kind, id) DO UPDATE SET body = excluded.body, sig = excluded.sig",
+      )
       .run(kind, id, text, sig);
   }
 
@@ -131,6 +134,13 @@ export class Catalog {
     return this.devices().find((d) => d.device === id);
   }
 
+  /** A device that is paired for certain (it was just paired, say); throws if it isn't. */
+  pairedDevice(id: string): PairedDevice {
+    const d = this.device(id);
+    if (!d) throw new Error(`${id} isn't a paired device`);
+    return d;
+  }
+
   pairDevice(d: PairedDevice): void {
     this.#put("device", d.device, d);
   }
@@ -150,6 +160,13 @@ export class Catalog {
     return this.agents().find((a) => a.id === id);
   }
 
+  /** An Agent that is known for certain (it was just asked about, say); throws if it isn't. */
+  knownAgent(id: string): AgentRecord {
+    const a = this.agent(id);
+    if (!a) throw new Error(`${id} isn't a known Agent`);
+    return a;
+  }
+
   /** The Agent this credential belongs to, whatever its status. */
   byCredential(credential: string): AgentRecord | undefined {
     const h = sha256(credential).toString("hex");
@@ -160,7 +177,15 @@ export class Catalog {
   request(name: string, credential: string, now = Date.now()): AgentRecord {
     const id = `a_${randomBytes(5).toString("hex")}`;
     const color = COLORS[this.agents().length % COLORS.length];
-    const rec: AgentRecord = { id, name, color, status: "pending", credential_hash: sha256(credential).toString("hex"), requested_at: now, decided_at: null };
+    const rec: AgentRecord = {
+      id,
+      name,
+      color,
+      status: "pending",
+      credential_hash: sha256(credential).toString("hex"),
+      requested_at: now,
+      decided_at: null,
+    };
     this.#put("agent", id, rec);
     return rec;
   }

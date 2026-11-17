@@ -54,7 +54,10 @@ const X_PKCS8 = Buffer.from("302e020100300506032b656e04220420", "hex");
 
 /** X25519(scalar, u), throwing on the all-zero result a low-order point gives. */
 function x25519(scalar: KeyObject, u: Uint8Array): Buffer {
-  return diffieHellman({ privateKey: scalar, publicKey: createPublicKey({ key: Buffer.concat([X_SPKI, u]), format: "der", type: "spki" }) });
+  return diffieHellman({
+    privateKey: scalar,
+    publicKey: createPublicKey({ key: Buffer.concat([X_SPKI, u]), format: "der", type: "spki" }),
+  });
 }
 
 /** One side's CPace: its share to send, and the secret once the other side's share arrives. */
@@ -62,7 +65,9 @@ export class Cpace {
   #y: KeyObject;
   readonly share: Buffer;
   constructor(code: string, transcript: Uint8Array, scalar?: Uint8Array) {
-    this.#y = scalar ? createPrivateKey({ key: Buffer.concat([X_PKCS8, scalar]), format: "der", type: "pkcs8" }) : generateKeyPairSync("x25519").privateKey;
+    this.#y = scalar
+      ? createPrivateKey({ key: Buffer.concat([X_PKCS8, scalar]), format: "der", type: "pkcs8" })
+      : generateKeyPairSync("x25519").privateKey;
     this.share = x25519(this.#y, cpaceGenerator(code, transcript));
   }
   /** The pairing secret the auth MACs use: from K, both shares (initiator's first) and the transcript. */

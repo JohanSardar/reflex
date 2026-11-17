@@ -10,8 +10,9 @@
 // the next wait_for_user returns it. An adapter with `retries` (the webhook)
 // tries again after each wait while the Send is still `ready`, and marks it
 // `failed` only after the last try.
-import type { Inbox } from "../storage/inbox.ts";
+
 import { recipient } from "../routing.ts";
+import type { Inbox } from "../storage/inbox.ts";
 import type { Push, PushAdapter, PushOutcome, PushTarget } from "./contract.ts";
 import type { PushStore } from "./store.ts";
 
@@ -20,7 +21,11 @@ export interface DispatcherOptions {
   store: PushStore;
   adapters: PushAdapter[];
   /** The Send Bundle an Agent would get from wait_for_user, or undefined when it can't be built. */
-  bundle: (agent: string, space: string, send: string) => Promise<Omit<Push, "space" | "send"> | undefined> | Omit<Push, "space" | "send"> | undefined;
+  bundle: (
+    agent: string,
+    space: string,
+    send: string,
+  ) => Promise<Omit<Push, "space" | "send"> | undefined> | Omit<Push, "space" | "send"> | undefined;
   /** Whether the person still approves this Agent. */
   approved: (agent: string) => boolean;
   log: (event: string, data?: Record<string, unknown>) => void;
@@ -64,7 +69,9 @@ export class Dispatcher {
     this.#scheduled = true;
     setImmediate(() => {
       this.#scheduled = false;
-      this.#running = this.#running.then(() => this.#pass()).catch((e) => this.#o.log("push_error", { error: String((e as Error).stack ?? e) }));
+      this.#running = this.#running
+        .then(() => this.#pass())
+        .catch((e) => this.#o.log("push_error", { error: String((e as Error).stack ?? e) }));
     });
   }
 
@@ -110,7 +117,15 @@ export class Dispatcher {
       try {
         const built = await this.#o.bundle(target.agent, e.space, e.send);
         outcome = built
-          ? await adapter.deliver(target, { space: e.space, send: e.send, ...built }, { secret: target.has_secret ? store.secret(target.id) : undefined, attempt, log: (m) => log("push_log", { target: target.id, m }) })
+          ? await adapter.deliver(
+              target,
+              { space: e.space, send: e.send, ...built },
+              {
+                secret: target.has_secret ? store.secret(target.id) : undefined,
+                attempt,
+                log: (m) => log("push_log", { target: target.id, m }),
+              },
+            )
           : { ok: false, reason: "the Send could not be read" };
       } catch (err) {
         outcome = { ok: false, reason: String((err as Error).message ?? err).slice(0, 300) };
@@ -133,7 +148,17 @@ export class Dispatcher {
         inbox.mark(e.space, e.send, to, "failed", `push: ${outcome.reason}`);
         store.end(seq, "failed", outcome.reason);
       }
-      log("push", { target: target.id, adapter: adapter.name, agent: target.agent, space: e.space, send: e.send, attempt, ok: outcome.ok, ...(outcome.ok ? {} : { reason: outcome.reason, ...(wait !== undefined ? { retry_in_ms: wait } : {}) }), ms: Date.now() - started });
+      log("push", {
+        target: target.id,
+        adapter: adapter.name,
+        agent: target.agent,
+        space: e.space,
+        send: e.send,
+        attempt,
+        ok: outcome.ok,
+        ...(outcome.ok ? {} : { reason: outcome.reason, ...(wait !== undefined ? { retry_in_ms: wait } : {}) }),
+        ms: Date.now() - started,
+      });
     }
   }
 }

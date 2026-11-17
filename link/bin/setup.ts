@@ -9,15 +9,33 @@
 // detached from this terminal and stops with `reflex link stop`; `reflex mcp` and the CLI start it
 // again when they need it (after a restart, say).
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, accessSync, constants } from "node:fs";
+import {
+  accessSync,
+  appendFileSync,
+  chmodSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { ensureLink } from "../../agent/src/host/start.ts";
+import type { Json } from "../../agent/src/protocol.ts";
 import { homeDir } from "../home.ts";
 import { LinkClient, RpcError } from "../rpc/client.ts";
-import { ensureLink } from "../../agent/src/host/start.ts";
-import { claudeEntry, codexConfig, isReflex, sameEntry, unsupported, type ClaudeEntry, type Want } from "./harness-config.ts";
+import {
+  type ClaudeEntry,
+  claudeEntry,
+  codexConfig,
+  isReflex,
+  sameEntry,
+  unsupported,
+  type Want,
+} from "./harness-config.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const BIN = join(REPO, "agent/bin/reflex.mjs");
@@ -63,7 +81,7 @@ const dir = homeDir(f.home);
 /** Not the default profile: the harnesses are told which one, with REFLEX_HOME. */
 const customHome = dir !== resolve(homedir(), ".reflex", "link");
 process.env.REFLEX_HOME = dir; // the Link this starts, and the one the surfaces reach
-const say = (s = ""): void => void process.stdout.write(s + "\n");
+const say = (s = ""): void => void process.stdout.write(`${s}\n`);
 const ok = (s: string): void => say(`  ✓ ${s}`);
 const note = (s: string): void => say(`  · ${s}`);
 
@@ -98,8 +116,14 @@ function shim(): void {
   if (!same) writeFileSync(file, body);
   chmodSync(file, 0o755);
   const onPath = (process.env.PATH ?? "").split(delimiter).some((d) => resolve(d) === binDir);
-  if (onPath) return ok(`reflex is on your PATH (${file})`);
-  if (f.bin) return note(`${file} is ready; ${binDir} isn't on your PATH, so call it by its full path`);
+  if (onPath) {
+    ok(`reflex is on your PATH (${file})`);
+    return;
+  }
+  if (f.bin) {
+    note(`${file} is ready; ${binDir} isn't on your PATH, so call it by its full path`);
+    return;
+  }
   // The default folder, not yet on the PATH: add it for new terminals, once.
   const shell = (process.env.SHELL ?? "").endsWith("bash") ? ".bash_profile" : ".zprofile";
   const profile = join(homedir(), shell);
@@ -109,7 +133,11 @@ function shim(): void {
 }
 
 /** What each harness runs: this checkout's CLI with this Node, as `reflex mcp`, for this profile. */
-const want = (channel: boolean): Want => ({ command: NODE, args: [BIN, "mcp", ...(channel ? ["--channel"] : [])], home: customHome ? dir : null });
+const want = (channel: boolean): Want => ({
+  command: NODE,
+  args: [BIN, "mcp", ...(channel ? ["--channel"] : [])],
+  home: customHome ? dir : null,
+});
 
 /** A --home setup is a test profile unless --register says otherwise: the harnesses keep pointing at the person's own. */
 const register = (who: string): boolean => {
@@ -120,7 +148,7 @@ const register = (who: string): boolean => {
 
 /** Where Claude Code keeps an entry of each scope: user and local in ~/.claude.json, project in ./.mcp.json. */
 function claudeEntryNow(scope: string): ClaudeEntry | undefined {
-  const read = (file: string): Record<string, any> => {
+  const read = (file: string): Json => {
     try {
       return JSON.parse(readFileSync(file, "utf8"));
     } catch {
@@ -134,16 +162,27 @@ function claudeEntryNow(scope: string): ClaudeEntry | undefined {
 
 function claude(): void {
   if (f["no-claude"]) return;
-  if (!which("claude")) return note("Claude Code isn't installed (no `claude` on the PATH); skipped");
+  if (!which("claude")) {
+    note("Claude Code isn't installed (no `claude` on the PATH); skipped");
+    return;
+  }
   const scope = f.scope ?? "user";
-  if (!["user", "local", "project"].includes(scope)) throw new Error(`--scope is user, local or project, not '${scope}'.`);
+  if (!["user", "local", "project"].includes(scope))
+    throw new Error(`--scope is user, local or project, not '${scope}'.`);
   if (!register("Claude Code")) return;
-  const run = (args: string[]): string => execFileSync("claude", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000 });
+  const run = (args: string[]): string =>
+    execFileSync("claude", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000 });
   // Read from Claude Code's config, not `claude mcp get`, which starts the server to check its health (30 s and more).
   const old = claudeEntryNow(scope);
-  if (old && !isReflex(old)) return note(`Claude Code already has a server called reflex (${scope} scope) that isn't Reflex; left it alone`);
+  if (old && !isReflex(old)) {
+    note(`Claude Code already has a server called reflex (${scope} scope) that isn't Reflex; left it alone`);
+    return;
+  }
   const entry = claudeEntry(old, want(true));
-  if (old && sameEntry(old, entry)) return ok(`Claude Code already has Reflex (${scope} scope)`);
+  if (old && sameEntry(old, entry)) {
+    ok(`Claude Code already has Reflex (${scope} scope)`);
+    return;
+  }
   // `add` refuses a name that is there, so the old entry goes first, and comes back if the new one can't be added.
   if (old) run(["mcp", "remove", "reflex", "-s", scope]);
   try {
@@ -152,28 +191,39 @@ function claude(): void {
     if (old) run(["mcp", "add-json", "-s", scope, "reflex", JSON.stringify(old)]);
     throw e;
   }
-  ok(old ? `updated Reflex in Claude Code (${scope} scope; your other settings for it kept)` : `added Reflex to Claude Code (${scope} scope)`);
+  ok(
+    old
+      ? `updated Reflex in Claude Code (${scope} scope; your other settings for it kept)`
+      : `added Reflex to Claude Code (${scope} scope)`,
+  );
 }
 
 /** Codex's config.toml: Reflex's keys in [mcp_servers.reflex] (or `reflex = {…}`), everything else left as it was. */
 function codex(): void {
   if (f["no-codex"]) return;
   const codexHome = process.env.CODEX_HOME ?? join(homedir(), ".codex");
-  if (!which("codex") && !existsSync(codexHome)) return note("Codex isn't installed; skipped");
+  if (!which("codex") && !existsSync(codexHome)) {
+    note("Codex isn't installed; skipped");
+    return;
+  }
   if (!register("Codex")) return;
   const file = join(codexHome, "config.toml");
   const text = existsSync(file) ? readFileSync(file, "utf8") : "";
   const odd = unsupported(text);
   if (odd) {
     const w = want(false);
-    return note(
+    note(
       `left ${file} alone: Reflex's server there is in a form setup doesn't edit (${odd}). Replace it by hand with:\n` +
         `      [mcp_servers.reflex]\n      command = ${JSON.stringify(w.command)}\n      args = [${w.args.map((a) => JSON.stringify(a)).join(", ")}]\n      tool_timeout_sec = 300` +
         (w.home ? `\n      env = { REFLEX_HOME = ${JSON.stringify(w.home)} }` : ""),
     );
+    return;
   }
   const next = codexConfig(text, want(false));
-  if (next === text) return ok("Codex already has Reflex");
+  if (next === text) {
+    ok("Codex already has Reflex");
+    return;
+  }
   mkdirSync(codexHome, { recursive: true });
   writeFileSync(file, next);
   ok(`${/^\s*\[mcp_servers\.reflex\]|^\s*"?reflex"?\s*=/m.test(text) ? "updated" : "added"} Reflex in Codex (${file})`);
@@ -182,7 +232,8 @@ function codex(): void {
 async function link(): Promise<void> {
   const r = await ensureLink();
   const pid = existsSync(join(dir, "link.json")) ? JSON.parse(readFileSync(join(dir, "link.json"), "utf8")).pid : "?";
-  if (r.started) ok(`started the Reflex Link in the background (pid ${pid}; log ${r.log}; stop it with \`reflex link stop\`)`);
+  if (r.started)
+    ok(`started the Reflex Link in the background (pid ${pid}; log ${r.log}; stop it with \`reflex link stop\`)`);
   else ok(`the Reflex Link is running (pid ${pid})`);
 }
 
@@ -201,9 +252,14 @@ async function pair(): Promise<void> {
     while (Date.now() < o.expires) {
       await new Promise((r) => setTimeout(r, 1000));
       // The code itself, so an iPad that was paired already and scans again counts too.
-      const u = await c.call<{ used: boolean; name?: string; approves?: boolean; asked?: boolean; hint?: string }>("pair.check", { offer: o.offer });
+      const u = await c.call<{ used: boolean; name?: string; approves?: boolean; asked?: boolean; hint?: string }>(
+        "pair.check",
+        { offer: o.offer },
+      );
       if (!u.used) continue;
-      say(`\nPaired with ${u.name ?? "your iPad"}. Done: start Claude Code (\`claude\`) or Codex and say "connect my iPad".`);
+      say(
+        `\nPaired with ${u.name ?? "your iPad"}. Done: start Claude Code (\`claude\`) or Codex and say "connect my iPad".`,
+      );
       return;
     }
     say("The code expired. Run `reflex pair` for a new one.");
@@ -225,7 +281,9 @@ async function main(): Promise<void> {
   codex();
   await link();
   if (which("claude") && !f["no-claude"] && (!customHome || f.register))
-    note("optional: to have Sends pushed into Claude Code as new turns, start it with: claude --dangerously-load-development-channels server:reflex");
+    note(
+      "optional: to have Sends pushed into Claude Code as new turns, start it with: claude --dangerously-load-development-channels server:reflex",
+    );
   await pair();
 }
 

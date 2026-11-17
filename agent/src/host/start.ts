@@ -35,7 +35,10 @@ export async function ensureLink(o: { wait_s?: number } = {}): Promise<{ started
   const dir = home();
   const log = logFile(dir);
   if (await listening()) return { started: false, log };
-  if (process.env.REFLEX_AUTOSTART === "0") throw new Error(`The Reflex Link is not running (profile ${dir}). Start it with \`reflex link\`, or run \`reflex setup\`.`);
+  if (process.env.REFLEX_AUTOSTART === "0")
+    throw new Error(
+      `The Reflex Link is not running (profile ${dir}). Start it with \`reflex link\`, or run \`reflex setup\`.`,
+    );
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const out = openSync(log, "a", 0o600);
   const child = spawn(process.execPath, [BIN, "link", "--no-prompt"], {

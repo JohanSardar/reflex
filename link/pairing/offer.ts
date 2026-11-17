@@ -9,9 +9,9 @@
 // reached the right device, not whoever answered on that address.
 import { randomBytes, randomInt } from "node:crypto";
 import { networkInterfaces } from "node:os";
+import type { Person } from "./catalog.ts";
 import { b64, unb64 } from "./crypto.ts";
 import type { ScannedOffer } from "./handshake.ts";
-import type { Person } from "./catalog.ts";
 
 const TTL_MS = 10 * 60 * 1000;
 /** Wrong tries before a typed code stops working: 5 in a million for someone guessing. */
@@ -60,7 +60,9 @@ export function lanAddresses(): string[] {
   };
   const out: string[] = [];
   for (const list of Object.values(networkInterfaces()))
-    for (const a of list ?? []) if (!a.internal && a.family === "IPv4" && !a.address.startsWith("169.254.") && !out.includes(a.address)) out.push(a.address);
+    for (const a of list ?? [])
+      if (!a.internal && a.family === "IPv4" && !a.address.startsWith("169.254.") && !out.includes(a.address))
+        out.push(a.address);
   out.sort((x, y) => rank(x) - rank(y));
   return out.length ? out : ["127.0.0.1"];
 }
@@ -77,26 +79,41 @@ export class Offers {
    * new one makes any digit a look-alike Link learned useless. The Agents waiting on the old code carry over.
    */
   code(agent?: string, now = Date.now()): Code {
-    const again = this.liveCode(now) !== undefined && (agent ? this.#code!.agents.has(agent) : true);
-    if (!this.liveCode(now) || again)
-      this.#code = { code: String(randomInt(0, 1_000_000)).padStart(6, "0"), expires: now + TTL_MS, agents: new Set(again ? this.#code!.agents : []), fails: 0 };
-    if (agent) this.#code!.agents.add(agent);
-    return this.#code!;
+    const live = this.#liveTyped(now);
+    const again = live !== undefined && (agent ? live.agents.has(agent) : true);
+    let c = live;
+    if (!c || again) {
+      c = {
+        code: String(randomInt(0, 1_000_000)).padStart(6, "0"),
+        expires: now + TTL_MS,
+        agents: new Set(again ? live.agents : []),
+        fails: 0,
+      };
+      this.#code = c;
+    }
+    if (agent) c.agents.add(agent);
+    return c;
   }
 
   liveCode(now = Date.now()): string | undefined {
+    return this.#liveTyped(now)?.code;
+  }
+
+  /** The typed code while it is live; an expired code, or one typed wrong too often, is dropped here. */
+  #liveTyped(now = Date.now()): Code | undefined {
     const c = this.#code;
     if (!c) return undefined;
     if (c.expires < now || c.fails >= CODE_TRIES) {
       this.#code = null;
       return undefined;
     }
-    return c.code;
+    return c;
   }
 
   /** Whether this Agent waits on the live code. */
   codeFor(agent: string): Code | undefined {
-    return this.liveCode() && this.#code!.agents.has(agent) ? this.#code! : undefined;
+    const c = this.#liveTyped();
+    return c?.agents.has(agent) ? c : undefined;
   }
 
   codeFailed(): void {
@@ -105,8 +122,8 @@ export class Offers {
 
   /** Uses up the typed code if it is still the live one; returns the Agents it approves, or undefined. */
   takeCode(code: string, device: string): string[] | undefined {
-    if (this.liveCode() !== code) return undefined;
-    const c = this.#code!;
+    const c = this.#liveTyped();
+    if (c?.code !== code) return undefined;
     this.#code = null;
     this.lastCode = { code: c.code, device, agents: [...c.agents] };
     return [...c.agents];
@@ -114,8 +131,13 @@ export class Offers {
   /** Codes used up, and by which device: `reflex pair` waits on this, so an iPad that was paired already and scans again counts. */
   #used = new Map<string, string>();
 
-  create(me: { device: string; key: string; name: string; person: Person }, port: number, source: Offer["source"] = "terminal", now = Date.now()): Offer {
-    const offer = "o_" + randomBytes(6).toString("hex");
+  create(
+    me: { device: string; key: string; name: string; person: Person },
+    port: number,
+    source: Offer["source"] = "terminal",
+    now = Date.now(),
+  ): Offer {
+    const offer = `o_${randomBytes(6).toString("hex")}`;
     const secret = randomBytes(32);
     const q = new URLSearchParams({
       v: "0",
@@ -176,7 +198,8 @@ export function parseOffer(uri: string): ParsedOffer {
   } catch {
     throw new Error("That is not a pairing code. It starts with reflex://pair?");
   }
-  if (u.protocol !== "reflex:" || u.host !== "pair") throw new Error("That is not a pairing code. It starts with reflex://pair?");
+  if (u.protocol !== "reflex:" || u.host !== "pair")
+    throw new Error("That is not a pairing code. It starts with reflex://pair?");
   const g = (k: string): string => {
     const v = u.searchParams.get(k);
     if (!v) throw new Error(`The pairing code is missing '${k}'. Copy the whole code.`);
@@ -184,7 +207,8 @@ export function parseOffer(uri: string): ParsedOffer {
   };
   if (g("v") !== "0") throw new Error(`Pairing code version ${g("v")} is not supported.`);
   // The person comes last in the code, so a code cut short shows here: a damaged ID, or no name after it.
-  if (!/^p_[0-9a-f]{12}$/.test(g("pi")) || u.searchParams.get("pn") === null) throw new Error("The pairing code is cut short. Copy the whole code.");
+  if (!/^p_[0-9a-f]{12}$/.test(g("pi")) || u.searchParams.get("pn") === null)
+    throw new Error("The pairing code is cut short. Copy the whole code.");
   return {
     offer: g("o"),
     device: g("d"),

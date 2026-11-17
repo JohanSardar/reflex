@@ -46,7 +46,9 @@ export class PushStore {
     this.#dir = join(home, "adapters");
     db.exec(SCHEMA);
     // An attempt still "pushing" was cut off by a Link that stopped mid-push. Its Send is still in the Inbox.
-    db.prepare("UPDATE push_attempts SET outcome = 'failed', reason = 'the Link stopped during the push', ended_at = ? WHERE outcome = 'pushing'").run(Date.now());
+    db.prepare(
+      "UPDATE push_attempts SET outcome = 'failed', reason = 'the Link stopped during the push', ended_at = ? WHERE outcome = 'pushing'",
+    ).run(Date.now());
   }
 
   #secretFile(id: string) {
@@ -67,14 +69,30 @@ export class PushStore {
   }
 
   /** Creates or refreshes the target for one Agent, adapter and instance (a session, a URL). */
-  upsert(t: { agent: string; adapter: string; instance: string; config: Record<string, unknown>; callback: string }, now = Date.now()): PushTarget {
+  upsert(
+    t: { agent: string; adapter: string; instance: string; config: Record<string, unknown>; callback: string },
+    now = Date.now(),
+  ): PushTarget {
     this.#db
       .prepare(
         `INSERT INTO push_targets (id, agent, adapter, instance, config, callback, created_at, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (agent, adapter, instance) DO UPDATE SET config = excluded.config, callback = excluded.callback, seen_at = excluded.seen_at`,
       )
-      .run(`pt_${randomBytes(6).toString("hex")}`, t.agent, t.adapter, t.instance, JSON.stringify(t.config), t.callback, now, now);
-    return this.#target(this.#db.prepare("SELECT * FROM push_targets WHERE agent = ? AND adapter = ? AND instance = ?").get(t.agent, t.adapter, t.instance) as unknown as Row);
+      .run(
+        `pt_${randomBytes(6).toString("hex")}`,
+        t.agent,
+        t.adapter,
+        t.instance,
+        JSON.stringify(t.config),
+        t.callback,
+        now,
+        now,
+      );
+    return this.#target(
+      this.#db
+        .prepare("SELECT * FROM push_targets WHERE agent = ? AND adapter = ? AND instance = ?")
+        .get(t.agent, t.adapter, t.instance) as unknown as Row,
+    );
   }
 
   get(id: string): PushTarget | undefined {
@@ -83,7 +101,9 @@ export class PushStore {
   }
 
   all(): PushTarget[] {
-    return (this.#db.prepare("SELECT * FROM push_targets ORDER BY seen_at DESC").all() as unknown as Row[]).map((r) => this.#target(r));
+    return (this.#db.prepare("SELECT * FROM push_targets ORDER BY seen_at DESC").all() as unknown as Row[]).map((r) =>
+      this.#target(r),
+    );
   }
 
   /** Removes a target and its secret. Its attempts stay, as history. */
@@ -111,18 +131,26 @@ export class PushStore {
   begin(target: PushTarget, space: string, send: string, recipient: string, now = Date.now()): number {
     return Number(
       this.#db
-        .prepare("INSERT INTO push_attempts (target, adapter, space, send, recipient, started_at, outcome) VALUES (?, ?, ?, ?, ?, ?, 'pushing')")
+        .prepare(
+          "INSERT INTO push_attempts (target, adapter, space, send, recipient, started_at, outcome) VALUES (?, ?, ?, ?, ?, ?, 'pushing')",
+        )
         .run(target.id, target.adapter, space, send, recipient, now).lastInsertRowid,
     );
   }
 
   end(seq: number, outcome: "pushed" | "failed", reason?: string, now = Date.now()) {
-    this.#db.prepare("UPDATE push_attempts SET outcome = ?, reason = ?, ended_at = ? WHERE seq = ?").run(outcome, reason ?? null, now, seq);
+    this.#db
+      .prepare("UPDATE push_attempts SET outcome = ?, reason = ?, ended_at = ? WHERE seq = ?")
+      .run(outcome, reason ?? null, now, seq);
   }
 
   /** Whether this Send was ever pushed to this recipient (any outcome). */
   tried(space: string, send: string, recipient: string): boolean {
-    return this.#db.prepare("SELECT 1 FROM push_attempts WHERE space = ? AND send = ? AND recipient = ?").get(space, send, recipient) !== undefined;
+    return (
+      this.#db
+        .prepare("SELECT 1 FROM push_attempts WHERE space = ? AND send = ? AND recipient = ?")
+        .get(space, send, recipient) !== undefined
+    );
   }
 
   attempts(o: { space?: string; send?: string; limit?: number } = {}): Attempt[] {

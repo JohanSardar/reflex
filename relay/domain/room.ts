@@ -35,7 +35,8 @@ export const LIMITS = {
 };
 
 const OPENER = 0x8000_0000;
-const watchList = (list: string[], device: string | undefined): boolean => device !== undefined && (list.includes(device) || list.includes("*"));
+const watchList = (list: string[], device: string | undefined): boolean =>
+  device !== undefined && (list.includes(device) || list.includes("*"));
 /** Whether a socket accepts frames from `device`: it watches it, or anyone in the room (`*`, the pairing room). */
 const watches = (s: Sock, device: string | undefined): boolean => watchList(s.state.watch, device);
 
@@ -65,14 +66,22 @@ export class Room {
     const others = this.#sockets().filter((o) => o !== s);
     const lim = this.#limits();
     s.state = { nonce: hex(random(16)), watch: [], address, at: now };
-    if (others.length >= lim.sockets) return s.close(4429, "this room is full");
-    if (address && others.filter((o) => o.state?.address === address).length >= lim.perAddress) return s.close(4429, "too many connections from your address in this room");
+    if (others.length >= lim.sockets) {
+      s.close(4429, "this room is full");
+      return;
+    }
+    if (address && others.filter((o) => o.state?.address === address).length >= lim.perAddress) {
+      s.close(4429, "too many connections from your address in this room");
+      return;
+    }
     s.send(JSON.stringify({ t: "challenge", nonce: s.state.nonce, room: this.id }));
   }
 
   /** Closes sockets that never said hello in time. Node calls it on a timer; a Durable Object on each event. */
   sweep(now = this.#now()): void {
-    for (const o of this.#sockets()) if (!o.state?.device && o.state?.at !== undefined && now - o.state.at > HELLO_MS) o.close(4408, "no hello in time");
+    for (const o of this.#sockets())
+      if (!o.state?.device && o.state?.at !== undefined && now - o.state.at > HELLO_MS)
+        o.close(4408, "no hello in time");
   }
 
   #authed(): Sock[] {
@@ -87,7 +96,7 @@ export class Room {
     const st = s.state;
     if (typeof data !== "string") {
       if (!st?.device) return s.close(4401, "say hello first");
-      return this.#forward(s, data);
+      return this.#forward(s, st.device, data);
     }
     if (data.length > 64 * 1024) return s.close(4400, "control message too long");
     let m: Msg;
@@ -103,9 +112,10 @@ export class Room {
     }
     if (!this.#spend(s, "controls", LIMITS.controls)) return s.close(4429, "too many messages");
     try {
-      await this.#control(s, m);
+      await this.#control(s, st.device, m);
     } catch (e) {
-      if (m.req !== undefined) s.send(JSON.stringify({ t: "result", req: m.req, ok: false, error: (e as Error).message }));
+      if (m.req !== undefined)
+        s.send(JSON.stringify({ t: "result", req: m.req, ok: false, error: (e as Error).message }));
     }
   }
 
@@ -129,7 +139,8 @@ export class Room {
       (await verifyEd25519(key, helloText(this.id, st.nonce), unb64url(m.sig)));
     if (!ok) return s.close(4403, "the hello's signature or device ID does not check out");
     // One socket per device: a reconnect replaces the old one.
-    for (const old of this.#authed()) if (old.state.device === device && old !== s) old.close(4409, "replaced by a newer connection");
+    for (const old of this.#authed())
+      if (old.state.device === device && old !== s) old.close(4409, "replaced by a newer connection");
     s.state = { ...st, device, watch: [] };
     s.send(JSON.stringify({ t: "welcome", device }));
     this.#log(`${device} joined room ${this.pairing ? "(pairing)" : this.id}`);
@@ -145,10 +156,13 @@ export class Room {
     for (const o of this.#authed()) if (o !== s && watches(o, device) && watches(s, o.state.device)) o.send(msg);
   }
 
-  #forward(s: Sock, data: Uint8Array): void {
+  /** `me`: the sending socket's device, which said hello. */
+  #forward(s: Sock, me: string, data: Uint8Array): void {
     const f = unframe(data);
-    if (!f || data.length > MAX_FRAME + 64) return s.close(4400, "malformed frame");
-    const me = s.state.device!;
+    if (!f || data.length > MAX_FRAME + 64) {
+      s.close(4400, "malformed frame");
+      return;
+    }
     const to = this.#byDevice(f.device);
     if (!to || !watches(to, me)) {
       s.send(JSON.stringify({ t: "undeliverable", device: f.device, ch: f.ch }));
@@ -163,7 +177,14 @@ export class Room {
           .filter((o) => s.state.address && o.state.address === s.state.address)
           .reduce((n, o) => n + (o.state.opens ?? []).filter((t) => now - t < 60_000).length, 0);
         if (fromAddress >= LIMITS.pairingOpens.perAddress || !this.#spend(s, "opens", LIMITS.pairingOpens.perSocket)) {
-          s.send(JSON.stringify({ t: "undeliverable", device: f.device, ch: f.ch, reason: "rate limited: too many pairing tries" }));
+          s.send(
+            JSON.stringify({
+              t: "undeliverable",
+              device: f.device,
+              ch: f.ch,
+              reason: "rate limited: too many pairing tries",
+            }),
+          );
           return;
         }
         s.state = { ...s.state, chans: [...(s.state.chans ?? []), key].slice(-32) };
@@ -172,25 +193,36 @@ export class Room {
     to.send(frame(me, f.ch, f.payload));
   }
 
-  async #control(s: Sock, m: Msg): Promise<void> {
+  /** `me`: the socket's device, which said hello. */
+  async #control(s: Sock, me: string, m: Msg): Promise<void> {
     const st = s.state;
-    const reply = (body: Record<string, unknown>) => s.send(JSON.stringify({ t: "result", req: m.req, ok: true, ...body }));
+    const reply = (body: Record<string, unknown>) =>
+      s.send(JSON.stringify({ t: "result", req: m.req, ok: true, ...body }));
     switch (m.t) {
       case "watch": {
-        const devices = (Array.isArray(m.devices) ? m.devices : []).map(String).filter((d) => DEVICE_ID.test(d) || d === "*").slice(0, 256);
+        const devices = (Array.isArray(m.devices) ? m.devices : [])
+          .map(String)
+          .filter((d) => DEVICE_ID.test(d) || d === "*")
+          .slice(0, 256);
         const before = st.watch;
         const first = !st.announced;
         s.state = { ...st, watch: devices, announced: true };
-        const me = st.device!;
         // A device named that isn't here (or doesn't watch this one) is not reachable: say so, so a client stops waiting.
-        const here = new Set(this.#authed().filter((o) => o !== s && watches(o, me)).map((o) => o.state.device));
-        for (const d of devices) if (d !== "*" && !here.has(d) && !before.includes(d)) s.send(JSON.stringify({ t: "presence", device: d, online: false }));
+        const here = new Set(
+          this.#authed()
+            .filter((o) => o !== s && watches(o, me))
+            .map((o) => o.state.device),
+        );
+        for (const d of devices)
+          if (d !== "*" && !here.has(d) && !before.includes(d))
+            s.send(JSON.stringify({ t: "presence", device: d, online: false }));
         for (const o of this.#authed()) {
           if (o === s) continue;
           const d = o.state.device;
           const mutual = watchList(devices, d) && watches(o, me);
           // What this socket watches now, and is watched back by: it hears whether that device is here.
-          if (watchList(devices, d) && !watchList(before, d) && watches(o, me)) s.send(JSON.stringify({ t: "presence", device: d, online: true }));
+          if (watchList(devices, d) && !watchList(before, d) && watches(o, me))
+            s.send(JSON.stringify({ t: "presence", device: d, online: true }));
           // Devices that watch this one hear of it once they can reach each other. `joined`: a new socket, so
           // channels to the device's old one are gone (and a newly mutual pair has none yet).
           const was = watchList(before, d) && watches(o, me) && !first;
@@ -201,7 +233,7 @@ export class Room {
       }
       case "close": {
         const to = this.#byDevice(String(m.device ?? ""));
-        if (to && watches(to, st.device!)) to.send(JSON.stringify({ t: "close", device: st.device, ch: Number(m.ch) }));
+        if (to && watches(to, me)) to.send(JSON.stringify({ t: "close", device: me, ch: Number(m.ch) }));
         return;
       }
       case "ping":

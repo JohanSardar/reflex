@@ -1,7 +1,7 @@
 // A self-hosted Relay: the same rooms as the Cloudflare one (relay/domain/room.ts), in one Node process.
 // It keeps nothing on disk and forwards only sealed frames.
 import { createServer, type IncomingMessage } from "node:http";
-import { WebSocketServer, type WebSocket } from "ws";
+import { type WebSocket, WebSocketServer } from "ws";
 import type { Sock, SockState } from "../domain/ports.ts";
 import { Room } from "../domain/room.ts";
 import { RELAY_PROTOCOL, ROOM_ID } from "../domain/wire.ts";
@@ -52,7 +52,10 @@ export async function startRelay(o: RelayOptions): Promise<{ port: number; close
   const server = createServer((req, res) => {
     if (req.url === "/" || req.url === "/health") {
       res.writeHead(200, { "content-type": "text/plain" });
-      return res.end(`Reflex relay (${RELAY_PROTOCOL}). It forwards end-to-end encrypted frames between paired devices and keeps nothing.\n`);
+      res.end(
+        `Reflex relay (${RELAY_PROTOCOL}). It forwards end-to-end encrypted frames between paired devices and keeps nothing.\n`,
+      );
+      return;
     }
     res.writeHead(404);
     res.end("Not found");
@@ -63,7 +66,10 @@ export async function startRelay(o: RelayOptions): Promise<{ port: number; close
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", originOf(req));
     const id = url.searchParams.get("room") ?? "";
-    if (url.pathname !== "/v0/connect" || !ROOM_ID.test(id)) return socket.destroy();
+    if (url.pathname !== "/v0/connect" || !ROOM_ID.test(id)) {
+      socket.destroy();
+      return;
+    }
     const address = addressOf(req);
     const now = Date.now();
     const times = (recent.get(address) ?? []).filter((t) => now - t < 60_000);
@@ -87,7 +93,11 @@ export async function startRelay(o: RelayOptions): Promise<{ port: number; close
         },
       };
       r.socks.add(sock);
-      ws.on("message", (data: Buffer, binary: boolean) => void r.room.message(sock, binary ? new Uint8Array(data) : data.toString("utf8")));
+      ws.on(
+        "message",
+        (data: Buffer, binary: boolean) =>
+          void r.room.message(sock, binary ? new Uint8Array(data) : data.toString("utf8")),
+      );
       ws.on("close", () => {
         r.socks.delete(sock);
         r.room.closed(sock);
@@ -111,7 +121,9 @@ export async function startRelay(o: RelayOptions): Promise<{ port: number; close
   await new Promise<void>((resolve) => server.listen(o.port, o.host ?? "0.0.0.0", resolve));
   const addr = server.address();
   const port = typeof addr === "object" && addr ? addr.port : o.port;
-  log(`listening on :${port} (ws://<this machine>:${port}; give devices wss:// through a TLS proxy to reach it from anywhere)`);
+  log(
+    `listening on :${port} (ws://<this machine>:${port}; give devices wss:// through a TLS proxy to reach it from anywhere)`,
+  );
   return {
     port,
     close: async () => {

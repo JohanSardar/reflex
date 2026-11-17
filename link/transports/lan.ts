@@ -1,16 +1,17 @@
 // LAN transport: TCP for frames, Bonjour (`_reflex-link._tcp`) for discovery.
 // Frames are length-prefixed (u32, big-endian). Bonjour only says where a
 // device might be; the coordinator authenticates every Path itself.
-import { Bonjour, type Service } from "bonjour-service";
+
 import { randomBytes } from "node:crypto";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
+import { Bonjour, type Service } from "bonjour-service";
 import type { Candidate, Path, PathMeasurements, Priority, Transport } from "./transport.ts";
 
 const MAX_FRAME = 16 * 1024 * 1024;
 export const SERVICE_TYPE = "reflex-link";
 
 class TcpPath implements Path {
-  readonly id = "lan-" + randomBytes(4).toString("hex");
+  readonly id = `lan-${randomBytes(4).toString("hex")}`;
   readonly transport = "lan";
   readonly limits = { maxFrameBytes: MAX_FRAME, reliable: true, ordered: true } as const;
   readonly initiator: boolean;
@@ -41,7 +42,10 @@ class TcpPath implements Path {
     this.#buf = this.#buf.length ? Buffer.concat([this.#buf, d]) : d;
     while (this.#buf.length >= 4) {
       const n = this.#buf.readUInt32BE(0);
-      if (n > MAX_FRAME) return this.close(`frame of ${n} bytes is over the limit`);
+      if (n > MAX_FRAME) {
+        this.close(`frame of ${n} bytes is over the limit`);
+        return;
+      }
       if (this.#buf.length < 4 + n) break;
       const f = this.#buf.subarray(4, 4 + n);
       this.#buf = this.#buf.subarray(4 + n);

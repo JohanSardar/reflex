@@ -41,7 +41,9 @@ export class Inbox {
     const ins = this.#db.prepare(
       "INSERT INTO inbox (space, send, arrived_at, via) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
     );
-    const to = this.#db.prepare("INSERT INTO inbox_to (space, send, recipient) VALUES (?, ?, ?) ON CONFLICT DO NOTHING");
+    const to = this.#db.prepare(
+      "INSERT INTO inbox_to (space, send, recipient) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+    );
     let added = 0;
     for (const s of sends) {
       if (this.#has(space, s)) continue;
@@ -71,16 +73,18 @@ export class Inbox {
 
   /** Who a Send was sent to. */
   recipients(space: string, send: string): string[] {
-    return (this.#db.prepare("SELECT recipient FROM inbox_to WHERE space = ? AND send = ? ORDER BY recipient").all(space, send) as { recipient: string }[]).map(
-      (r) => r.recipient,
-    );
+    return (
+      this.#db
+        .prepare("SELECT recipient FROM inbox_to WHERE space = ? AND send = ? ORDER BY recipient")
+        .all(space, send) as { recipient: string }[]
+    ).map((r) => r.recipient);
   }
 
   /** Where a Send is, by its ID. */
   find(send: string): InboxEntry | undefined {
-    return this.#db.prepare("SELECT space, send, arrived_at, via, 'ready' AS state, 0 AS attempts FROM inbox WHERE send = ?").get(send) as unknown as
-      | InboxEntry
-      | undefined;
+    return this.#db
+      .prepare("SELECT space, send, arrived_at, via, 'ready' AS state, 0 AS attempts FROM inbox WHERE send = ?")
+      .get(send) as unknown as InboxEntry | undefined;
   }
 
   /** A newly attached recipient gets this Space's Sends that had nobody to go to. */

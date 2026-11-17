@@ -21,30 +21,30 @@
 // can read identity.json and sign catalog records) until the keys move to the
 // Keychain or the Secure Enclave. Acting as the person (`dev` commands) needs a
 // Link started with --dev.
-import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
-import { connect, createServer, type Server, type Socket } from "node:net";
-import { createInterface } from "node:readline";
+
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { adoptPerson, home, identity, localKey, type Home, type Identity } from "./home.ts";
-import { Catalog, mayApprove, type AgentRecord, type PairedDevice } from "./pairing/catalog.ts";
+import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { connect, createServer, type Server, type Socket } from "node:net";
+import { join } from "node:path";
+import { createInterface } from "node:readline";
+import { socketPath as agentSocketPath, lines } from "../agent/src/host/rpc.ts";
+import { startAgentHost } from "./agent-host.ts";
+import { adoptPerson, type Home, home, type Identity, identity, localKey } from "./home.ts";
+import { type AgentRecord, Catalog, mayApprove, type PairedDevice } from "./pairing/catalog.ts";
 import { b64, newDeviceKey } from "./pairing/crypto.ts";
 import type { Me } from "./pairing/handshake.ts";
 import { Offers, parseOffer } from "./pairing/offer.ts";
+import { recipient } from "./routing.ts";
 import { AssetStore } from "./storage/assets.ts";
 import { openDb } from "./storage/db.ts";
 import { Inbox } from "./storage/inbox.ts";
 import { SendStore } from "./storage/sends.ts";
-import { Coordinator, type Peer } from "./sync/coordinator.ts";
-import { startAgentHost } from "./agent-host.ts";
-import { recipient } from "./routing.ts";
-import { socketPath as agentSocketPath } from "../agent/src/host/rpc.ts";
+import { Coordinator } from "./sync/coordinator.ts";
 import { FaultTransport, parseFaults } from "./transports/fault.ts";
 import { LanTransport } from "./transports/lan.ts";
+import { P2pTransport } from "./transports/p2p.ts";
 import { DEFAULT_RELAY, PAIRING_ROOM, RelayTransport, roomFor } from "./transports/relay.ts";
 import type { Transport } from "./transports/transport.ts";
-import { P2pTransport } from "./transports/p2p.ts";
 
 export class LinkError extends Error {
   reason: string;
@@ -122,7 +122,6 @@ export class Link {
   #server: Server | null = null;
   #agentServer: Server | null = null;
   #push: Awaited<ReturnType<typeof startAgentHost>> | null = null;
-  #db!: DatabaseSync;
   #questions: AgentRecord[] = [];
   #rl: ReturnType<typeof createInterface> | null = null;
   #ports: Record<string, number> = {};
@@ -169,21 +168,30 @@ export class Link {
     this.#keys = { rpc: localKey(this.dir, "rpc.key"), admin: localKey(this.dir, "admin.key") };
 
     const db = openDb(this.home.db);
-    this.#db = db;
     this.#inbox = new Inbox(db);
     this.#store = new SendStore(db, this.#inbox);
     this.#assets = new AssetStore(this.home.assets);
     this.#catalog = new Catalog(db, this.#id.key);
     // Who each recovered Send goes to (link/routing.ts).
-    this.#inbox.recipientsFor = () => this.#catalog.agents().filter((a) => a.status === "approved").map((a) => recipient(a.id));
+    this.#inbox.recipientsFor = () =>
+      this.#catalog
+        .agents()
+        .filter((a) => a.status === "approved")
+        .map((a) => recipient(a.id));
     const rec = { spaces: new Set(this.#store.list().map((s) => s.space)).size, replayed: 0 };
     const devices = this.#catalog.devices();
     if (this.#catalog.rejected > 0) this.#log(`ignored ${this.#catalog.rejected} catalog records with bad signatures`);
 
     const transports: Transport[] = [];
     // Who this Link is, in its Bonjour records: an iPad with a typed code needs its key and person (and shows its name).
-    const txt = { k: b64(this.#id.key.publicRaw), n: this.#id.name.slice(0, 60), pi: this.#id.person.id, pn: this.#id.person.name.slice(0, 60) };
-    if (this.#opts.lan !== false) transports.push(
+    const txt = {
+      k: b64(this.#id.key.publicRaw),
+      n: this.#id.name.slice(0, 60),
+      pi: this.#id.person.id,
+      pn: this.#id.person.name.slice(0, 60),
+    };
+    if (this.#opts.lan !== false)
+      transports.push(
         new LanTransport({
           device: this.#id.key.device,
           port: this.#opts.port ?? 7420,
@@ -214,7 +222,9 @@ export class Link {
       log: this.#log,
       everyPath: this.#opts.everyPath,
     });
-    this.#coord.onSend = (send) => { this.#store.ingest(send); };
+    this.#coord.onSend = (send) => {
+      this.#store.ingest(send);
+    };
     // Generic session messages stay available for T25's send/send_ack transport.
     this.#coord.onBound = (p) => {
       if (this.#relayT && this.#catalog.device(p.device)?.person.id === this.#id.person.id)
@@ -223,12 +233,20 @@ export class Link {
     this.#coord.onPaired((d) => process.stdout.write(`\nPaired with ${d.name} (${d.device}).\n`));
     this.#coord.grantsApproval = (source) => this.#grantsApproval(source);
     this.#coord.onCodePaired = (d, agents) => {
-      this.#log(`${d.name} (${d.device}) typed the pairing code${agents.length ? `; approving ${agents.length} Agent${agents.length === 1 ? "" : "s"} that asked for it` : ""}`);
-      for (const id of agents) if (this.#catalog.agent(id) && this.#catalog.agent(id)!.status !== "approved") this.#decide(id, "approved", d.device);
+      this.#log(
+        `${d.name} (${d.device}) typed the pairing code${agents.length ? `; approving ${agents.length} Agent${agents.length === 1 ? "" : "s"} that asked for it` : ""}`,
+      );
+      for (const id of agents) {
+        const status = this.#catalog.agent(id)?.status;
+        if (status && status !== "approved") this.#decide(id, "approved", d.device);
+      }
     };
     this.#coord.approvalHint = () => this.#approvalHint();
     this.#coord.pendingAgents = () =>
-      this.#catalog.agents().filter((a) => a.status === "pending").map(({ id, name, color, requested_at }) => ({ id, name, color, requested_at }));
+      this.#catalog
+        .agents()
+        .filter((a) => a.status === "pending")
+        .map(({ id, name, color, requested_at }) => ({ id, name, color, requested_at }));
     this.#coord.onAgentDecision = (device, id, status) => {
       if (this.#catalog.agent(id)?.status !== "pending") return;
       this.#decide(id, status, device);
@@ -248,8 +266,13 @@ export class Link {
       code: (agent) => this.typedCode(agent),
       codeFor: (agent) => this.#offers.codeFor(agent)?.code,
       relay: this.#relayT?.url,
-      ipads: () => this.#catalog.devices().filter((d) => d.kind === "ipad" && d.person.id === this.#id.person.id).map((d) => d.name),
-      remind: (a) => this.#coord.askAboutAgent({ id: a.id, name: a.name, color: a.color, requested_at: a.requested_at }),
+      ipads: () =>
+        this.#catalog
+          .devices()
+          .filter((d) => d.kind === "ipad" && d.person.id === this.#id.person.id)
+          .map((d) => d.name),
+      remind: (a) =>
+        this.#coord.askAboutAgent({ id: a.id, name: a.name, color: a.color, requested_at: a.requested_at }),
       decision: (id, ms, signal) => this.#waitDecision(id, ms, signal),
       log: (event, data = {}) => this.#log(`agent layer: ${event} ${JSON.stringify(data)}`),
     });
@@ -259,7 +282,17 @@ export class Link {
     await this.#listen();
     writeFileSync(
       this.home.runtime,
-      JSON.stringify({ pid: process.pid, socket: this.home.socket, lan: this.#ports.lan, p2p: this.#ports.p2p, device: this.#id.key.device }, null, 2),
+      JSON.stringify(
+        {
+          pid: process.pid,
+          socket: this.home.socket,
+          lan: this.#ports.lan,
+          p2p: this.#ports.p2p,
+          device: this.#id.key.device,
+        },
+        null,
+        2,
+      ),
     );
     this.#log(
       `${this.#id.name} (${this.#id.key.device}) for ${this.#id.person.name} · ${rec.spaces} pages with Sends, ` +
@@ -285,13 +318,28 @@ export class Link {
     if (this.#offers.liveCode() !== undefined) {
       this.#pairIdle = 0;
       if (this.#pairRoom) return;
-      const room = new RelayTransport({ url, key: newDeviceKey().key, room: () => PAIRING_ROOM, watch: () => ["*"], log: this.#log, name: "relay-pairing" });
+      const room = new RelayTransport({
+        url,
+        key: newDeviceKey().key,
+        room: () => PAIRING_ROOM,
+        watch: () => ["*"],
+        log: this.#log,
+        name: "relay-pairing",
+      });
       room.onReady = () => this.#log(`relay: waiting in the pairing room on ${url} while the code is live`);
       this.#pairRoom = room;
       void this.#coord.addTransport(room);
       if (url !== DEFAULT_RELAY) {
-        const pointer = new RelayTransport({ url: DEFAULT_RELAY, key: newDeviceKey().key, room: () => PAIRING_ROOM, watch: () => ["*"], log: this.#log, name: "relay-pointer" });
-        pointer.onReady = () => this.#log(`relay: pointing new iPads from ${DEFAULT_RELAY} to ${url} while the code is live`);
+        const pointer = new RelayTransport({
+          url: DEFAULT_RELAY,
+          key: newDeviceKey().key,
+          room: () => PAIRING_ROOM,
+          watch: () => ["*"],
+          log: this.#log,
+          name: "relay-pointer",
+        });
+        pointer.onReady = () =>
+          this.#log(`relay: pointing new iPads from ${DEFAULT_RELAY} to ${url} while the code is live`);
         this.#pointer = pointer;
         void pointer.listen((p) => {
           void p
@@ -328,12 +376,17 @@ export class Link {
       if (a && this.#catalog.agent(a.id)?.status === "pending" && /^(y(es)?|n(o)?)$/i.test(line.trim())) {
         // Once an iPad approves, this terminal can only refuse: anything with the person's shell can type here.
         if (/^y/i.test(line.trim()) && this.#approvers().length)
-          return void process.stdout.write(`Allow it on your iPad (${this.#approvers().map((d) => d.name).join(", ")}): this terminal can only refuse once an iPad approves. Type n to refuse.\n`);
+          return void process.stdout.write(
+            `Allow it on your iPad (${this.#approvers()
+              .map((d) => d.name)
+              .join(", ")}): this terminal can only refuse once an iPad approves. Type n to refuse.\n`,
+          );
         this.#questions.shift();
         this.#decide(a.id, /^y/i.test(line.trim()) ? "approved" : "denied", "terminal");
         return this.#ask();
       }
-      if (this.#ports.lan === undefined && !this.#relayT) return void process.stdout.write("Pairing needs the LAN or a Relay; this Link was started without either.\n");
+      if (this.#ports.lan === undefined && !this.#relayT)
+        return void process.stdout.write("Pairing needs the LAN or a Relay; this Link was started without either.\n");
       void this.showPairingCode();
     });
     if (this.#ports.lan !== undefined || this.#relayT) void this.showPairingCode();
@@ -341,16 +394,25 @@ export class Link {
 
   async showPairingCode(): Promise<void> {
     const { code } = this.typedCode();
-    process.stdout.write(`\nPairing code: ${code.slice(0, 3)} ${code.slice(3)}\n${pairLine(this.#relayT !== null)}\nPress Enter for a new code.\n`);
+    process.stdout.write(
+      `\nPairing code: ${code.slice(0, 3)} ${code.slice(3)}\n${pairLine(this.#relayT !== null)}\nPress Enter for a new code.\n`,
+    );
   }
 
   /** The live 6-digit code (a new one if none is live), with `agent` among the Agents typing it approves. */
   typedCode(agent?: string): { code: string; expires: number } {
     if (this.#ports.lan === undefined && !this.#relayT)
-      throw new LinkError("no_lan", "Pairing an iPad needs the local network or a Relay, and this Link was started with --no-lan and no Relay.", "Restart it without --no-lan, or with a Relay.");
+      throw new LinkError(
+        "no_lan",
+        "Pairing an iPad needs the local network or a Relay, and this Link was started with --no-lan and no Relay.",
+        "Restart it without --no-lan, or with a Relay.",
+      );
     const before = this.#offers.liveCode();
     const c = this.#offers.code(agent);
-    if (c.code !== before) this.#log(`made a pairing code (6 digits, single use, 10 minutes)${this.#relayT ? `; it also works through the relay at ${this.#relayT.url}` : ""}`);
+    if (c.code !== before)
+      this.#log(
+        `made a pairing code (6 digits, single use, 10 minutes)${this.#relayT ? `; it also works through the relay at ${this.#relayT.url}` : ""}`,
+      );
     this.#syncPairingRoom();
     return { code: c.code, expires: c.expires };
   }
@@ -390,8 +452,17 @@ export class Link {
 
   /** A new single-use pairing code, valid 10 minutes. `admin`: made by a command, not shown in this terminal (offer.ts). */
   pairingCode(source: "terminal" | "admin" = "terminal"): string {
-    if (this.#ports.lan === undefined) throw new LinkError("no_lan", "Pairing an iPad needs the local network, and this Link was started with --no-lan.", "Restart it without --no-lan.");
-    return this.#offers.create({ device: this.#id.key.device, key: b64(this.#id.key.publicRaw), name: this.#id.name, person: this.#id.person }, this.#ports.lan, source).uri;
+    if (this.#ports.lan === undefined)
+      throw new LinkError(
+        "no_lan",
+        "Pairing an iPad needs the local network, and this Link was started with --no-lan.",
+        "Restart it without --no-lan.",
+      );
+    return this.#offers.create(
+      { device: this.#id.key.device, key: b64(this.#id.key.publicRaw), name: this.#id.name, person: this.#id.person },
+      this.#ports.lan,
+      source,
+    ).uri;
   }
 
   #ask(): void {
@@ -416,7 +487,11 @@ export class Link {
   async #lock(): Promise<void> {
     const file = join(this.dir, "link.lock");
     const busy = (pid: number): LinkError =>
-      new LinkError("already_running", `A Link is already running from ${this.dir}${pid ? ` (pid ${pid})` : ""}.`, "Use that one, or pass --home for a second profile.");
+      new LinkError(
+        "already_running",
+        `A Link is already running from ${this.dir}${pid ? ` (pid ${pid})` : ""}.`,
+        "Use that one, or pass --home for a second profile.",
+      );
     for (let tries = 0; tries < 3; tries++) {
       const body = JSON.stringify({ pid: process.pid, at: Date.now(), n: randomBytes(4).toString("hex") });
       const tmp = `${file}.${process.pid}.tmp`;
@@ -472,7 +547,11 @@ export class Link {
     if (!(await answering(this.home.socket))) return;
     const pid = existsSync(this.home.runtime) ? JSON.parse(readFileSync(this.home.runtime, "utf8")).pid : 0;
     this.#unlock();
-    throw new LinkError("already_running", `A Link is already running from ${this.dir}${pid ? ` (pid ${pid})` : ""}.`, "Use that one, or pass --home for a second profile.");
+    throw new LinkError(
+      "already_running",
+      `A Link is already running from ${this.dir}${pid ? ` (pid ${pid})` : ""}.`,
+      "Use that one, or pass --home for a second profile.",
+    );
   }
 
   #unlock(): void {
@@ -512,32 +591,35 @@ export class Link {
 
   #serve(socket: Socket): void {
     const conn: Conn = { role: null, agent: null };
-    let buf = "";
     socket.setEncoding("utf8");
     socket.on("error", () => {});
-    socket.on("data", (d: string) => {
-      buf += d;
-      let i: number;
-      while ((i = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, i);
-        buf = buf.slice(i + 1);
+    socket.on(
+      "data",
+      lines((line) => {
         let req: { id: number; method: string; params?: Record<string, unknown> };
         try {
           req = JSON.parse(line);
         } catch {
           socket.destroy();
-          return;
+          return false;
         }
         this.#handle(conn, req.method, req.params ?? {})
-          .then((result) => socket.writable && socket.write(JSON.stringify({ id: req.id, ok: true, result }) + "\n"))
+          .then((result) => socket.writable && socket.write(`${JSON.stringify({ id: req.id, ok: true, result })}\n`))
           .catch((e: Error) => {
             const err = e instanceof LinkError ? e : new LinkError("internal", e.message);
             if (!(e instanceof LinkError)) this.#log(`error in ${req.method}: ${e.stack ?? e.message}`);
             if (socket.writable)
-              socket.write(JSON.stringify({ id: req.id, ok: false, error: { reason: err.reason, message: err.message, fix: err.fix } }) + "\n");
+              socket.write(
+                `${JSON.stringify({
+                  id: req.id,
+                  ok: false,
+                  error: { reason: err.reason, message: err.message, fix: err.fix },
+                })}\n`,
+              );
           });
-      }
-    });
+        return true;
+      }),
+    );
   }
 
   async #handle(c: Conn, method: string, p: Record<string, unknown>): Promise<unknown> {
@@ -545,7 +627,8 @@ export class Link {
       const role = p.role === "admin" ? "admin" : "agent";
       const want = Buffer.from(role === "admin" ? this.#keys.admin : this.#keys.rpc);
       const got = Buffer.from(String(p.key ?? ""));
-      if (got.length !== want.length || !timingSafeEqual(got, want)) throw new LinkError("bad_credential", "Wrong local credential.");
+      if (got.length !== want.length || !timingSafeEqual(got, want))
+        throw new LinkError("bad_credential", "Wrong local credential.");
       c.role = role;
       return { device: this.#id.key.device, name: this.#id.name, person: this.#id.person };
     }
@@ -564,8 +647,14 @@ export class Link {
   async #agentHello(c: Conn, p: Record<string, unknown>): Promise<unknown> {
     const name = String(p.name ?? "").trim();
     const credential = String(p.credential ?? "");
-    if (!name) throw new LinkError("missing_name", "An Agent must say its name.", 'Pass name, e.g. "Claude Code · reflex repo".');
-    if (credential.length < 32) throw new LinkError("missing_credential", "An Agent must present a random credential of at least 32 characters.");
+    if (!name)
+      throw new LinkError(
+        "missing_name",
+        "An Agent must say its name.",
+        'Pass name, e.g. "Claude Code · reflex repo".',
+      );
+    if (credential.length < 32)
+      throw new LinkError("missing_credential", "An Agent must present a random credential of at least 32 characters.");
     let a = this.#catalog.byCredential(credential);
     if (!a) {
       a = this.#catalog.request(name, credential);
@@ -574,10 +663,14 @@ export class Link {
     if (a.status === "pending") {
       const wait = Math.min(Number(p.wait_s ?? APPROVAL_WAIT_S), APPROVAL_WAIT_S);
       await this.#waitDecision(a.id, wait * 1000);
-      a = this.#catalog.agent(a.id)!;
+      a = this.#catalog.knownAgent(a.id);
     }
     if (a.status === "pending")
-      throw new LinkError("approval_pending", `Waiting for the user to approve ${a.name} (${a.id}).`, "Ask the person to tap Allow on their iPad, then connect again.");
+      throw new LinkError(
+        "approval_pending",
+        `Waiting for the user to approve ${a.name} (${a.id}).`,
+        "Ask the person to tap Allow on their iPad, then connect again.",
+      );
     if (a.status !== "approved") throw new LinkError("agent_denied", `The user ${a.status} ${a.name} (${a.id}).`);
     c.agent = a;
     return { agent: a.id, name: a.name, color: a.color };
@@ -636,7 +729,8 @@ export class Link {
             "Approving an Agent needs you, not a command: anything with your shell could run one.",
             "Tap Allow on your iPad.",
           );
-        if (status !== "denied" && status !== "revoked") throw new LinkError("bad_status", `'${status}' is not denied or revoked.`);
+        if (status !== "denied" && status !== "revoked")
+          throw new LinkError("bad_status", `'${status}' is not denied or revoked.`);
         return this.#decide(String(p.id), status, "command");
       }
       case "pair.offer": {
@@ -648,11 +742,19 @@ export class Link {
       case "pair.check": {
         // Whether a code from pair.offer was used, and by which device (it may have been paired already).
         const last = this.#offers.lastCode;
-        const device = last && last.code === String(p.offer ?? "") ? last.device : this.#offers.usedBy(String(p.offer ?? ""));
+        const device =
+          last && last.code === String(p.offer ?? "") ? last.device : this.#offers.usedBy(String(p.offer ?? ""));
         const d = device ? this.#catalog.device(device) : undefined;
         return {
           used: Boolean(device),
-          ...(d ? { device: d.device, name: d.name, approves: mayApprove(d, this.#id.person.id), asked: Boolean(d.approver_asked) } : {}),
+          ...(d
+            ? {
+                device: d.device,
+                name: d.name,
+                approves: mayApprove(d, this.#id.person.id),
+                asked: Boolean(d.approver_asked),
+              }
+            : {}),
           ...(d && !mayApprove(d, this.#id.person.id) ? { hint: this.#approvalHint() } : {}),
         };
       }
@@ -661,16 +763,28 @@ export class Link {
         // until it pairs again. Forgetting the last approving iPad opens the first-pairing window again, so the
         // reinstalled one can become the approver with a `reflex pair` code; that is logged.
         const who = String(p.device ?? "").trim();
-        const hits = this.#catalog.devices().filter((d) => d.device === who || d.name.toLowerCase() === who.toLowerCase());
-        if (!hits.length) throw new LinkError("unknown_device", `No paired device '${who}'.`, "Run `reflex link status` to see them.");
-        if (hits.length > 1) throw new LinkError("ambiguous", `${hits.length} paired devices are called '${who}'.`, "Name it by its ID (dev-…), from `reflex link status`.");
+        const hits = this.#catalog
+          .devices()
+          .filter((d) => d.device === who || d.name.toLowerCase() === who.toLowerCase());
+        if (!hits.length)
+          throw new LinkError("unknown_device", `No paired device '${who}'.`, "Run `reflex link status` to see them.");
+        if (hits.length > 1)
+          throw new LinkError(
+            "ambiguous",
+            `${hits.length} paired devices are called '${who}'.`,
+            "Name it by its ID (dev-…), from `reflex link status`.",
+          );
         const was = mayApprove(hits[0], this.#id.person.id);
-        const d = this.#coord.forgetDevice(hits[0].device)!;
+        const d = this.#coord.forgetDevice(hits[0].device) ?? hits[0];
         let opens: number | undefined;
         if (was && !this.#approvers().length) {
-          writeFileSync(join(this.dir, "first-pair.json"), JSON.stringify({ forgot_at: Date.now() }) + "\n", { mode: 0o600 });
+          writeFileSync(join(this.dir, "first-pair.json"), `${JSON.stringify({ forgot_at: Date.now() })}\n`, {
+            mode: 0o600,
+          });
           opens = this.#windowUntil();
-          this.#log(`forgot the last iPad that approves Agents: for ${firstPairMs() / 60_000} minutes, \`reflex pair\` pairs one that approves`);
+          this.#log(
+            `forgot the last iPad that approves Agents: for ${firstPairMs() / 60_000} minutes, \`reflex pair\` pairs one that approves`,
+          );
         }
         return { device: d.device, name: d.name, ...(opens ? { window_until: opens } : {}) };
       }
@@ -691,8 +805,12 @@ export class Link {
         return { hash: p.hash, base64: this.#assets.get(String(p.hash)).toString("base64") };
       case "fault": {
         if (!this.#faults.length)
-          throw new LinkError("needs_fault", "Fault injection needs a Link started with --fault.", 'Restart it with `reflex link --fault ""`.');
-        let faults;
+          throw new LinkError(
+            "needs_fault",
+            "Fault injection needs a Link started with --fault.",
+            'Restart it with `reflex link --fault ""`.',
+          );
+        let faults: ReturnType<typeof parseFaults>;
         try {
           faults = parseFaults(String(p.spec ?? ""));
         } catch (e) {
@@ -710,15 +828,20 @@ export class Link {
   }
 
   async #join(uri: string): Promise<unknown> {
-    let offer;
+    let offer: ReturnType<typeof parseOffer>;
     try {
       offer = parseOffer(uri);
     } catch (e) {
       throw new LinkError("bad_pairing_code", (e as Error).message);
     }
-    if (offer.device === this.#id.key.device) throw new LinkError("own_code", "That is this Link's own pairing code.", "Scan it from the other device.");
+    if (offer.device === this.#id.key.device)
+      throw new LinkError("own_code", "That is this Link's own pairing code.", "Scan it from the other device.");
     // A device that holds nothing yet becomes the offering person's device.
-    if (offer.person.id !== this.#id.person.id && this.#store.list().length === 0 && this.#catalog.devices().length === 0) {
+    if (
+      offer.person.id !== this.#id.person.id &&
+      this.#store.list().length === 0 &&
+      this.#catalog.devices().length === 0
+    ) {
       adoptPerson(this.dir, offer.person);
       this.#id.person = offer.person;
       this.#me.person = offer.person;
@@ -727,7 +850,11 @@ export class Link {
     try {
       return await this.#coord.join(offer);
     } catch (e) {
-      throw new LinkError("pairing_failed", (e as Error).message, "Check both devices are on the same network and the code is fresh.");
+      throw new LinkError(
+        "pairing_failed",
+        (e as Error).message,
+        "Check both devices are on the same network and the code is fresh.",
+      );
     }
   }
 
@@ -741,11 +868,22 @@ export class Link {
       socket: this.home.socket,
       pages: [...new Set(this.#store.list().map((s) => s.space))],
       assets: this.#assets.list().length,
-      inbox: this.#inbox.all().map((e) => ({ space: e.space, send: e.send, via: e.via, receipts: this.#inbox.receipts(e.space, e.send) })),
-      paired: this.#catalog.devices().map((d) => ({ device: d.device, name: d.name, person: d.person, connected: this.#coord.peers().some((p) => p.device === d.device) })),
+      inbox: this.#inbox
+        .all()
+        .map((e) => ({ space: e.space, send: e.send, via: e.via, receipts: this.#inbox.receipts(e.space, e.send) })),
+      paired: this.#catalog.devices().map((d) => ({
+        device: d.device,
+        name: d.name,
+        person: d.person,
+        connected: this.#coord.peers().some((p) => p.device === d.device),
+      })),
       peers: this.#coord.peers().map((p) => {
         const active = p.paths.active();
-        const path = (s: NonNullable<typeof active>) => ({ transport: s.path.transport, remote: s.path.remote, ...s.measurements() });
+        const path = (s: NonNullable<typeof active>) => ({
+          transport: s.path.transport,
+          remote: s.path.remote,
+          ...s.measurements(),
+        });
         return {
           device: p.device,
           name: p.name,

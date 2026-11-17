@@ -9,6 +9,8 @@
   },
   "scripts": {
     "dev": "cd cloudflare && wrangler dev",
+    "format": "biome check --write .",
+    "lint": "biome ci --error-on-warnings .",
     "node": "node node/bin/reflex-relay.ts"
   },
   "dependencies": {

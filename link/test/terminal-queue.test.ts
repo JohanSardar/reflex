@@ -1,11 +1,13 @@
 // A person who turned an Agent away with `reflex link deny` (or on their iPad) must
 // still be asked, in the Link's own terminal, when that Agent asks again.
-import { test } from "node:test";
+
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { PassThrough } from "node:stream";
 import { connect } from "node:net";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
+import { test } from "node:test";
+import { lines } from "../../agent/src/host/rpc.ts";
 import { Link } from "../link.ts";
 import { LinkClient } from "../rpc/client.ts";
 
@@ -16,11 +18,15 @@ process.env.REFLEX_REASK_S = "0";
 function terminal(): { out: () => string; restore: () => void } {
   const stdin = new PassThrough();
   Object.defineProperty(stdin, "isTTY", { value: true });
-  const realIn = Object.getOwnPropertyDescriptor(process, "stdin")!;
+  const realIn = Object.getOwnPropertyDescriptor(process, "stdin");
+  assert.ok(realIn);
   Object.defineProperty(process, "stdin", { value: stdin, configurable: true });
   const chunks: string[] = [];
   const realOut = process.stdout.write.bind(process.stdout);
-  process.stdout.write = ((c: string | Uint8Array) => (chunks.push(String(c)), true)) as typeof process.stdout.write;
+  process.stdout.write = ((c: string | Uint8Array) => {
+    chunks.push(String(c));
+    return true;
+  }) as typeof process.stdout.write;
   return {
     out: () => chunks.join(""),
     restore: () => {
@@ -42,18 +48,20 @@ const until = async (what: string, ms: number, p: () => boolean): Promise<void> 
 async function surface(dir: string, who: { name: string; credential: string }) {
   const s = connect(join(dir, "agent.sock"));
   const frames: string[] = [];
-  let buf = "";
-  s.on("data", (d) => {
-    buf += d;
-    for (let i; (i = buf.indexOf("\n")) >= 0; ) {
-      frames.push(JSON.parse(buf.slice(0, i)).t);
-      buf = buf.slice(i + 1);
-    }
-  });
+  s.on(
+    "data",
+    lines((line) => {
+      frames.push(JSON.parse(line).t);
+      return true;
+    }),
+  );
   s.on("error", () => {});
-  s.write(JSON.stringify({ t: "hello", token: readFileSync(join(dir, "rpc.key"), "utf8").trim(), client: "terminal-test" }) + "\n");
+  s.write(
+    JSON.stringify({ t: "hello", token: readFileSync(join(dir, "rpc.key"), "utf8").trim(), client: "terminal-test" }) +
+      "\n",
+  );
   await until("the surface to be ready", 2000, () => frames.includes("ready"));
-  s.write(JSON.stringify({ t: "call", id: 1, tool: "wait_for_user", args: { timeout_s: 0 }, who }) + "\n");
+  s.write(`${JSON.stringify({ t: "call", id: 1, tool: "wait_for_user", args: { timeout_s: 0 }, who })}\n`);
   return { close: () => s.destroy() };
 }
 
@@ -66,7 +74,9 @@ test("the terminal asks again when a denied Agent asks again, after the person a
   try {
     await link.start();
     surfaces.push(await surface(dir, who));
-    await until("the Link's terminal to ask about the Agent", 3000, () => t.out().includes('Allow "Claude Code · one"'));
+    await until("the Link's terminal to ask about the Agent", 3000, () =>
+      t.out().includes('Allow "Claude Code · one"'),
+    );
 
     // The person answers somewhere other than this terminal: `reflex link deny <agent>`.
     const admin = await LinkClient.connect(dir, "admin");

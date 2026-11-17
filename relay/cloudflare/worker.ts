@@ -1,17 +1,23 @@
 // Only live encrypted device forwarding; no log, assets, OAuth or cloud agents.
 import { DurableObject } from "cloudflare:workers";
-import { Room } from "../domain/room.ts";
 import type { Sock, SockState } from "../domain/ports.ts";
+import { Room } from "../domain/room.ts";
 import { RELAY_PROTOCOL, ROOM_ID } from "../domain/wire.ts";
-interface Env { ROOM: DurableObjectNamespace<RoomDO>; }
+
+interface Env {
+  ROOM: DurableObjectNamespace<RoomDO>;
+}
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === "/" || url.pathname === "/health")
-      return new Response(`Reflex relay (${RELAY_PROTOCOL}). It forwards end-to-end encrypted frames between paired devices and keeps nothing.\n`);
+      return new Response(
+        `Reflex relay (${RELAY_PROTOCOL}). It forwards end-to-end encrypted frames between paired devices and keeps nothing.\n`,
+      );
     if (url.pathname !== "/v0/connect") return new Response("Not found", { status: 404 });
     const room = url.searchParams.get("room") ?? "";
-    if (!ROOM_ID.test(room) || req.headers.get("upgrade") !== "websocket") return new Response("a WebSocket to a room is expected", { status: 400 });
+    if (!ROOM_ID.test(room) || req.headers.get("upgrade") !== "websocket")
+      return new Response("a WebSocket to a room is expected", { status: 400 });
     return env.ROOM.get(env.ROOM.idFromName(room)).fetch(req);
   },
 } satisfies ExportedHandler<Env>;
@@ -21,12 +27,20 @@ export class RoomDO extends DurableObject<Env> {
   #closing: WebSocket | null = null;
 
   #get(id: string): Room {
-    this.#room ??= new Room(id, () => this.ctx.getWebSockets().filter((ws) => ws !== this.#closing).map((ws) => sock(ws)), (m) => console.log(`room: ${m}`));
+    this.#room ??= new Room(
+      id,
+      () =>
+        this.ctx
+          .getWebSockets()
+          .filter((ws) => ws !== this.#closing)
+          .map((ws) => sock(ws)),
+      (m) => console.log(`room: ${m}`),
+    );
     return this.#room;
   }
 
   override async fetch(req: Request): Promise<Response> {
-    const id = new URL(req.url).searchParams.get("room")!;
+    const id = new URL(req.url).searchParams.get("room") ?? ""; // checked against ROOM_ID before it got here
     this.ctx.storage.kv.put("room", id);
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server);

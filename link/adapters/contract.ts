@@ -14,6 +14,8 @@
 // Inbox, so wait_for_user still returns it. A push that worked counts as one
 // delivery (receipt `delivered`). The Send stays pending until the Agent
 // acknowledges it (in_reply_to or after), like one wait_for_user returned.
+
+import type { Json } from "../../agent/src/protocol.ts";
 import type { Bounds } from "../../agent/src/store.ts";
 
 /** Where one Agent's Sends are pushed. */
@@ -42,7 +44,7 @@ export interface PushTarget {
 export interface Push {
   space: string;
   send: string;
-  bundle: Record<string, any> & { images?: { n: number; shows: string; bounds: Bounds }[] };
+  bundle: Json & { images?: { n: number; shows: string; bounds: Bounds }[] };
   images: Buffer[];
 }
 
@@ -65,5 +67,9 @@ export interface PushAdapter {
    */
   liveSince(target: PushTarget): number | undefined;
   /** Delivers one Send. Never throws: a failure is an outcome, and the Send stays in the Inbox. */
-  deliver(target: PushTarget, push: Push, ctx: { secret?: string; attempt: number; log: (m: string) => void }): Promise<PushOutcome>;
+  deliver(
+    target: PushTarget,
+    push: Push,
+    ctx: { secret?: string; attempt: number; log: (m: string) => void },
+  ): Promise<PushOutcome>;
 }

@@ -7,9 +7,10 @@
 // inside the bytes, and discovery is never authentication.
 //
 // The iPad dials; this side only listens. The helper is respawned if it dies.
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { FramedPath } from "./framed.ts";
 import type { Candidate, Path, Transport } from "./transport.ts";
@@ -79,7 +80,7 @@ class HelperPath extends FramedPath {
 
 /** One running reflex-p2p process. */
 class Helper {
-  #child: ChildProcess;
+  #child: ChildProcessByStdio<Writable, Readable, null>;
   #buf = Buffer.alloc(0);
   #paths = new Map<number, HelperPath>();
   #onReady: (port: number) => void;
@@ -87,13 +88,24 @@ class Helper {
   #log: (m: string) => void;
   readonly exited: Promise<string>;
 
-  constructor(args: string[], on: { ready: (port: number) => void; path: (p: Path) => void; log: (m: string) => void; txt?: Record<string, string> }) {
+  constructor(
+    args: string[],
+    on: {
+      ready: (port: number) => void;
+      path: (p: Path) => void;
+      log: (m: string) => void;
+      txt?: Record<string, string>;
+    },
+  ) {
     this.#onReady = on.ready;
     this.#onPath = on.path;
     this.#log = on.log;
-    this.#child = spawn(HELPER, args, { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, REFLEX_P2P_TXT: JSON.stringify(on.txt ?? {}) } });
-    this.#child.stdout!.on("data", (d: Buffer) => this.#data(d));
-    this.#child.stdin!.on("error", () => {}); // the helper died; `exited` says so
+    this.#child = spawn(HELPER, args, {
+      stdio: ["pipe", "pipe", "inherit"],
+      env: { ...process.env, REFLEX_P2P_TXT: JSON.stringify(on.txt ?? {}) },
+    });
+    this.#child.stdout.on("data", (d: Buffer) => this.#data(d));
+    this.#child.stdin.on("error", () => {}); // the helper died; `exited` says so
     this.exited = new Promise((r) => {
       this.#child.once("error", (e) => r(e.message));
       this.#child.once("exit", (code, sig) => r(sig ? `killed by ${sig}` : `exited with ${code}`));
@@ -124,23 +136,28 @@ class Helper {
   #handle(kind: number, conn: number, payload: Buffer): void {
     switch (kind) {
       case K.ready:
-        return this.#onReady(Number(JSON.parse(payload.toString("utf8")).port));
+        this.#onReady(Number(JSON.parse(payload.toString("utf8")).port));
+        return;
       case K.open: {
         const { remote, interface: iface } = JSON.parse(payload.toString("utf8"));
         const p = new HelperPath(this, conn, `${remote} via ${iface}`);
         this.#paths.set(conn, p);
-        return this.#onPath(p);
+        this.#onPath(p);
+        return;
       }
       case K.data:
-        return this.#paths.get(conn)?.data(Buffer.from(payload));
+        this.#paths.get(conn)?.data(Buffer.from(payload));
+        return;
       case K.sent:
-        return this.#paths.get(conn)?.sent(payload.readUInt32BE(0));
+        this.#paths.get(conn)?.sent(payload.readUInt32BE(0));
+        return;
       case K.closed:
         this.#paths.get(conn)?.gone(payload.toString("utf8") || "closed");
         this.#paths.delete(conn);
         return;
       case K.log:
-        return this.#log(`peer-to-peer: ${payload.toString("utf8")}`);
+        this.#log(`peer-to-peer: ${payload.toString("utf8")}`);
+        return;
     }
   }
 

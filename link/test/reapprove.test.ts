@@ -1,13 +1,16 @@
 // A revoked Agent asks the person again. `admin.key` can only deny and revoke
 // (an Agent with the user's shell must not approve itself), so the person's
 // second chance is the iPad's Allow or `y` in the Link's terminal.
-import { test } from "node:test";
+
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
+import { test } from "node:test";
+import { frames } from "../../agent/src/host/rpc.ts";
+import type { Json } from "../../agent/src/protocol.ts";
 import { startAgentHost } from "../agent-host.ts";
-import { Catalog, type AgentRecord } from "../pairing/catalog.ts";
+import { type AgentRecord, Catalog } from "../pairing/catalog.ts";
 import { newDeviceKey } from "../pairing/crypto.ts";
 import { AssetStore } from "../storage/assets.ts";
 import { openDb } from "../storage/db.ts";
@@ -21,32 +24,29 @@ process.env.REFLEX_REASK_S = "0";
 class Surface {
   #sock: ReturnType<typeof connect>;
   #next = 1;
-  #buf = "";
-  #waiting = new Map<number, (f: Record<string, any>) => void>();
+  #waiting = new Map<number, (f: Json) => void>();
   #ready: Promise<void>;
 
   constructor(socket: string, token: string) {
     this.#sock = connect(socket);
     this.#ready = new Promise((resolve) => {
-      this.#sock.on("data", (d) => {
-        this.#buf += d;
-        for (let i; (i = this.#buf.indexOf("\n")) >= 0; ) {
-          const f = JSON.parse(this.#buf.slice(0, i));
-          this.#buf = this.#buf.slice(i + 1);
+      this.#sock.on(
+        "data",
+        frames((f) => {
           if (f.t === "ready") resolve();
           else this.#waiting.get(f.id)?.(f);
-        }
-      });
+        }),
+      );
       this.#sock.on("error", () => {});
-      this.#sock.write(JSON.stringify({ t: "hello", token, client: "test" }) + "\n");
+      this.#sock.write(`${JSON.stringify({ t: "hello", token, client: "test" })}\n`);
     });
   }
 
   async call(tool: string, args: unknown, who: { name: string; credential: string }) {
     await this.#ready;
     const id = this.#next++;
-    const answer = new Promise<Record<string, any>>((resolve) => this.#waiting.set(id, resolve));
-    this.#sock.write(JSON.stringify({ t: "call", id, tool, args, who }) + "\n");
+    const answer = new Promise<Json>((resolve) => this.#waiting.set(id, resolve));
+    this.#sock.write(`${JSON.stringify({ t: "call", id, tool, args, who })}\n`);
     return answer;
   }
 
@@ -79,7 +79,8 @@ test("a revoked Agent is asked about again, and the person can let it back in", 
     },
     decision: async (id) => {
       const start = Date.now();
-      while (catalog.agent(id)?.status === "pending" && Date.now() - start < 2000) await new Promise((r) => setTimeout(r, 10));
+      while (catalog.agent(id)?.status === "pending" && Date.now() - start < 2000)
+        await new Promise((r) => setTimeout(r, 10));
     },
     log: () => {},
   });

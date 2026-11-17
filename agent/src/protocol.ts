@@ -12,5 +12,16 @@ export const description = (tool: Tool) =>
 export const inputSchema = (tool: Tool) =>
   tool === "connect"
     ? { type: "object" as const, properties: {}, additionalProperties: false }
-    : { type: "object" as const, properties: { space: { type: "string" }, after: { type: "string" }, timeout_s: { type: "number", minimum: 0, maximum: 3600 } }, additionalProperties: false };
+    : {
+        type: "object" as const,
+        properties: {
+          space: { type: "string" },
+          after: { type: "string" },
+          timeout_s: { type: "number", minimum: 0, maximum: 3600 },
+        },
+        additionalProperties: false,
+      };
+/** A JSON object as it crosses a wire (tool results, Link frames, push bundles). It's checked where it's read, not typed here. */
+// biome-ignore lint/suspicious/noExplicitAny: wire JSON; each reader validates the fields it uses.
+export type Json = Record<string, any>;
 export type ProtocolError = { code: string; msg: string; fix: string };

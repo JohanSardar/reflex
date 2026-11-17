@@ -1,0 +1,80 @@
+# Checks for the Mac side (agent/, link/, relay/ and the dist/ build) on every pull request and push to main.
+# Runs on GitHub's free runners. The same checks run locally with `npm run check`.
+name: Mac side
+on:
+  pull_request:
+    paths:
+      - agent/**
+      - link/**
+      - relay/**
+      - dist/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - .github/workflows/mac-side.yml
+  push:
+    branches: [main]
+    paths:
+      - agent/**
+      - link/**
+      - relay/**
+      - dist/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - .github/workflows/mac-side.yml
+permissions:
+  contents: read
+concurrency:
+  group: mac-side-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  lint-types-build:
+    name: Lint, types and dist/
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Lint and formatting (Biome)
+        run: npm run lint
+      - name: Type check (tsc, strict)
+        run: npm run typecheck
+      # dist/reflex.mjs is what `npx … mcp` runs. It must be the build of these sources, byte for byte.
+      - name: dist/ is the build of the sources
+        run: npm run check:dist
+      - name: The npx install stays small
+        run: |
+          size=$(wc -c < dist/reflex.mjs)
+          echo "dist/reflex.mjs: $size bytes"
+          test "$size" -lt 1500000
+
+  test:
+    name: Tests (${{ matrix.os }}, Node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # The oldest Node the sources run on (package.json engines) and the current LTS.
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: The single-file build starts
+        run: node dist/reflex.mjs --version
+
+  p2p-helper:
+    name: Peer-to-peer helper builds
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift build -c release --package-path link/transports/p2p

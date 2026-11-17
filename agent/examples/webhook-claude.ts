@@ -19,7 +19,9 @@ const secret = process.env.REFLEX_WEBHOOK_SECRET ?? "";
 const agent = process.env.REFLEX_AGENT_NAME ?? "";
 const port = Number(process.env.PORT ?? 8790);
 if (!secret.startsWith("whsec_") || !agent) {
-  console.error("Set REFLEX_WEBHOOK_SECRET (from `reflex adapters add webhook`) and REFLEX_AGENT_NAME (the --agent you added it as).");
+  console.error(
+    "Set REFLEX_WEBHOOK_SECRET (from `reflex adapters add webhook`) and REFLEX_AGENT_NAME (the --agent you added it as).",
+  );
   process.exit(2);
 }
 const reflex = new URL("../bin/reflex.mjs", import.meta.url).pathname;
@@ -32,7 +34,10 @@ function signed(ts: string, sig: string, body: string): boolean {
   return got.length === want.length && timingSafeEqual(got, want);
 }
 
-function turn(bundle: Record<string, any>) {
+/** The parts of a Send Bundle this receiver uses; the rest goes to Claude as it came. */
+type Bundle = { space: string; send: string; images?: { n: number; data?: string; file?: string }[] };
+
+function turn(bundle: Bundle) {
   const dir = join(tmpdir(), "reflex-webhook");
   mkdirSync(dir, { recursive: true });
   for (const img of bundle.images ?? []) {
@@ -41,13 +46,32 @@ function turn(bundle: Record<string, any>) {
     writeFileSync(img.file, Buffer.from(img.data, "base64"));
     delete img.data;
   }
-  const mcp = { mcpServers: { reflex: { command: process.execPath, args: [reflex, "mcp"], env: { REFLEX_AGENT_NAME: agent, ...(process.env.REFLEX_HOME ? { REFLEX_HOME: process.env.REFLEX_HOME } : {}) } } } };
+  const mcp = {
+    mcpServers: {
+      reflex: {
+        command: process.execPath,
+        args: [reflex, "mcp"],
+        env: { REFLEX_AGENT_NAME: agent, ...(process.env.REFLEX_HOME ? { REFLEX_HOME: process.env.REFLEX_HOME } : {}) },
+      },
+    },
+  };
   const prompt = `The person pressed Send in their Reflex Space. Here is the Send Bundle (its crops are PNG files at images[].file):\n\n${JSON.stringify(bundle)}\n\nFollow its next: answer in your session and acknowledge with wait_for_user(after), then stop.`;
-  const args = ["-p", prompt, "--mcp-config", JSON.stringify(mcp), "--allowedTools", "mcp__reflex__wait_for_user,Read", "--output-format", "text"];
+  const args = [
+    "-p",
+    prompt,
+    "--mcp-config",
+    JSON.stringify(mcp),
+    "--allowedTools",
+    "mcp__reflex__wait_for_user,Read",
+    "--output-format",
+    "text",
+  ];
   console.log(`${new Date().toISOString()} ${bundle.space}/${bundle.send}: starting claude -p`);
   const child = spawn(process.env.CLAUDE_BIN ?? "claude", args, { stdio: ["ignore", "pipe", "inherit"] });
   child.stdout.on("data", (d) => process.stdout.write(`  claude: ${d}`));
-  child.on("exit", (code) => console.log(`${new Date().toISOString()} ${bundle.space}/${bundle.send}: claude exited ${code}`));
+  child.on("exit", (code) =>
+    console.log(`${new Date().toISOString()} ${bundle.space}/${bundle.send}: claude exited ${code}`),
+  );
 }
 
 createServer((req, res) => {
@@ -55,13 +79,19 @@ createServer((req, res) => {
   req.on("data", (c) => chunks.push(c));
   req.on("end", () => {
     const body = Buffer.concat(chunks).toString("utf8");
-    if (req.method !== "POST" || !signed(String(req.headers["reflex-timestamp"] ?? ""), String(req.headers["reflex-signature"] ?? ""), body)) {
+    if (
+      req.method !== "POST" ||
+      !signed(String(req.headers["reflex-timestamp"] ?? ""), String(req.headers["reflex-signature"] ?? ""), body)
+    ) {
       console.log(`${new Date().toISOString()} rejected a request (bad or missing signature)`);
-      return res.writeHead(401).end();
+      res.writeHead(401).end();
+      return;
     }
     const delivery = String(req.headers["reflex-delivery"]);
     res.writeHead(202).end();
-    console.log(`${new Date().toISOString()} ${delivery} attempt ${req.headers["reflex-attempt"]}: signature ok, acknowledged`);
+    console.log(
+      `${new Date().toISOString()} ${delivery} attempt ${req.headers["reflex-attempt"]}: signature ok, acknowledged`,
+    );
     if (seen.has(delivery)) return; // a retry of one already taken
     seen.add(delivery);
     turn(JSON.parse(body).bundle);

@@ -1,12 +1,27 @@
 // The surfaces' side of the local RPC to the Link.
 import { connect, type Socket } from "node:net";
+import type { Json } from "../protocol.ts";
+import {
+  type ClientFrame,
+  frames,
+  type HostFrame,
+  home,
+  NoLink,
+  socketPath,
+  token,
+  type Who,
+  type WireFile,
+} from "./rpc.ts";
 import { ensureLink } from "./start.ts";
-import { frames, home, NoLink, socketPath, token, type ClientFrame, type HostFrame, type WireFile, type Who } from "./rpc.ts";
 
-export type CallResult = { json: Record<string, any>; images: string[]; files?: WireFile[]; isError: boolean };
+export type CallResult = { json: Json; images: string[]; files?: WireFile[]; isError: boolean };
 type Progress = (f: { elapsed_s: number; timeout_s: number; message?: string }) => void;
 /** A pushed Send Bundle; resolve with whether it reached the harness. */
-export type OnPush = (p: { json: Record<string, any>; images: string[]; deadline: number }) => Promise<{ ok: boolean; reason?: string }>;
+export type OnPush = (p: {
+  json: Json;
+  images: string[];
+  deadline: number;
+}) => Promise<{ ok: boolean; reason?: string }>;
 
 function dial(path: string): Promise<Socket> {
   return new Promise((resolve, reject) => {
@@ -19,7 +34,7 @@ function dial(path: string): Promise<Socket> {
 export class Client {
   #sock: Socket;
   #next = 1;
-  #waiting = new Map<number, { resolve: (r: any) => void; reject: (e: Error) => void; progress?: Progress }>();
+  #waiting = new Map<number, { resolve: (r: CallResult) => void; reject: (e: Error) => void; progress?: Progress }>();
   #onPush = new Map<number, OnPush>();
   #ready: Promise<void>;
   onClose?: () => void;
@@ -31,23 +46,26 @@ export class Client {
       ready = r;
       sock.once("close", () => reject(new NoLink("The Link refused this connection: its credential did not match.")));
     });
-    sock.on("data", frames((f: HostFrame) => {
-      if (f.t === "ready") return ready();
-      if (f.t === "push") {
-        const on = this.#onPush.get(f.id);
-        const answer = (r: { ok: boolean; reason?: string }) => this.#send({ t: "pushed", push: f.push, ...r });
-        if (!on) return answer({ ok: false, reason: "not listening" });
-        if (Date.now() > f.deadline) return answer({ ok: false, reason: "arrived after its deadline" });
-        void on(f).then(answer, (e) => answer({ ok: false, reason: String((e as Error).message) }));
-        return;
-      }
-      const w = this.#waiting.get(f.id);
-      if (!w) return;
-      if (f.t === "progress") return w.progress?.(f);
-      this.#waiting.delete(f.id);
-      if (f.t === "failed") w.reject(new Error(f.message));
-      else w.resolve(f);
-    }));
+    sock.on(
+      "data",
+      frames((f: HostFrame) => {
+        if (f.t === "ready") return ready();
+        if (f.t === "push") {
+          const on = this.#onPush.get(f.id);
+          const answer = (r: { ok: boolean; reason?: string }) => this.#send({ t: "pushed", push: f.push, ...r });
+          if (!on) return answer({ ok: false, reason: "not listening" });
+          if (Date.now() > f.deadline) return answer({ ok: false, reason: "arrived after its deadline" });
+          void on(f).then(answer, (e) => answer({ ok: false, reason: String((e as Error).message) }));
+          return;
+        }
+        const w = this.#waiting.get(f.id);
+        if (!w) return;
+        if (f.t === "progress") return w.progress?.(f);
+        this.#waiting.delete(f.id);
+        if (f.t === "failed") w.reject(new Error(f.message));
+        else w.resolve(f as CallResult); // or a listening frame, which listen() tells apart by its `t`
+      }),
+    );
     sock.on("close", () => {
       for (const w of this.#waiting.values()) w.reject(new Error("The Reflex Link closed the connection."));
       this.#waiting.clear();
@@ -67,7 +85,9 @@ export class Client {
         await ensureLink();
         sock = await dial(socketPath());
       } catch (e) {
-        throw new NoLink((e as Error).message || `The Reflex Link is not running (profile ${home()}). Start it with \`reflex link\`.`);
+        throw new NoLink(
+          (e as Error).message || `The Reflex Link is not running (profile ${home()}). Start it with \`reflex link\`.`,
+        );
       }
     }
     const key = token();
@@ -77,7 +97,7 @@ export class Client {
   }
 
   #send(f: ClientFrame) {
-    this.#sock.write(JSON.stringify(f) + "\n");
+    this.#sock.write(`${JSON.stringify(f)}\n`);
   }
 
   #request(frame: (id: number) => ClientFrame, o: { signal?: AbortSignal; progress?: Progress } = {}) {
@@ -97,16 +117,21 @@ export class Client {
    * Opens a push target for this Agent on this connection: the Link pushes its Sends to `onPush` until
    * the connection closes. Resolves once the Link accepted it (which can wait for the person to approve the Agent).
    */
-  async listen(who: Who, adapter: string, config: Record<string, unknown>, onPush: OnPush): Promise<{ target: string; agent: string }> {
+  async listen(
+    who: Who,
+    adapter: string,
+    config: Record<string, unknown>,
+    onPush: OnPush,
+  ): Promise<{ target: string; agent: string }> {
     const id = this.#next;
     this.#onPush.set(id, onPush);
     const r = await this.#request((id) => ({ t: "listen", id, who, adapter, config }));
-    if ((r as any).t !== "listening") {
+    if ((r as Json).t !== "listening") {
       this.#onPush.delete(id);
       const err = (r as CallResult).json?.errors?.[0];
       throw new Error(err ? `${err.code}: ${err.msg}` : "The Link did not accept the push target.");
     }
-    return { target: (r as any).target, agent: (r as any).agent };
+    return { target: (r as Json).target, agent: (r as Json).agent };
   }
 
   /** This Agent's push targets that need no connection: `add` (adapter, config), `list`, `remove` (target). */

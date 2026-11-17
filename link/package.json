@@ -11,5 +11,9 @@
     "@reflex/agent": "0.1.0",
     "ajv": "8.17.1",
     "bonjour-service": "1.4.4"
+  },
+  "scripts": {
+    "format": "biome check --write .",
+    "lint": "biome ci --error-on-warnings ."
   }
 }

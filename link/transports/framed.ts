@@ -39,7 +39,10 @@ export abstract class FramedPath implements Path {
     this.#buf = this.#buf.length ? Buffer.concat([this.#buf, d]) : d;
     while (this.#buf.length >= 4) {
       const n = this.#buf.readUInt32BE(0);
-      if (n > MAX_FRAME) return this.close(`frame of ${n} bytes is over the limit`);
+      if (n > MAX_FRAME) {
+        this.close(`frame of ${n} bytes is over the limit`);
+        return;
+      }
       if (this.#buf.length < 4 + n) break;
       const f = this.#buf.subarray(4, 4 + n);
       this.#buf = this.#buf.subarray(4 + n);
