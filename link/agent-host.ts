@@ -5,24 +5,25 @@
 // Every Send is durable before it is delivered, and
 // every Send is indexed in the durable Inbox in the same transaction that
 // makes it durable, so a Link that is killed and restarted still delivers it.
-import { Core, ReflexError, type Identity } from "../agent/src/capabilities/index.ts";
-import { serveHost, type Listener } from "../agent/src/host/server.ts";
-import type { Who } from "../agent/src/host/rpc.ts";
-import type { Assets, Delivery, FrozenSend, Inbox as AgentInbox, WaitFilter } from "../agent/src/store.ts";
-import type { Catalog, AgentRecord } from "./pairing/catalog.ts";
-import type { AssetStore } from "./storage/assets.ts";
-import type { DatabaseSync } from "node:sqlite";
-import type { Inbox } from "./storage/inbox.ts";
-import type { SendStore } from "./storage/sends.ts";
 
-import { recipient } from "./routing.ts";
+import { randomBytes } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
+import { Ajv2020 } from "ajv/dist/2020.js";
+import { Core, type Identity, ReflexError } from "../agent/src/capabilities/index.ts";
+import type { Who } from "../agent/src/host/rpc.ts";
+import { type Listener, serveHost } from "../agent/src/host/server.ts";
+import type { Json } from "../agent/src/protocol.ts";
+import type { Inbox as AgentInbox, Assets, Delivery, FrozenSend, WaitFilter } from "../agent/src/store.ts";
 import { ClaudeChannel } from "./adapters/claude-channel.ts";
-import { Webhook } from "./adapters/webhook.ts";
+import type { PushTarget } from "./adapters/contract.ts";
 import { Dispatcher } from "./adapters/dispatch.ts";
 import { PushStore } from "./adapters/store.ts";
-import type { PushTarget } from "./adapters/contract.ts";
-import { randomBytes } from "node:crypto";
-import { Ajv2020 } from "ajv/dist/2020.js";
+import { Webhook } from "./adapters/webhook.ts";
+import type { AgentRecord, Catalog } from "./pairing/catalog.ts";
+import { recipient } from "./routing.ts";
+import type { AssetStore } from "./storage/assets.ts";
+import type { Inbox } from "./storage/inbox.ts";
+import type { SendStore } from "./storage/sends.ts";
 
 /** The Agent layer's view of the Link's durable Inbox. */
 class LinkInbox implements AgentInbox {
@@ -75,7 +76,9 @@ class LinkInbox implements AgentInbox {
 
 class LinkAssets implements Assets {
   #assets: AssetStore;
-  constructor(assets: AssetStore) { this.#assets = assets; }
+  constructor(assets: AssetStore) {
+    this.#assets = assets;
+  }
   get(hash: string) {
     try {
       return this.#assets.has(hash) ? this.#assets.get(hash) : undefined;
@@ -125,7 +128,11 @@ const approvalWaitMs = () => Number(process.env.REFLEX_APPROVAL_WAIT_S ?? 50) * 
 const reaskMs = () => Number(process.env.REFLEX_REASK_S ?? 600) * 1000;
 
 export async function startAgentHost(o: AgentHostOptions) {
-  o.inbox.recipientsFor = () => o.catalog.agents().filter((a) => a.status === "approved").map((a) => recipient(a.id));
+  o.inbox.recipientsFor = () =>
+    o.catalog
+      .agents()
+      .filter((a) => a.status === "approved")
+      .map((a) => recipient(a.id));
   const names = Object.fromEntries(o.catalog.agents().map((a) => [a.id, a.name]));
   const inbox = new LinkInbox(o.inbox, o.store);
   const core = new Core({
@@ -138,18 +145,27 @@ export async function startAgentHost(o: AgentHostOptions) {
     log: o.log,
   });
 
-  const notApproved = (a: AgentRecord, msg: string, fix: string) =>
+  const notApproved = (msg: string, fix: string) =>
     new ReflexError("not_approved", [{ code: "not_approved", msg, fix }]);
 
   function caller(who: Who): { name: string; credential: string } {
-    const name = String(who?.name ?? "").trim().slice(0, 80);
+    const name = String(who?.name ?? "")
+      .trim()
+      .slice(0, 80);
     const credential = String(who?.credential ?? "");
-    if (!name || credential.length < 32) throw new ReflexError("invalid_input", [{ code: "invalid_input", msg: "An Agent must say its name and present its credential.", fix: "Connect through `reflex mcp` or the reflex CLI." }]);
+    if (!name || credential.length < 32)
+      throw new ReflexError("invalid_input", [
+        {
+          code: "invalid_input",
+          msg: "An Agent must say its name and present its credential.",
+          fix: "Connect through `reflex mcp` or the reflex CLI.",
+        },
+      ]);
     return { name, credential };
   }
 
   /** The `connect` tool: a code for the person to type on their iPad, which pairs it and approves this Agent. */
-  function connect(who: Who): Record<string, any> {
+  function connect(who: Who): Json {
     let name: string, credential: string;
     try {
       ({ name, credential } = caller(who));
@@ -163,14 +179,33 @@ export async function startAgentHost(o: AgentHostOptions) {
     }
     const ipads = o.ipads?.() ?? [];
     if (a.status === "approved" && ipads.length)
-      return { connected: true, ipads, next: "You're connected. Call wait_for_user to receive the person's next Send, and call it again after you answer each one." };
-    if (!o.code) return { ok: false, reason: "unavailable", errors: [{ code: "unavailable", msg: "This Link can't make pairing codes.", fix: "Restart the Link without --no-lan." }] };
+      return {
+        connected: true,
+        ipads,
+        next: "You're connected. Call wait_for_user to receive the person's next Send, and call it again after you answer each one.",
+      };
+    if (!o.code)
+      return {
+        ok: false,
+        reason: "unavailable",
+        errors: [
+          {
+            code: "unavailable",
+            msg: "This Link can't make pairing codes.",
+            fix: "Restart the Link without --no-lan.",
+          },
+        ],
+      };
     let c: { code: string; expires: number };
     try {
       c = o.code(a.id);
     } catch (e) {
       const err = e as Error & { fix?: string };
-      return { ok: false, reason: "unavailable", errors: [{ code: "unavailable", msg: err.message, fix: err.fix ?? "" }] };
+      return {
+        ok: false,
+        reason: "unavailable",
+        errors: [{ code: "unavailable", msg: err.message, fix: err.fix ?? "" }],
+      };
     }
     o.log("code_given", { agent: a.id, name: a.name });
     return {
@@ -181,7 +216,11 @@ export async function startAgentHost(o: AgentHostOptions) {
     };
   }
 
-  async function authorize(who: Who, signal: AbortSignal, progress?: (p: { elapsed_s: number; timeout_s: number; message: string }) => void): Promise<Identity> {
+  async function authorize(
+    who: Who,
+    signal: AbortSignal,
+    progress?: (p: { elapsed_s: number; timeout_s: number; message: string }) => void,
+  ): Promise<Identity> {
     const { name, credential } = caller(who);
     let a = o.catalog.byCredential(credential);
     if (!a) {
@@ -212,17 +251,23 @@ export async function startAgentHost(o: AgentHostOptions) {
       const ms = approvalWaitMs();
       const started = Date.now();
       const code = o.codeFor?.(a.id);
-      const message = code ? `Waiting for you to type ${spaced(code)} in Reflex on your iPad` : `Waiting for you to tap Allow on your iPad for ${a.name}`;
-      const tick = setInterval(() => progress?.({ elapsed_s: Math.round((Date.now() - started) / 1000), timeout_s: ms / 1000, message }), 10_000);
+      const message = code
+        ? `Waiting for you to type ${spaced(code)} in Reflex on your iPad`
+        : `Waiting for you to tap Allow on your iPad for ${a.name}`;
+      const tick = setInterval(
+        () => progress?.({ elapsed_s: Math.round((Date.now() - started) / 1000), timeout_s: ms / 1000, message }),
+        10_000,
+      );
       try {
         await o.decision(a.id, ms, signal);
       } finally {
         clearInterval(tick);
       }
-      a = o.catalog.agent(a.id)!;
+      a = o.catalog.knownAgent(a.id);
     }
-    if (a.status === "pending" && o.codeFor?.(a.id)) {
-      const code = spaced(o.codeFor(a.id)!);
+    const waitingOn = a.status === "pending" ? o.codeFor?.(a.id) : undefined;
+    if (waitingOn) {
+      const code = spaced(waitingOn);
       throw new ReflexError(
         "not_approved",
         [
@@ -249,7 +294,11 @@ export async function startAgentHost(o: AgentHostOptions) {
         ["Call the same tool again: it waits for the person's answer."],
       );
     }
-    if (a.status !== "approved") throw notApproved(a, `The person ${a.status} ${a.name}.`, "Call again to ask the person once more, and tell them to expect the question on their iPad or in the Link's terminal.");
+    if (a.status !== "approved")
+      throw notApproved(
+        `The person ${a.status} ${a.name}.`,
+        "Call again to ask the person once more, and tell them to expect the question on their iPad or in the Link's terminal.",
+      );
     for (const send of o.store.list()) o.inbox.adopt(send.space, recipient(a.id));
     return { agent: a.id, name: a.name, color: a.color };
   }
@@ -266,6 +315,11 @@ export async function startAgentHost(o: AgentHostOptions) {
   ]);
   const ajv = new Ajv2020({ strict: false });
   const validConfig = new Map(adapters.map((a) => [a.name, ajv.compile(a.config)]));
+  const validator = (adapter: string) => {
+    const valid = validConfig.get(adapter);
+    if (!valid) throw new Error(`no config schema for the ${adapter} adapter`);
+    return valid;
+  };
   const invalid = (msg: string, fix: string) => new ReflexError("invalid_input", [{ code: "invalid_input", msg, fix }]);
   const dispatcher = new Dispatcher({
     inbox: o.inbox,
@@ -285,10 +339,18 @@ export async function startAgentHost(o: AgentHostOptions) {
 
   const listen = (l: Listener): string => {
     const s = surfaces.get(l.adapter);
-    if (!s) throw invalid(`No push adapter '${l.adapter}' takes a connection.`, `Use ${[...surfaces.keys()].join(" or ")}.`);
-    const valid = validConfig.get(l.adapter)!;
-    if (!valid(l.config)) throw invalid(`The ${l.adapter} config is not valid: ${ajv.errorsText(valid.errors)}.`, s.fix);
-    const target = pushes.upsert({ agent: l.who.agent, adapter: l.adapter, instance: l.client, config: l.config, callback: "mcp" });
+    if (!s)
+      throw invalid(`No push adapter '${l.adapter}' takes a connection.`, `Use ${[...surfaces.keys()].join(" or ")}.`);
+    const valid = validator(l.adapter);
+    if (!valid(l.config))
+      throw invalid(`The ${l.adapter} config is not valid: ${ajv.errorsText(valid.errors)}.`, s.fix);
+    const target = pushes.upsert({
+      agent: l.who.agent,
+      adapter: l.adapter,
+      instance: l.client,
+      config: l.config,
+      callback: "mcp",
+    });
     s.adapter.attach(target, l, () => {
       pushes.touch(target.id);
       o.log(`${s.event}_closed`, { target: target.id, agent: l.who.name });
@@ -297,31 +359,73 @@ export async function startAgentHost(o: AgentHostOptions) {
     return target.id;
   };
 
-  const shown = (t: PushTarget) => ({ target: t.id, adapter: t.adapter, config: t.config, callback: t.callback, live: adapters.some((a) => a.name === t.adapter && a.liveSince(t) !== undefined), created_at: t.created_at });
+  const shown = (t: PushTarget) => ({
+    target: t.id,
+    adapter: t.adapter,
+    config: t.config,
+    callback: t.callback,
+    live: adapters.some((a) => a.name === t.adapter && a.liveSince(t) !== undefined),
+    created_at: t.created_at,
+  });
   // `reflex adapters`: an Agent's own webhook targets. Only the Agent itself manages them, once approved.
-  const manage = (who: Identity, action: string, args: Record<string, unknown>): Record<string, any> => {
+  const manage = (who: Identity, action: string, args: Record<string, unknown>): Json => {
     const mine = pushes.all().filter((t) => t.agent === who.agent);
     if (action === "list") return { ok: true, targets: mine.map(shown) };
     if (action === "remove") {
       const t = mine.find((x) => x.id === args.target);
-      if (!t) throw invalid(`You have no push target '${String(args.target)}'.`, "List yours with `reflex adapters list`.");
+      if (!t)
+        throw invalid(`You have no push target '${String(args.target)}'.`, "List yours with `reflex adapters list`.");
       pushes.remove(t.id);
       o.log("push_target_removed", { target: t.id, agent: who.name, adapter: t.adapter });
       return { ok: true, removed: t.id };
     }
     if (action !== "add") throw invalid(`Unknown adapters action '${action}'.`, "Use add, list or remove.");
-    if (args.adapter !== webhook.name) throw invalid(`'${String(args.adapter)}' can't be added by hand.`, `Add a ${webhook.name}; ${[...surfaces.keys()].join(" and ")} targets open on their own from \`reflex mcp\`.`);
+    if (args.adapter !== webhook.name)
+      throw invalid(
+        `'${String(args.adapter)}' can't be added by hand.`,
+        `Add a ${webhook.name}; ${[...surfaces.keys()].join(" and ")} targets open on their own from \`reflex mcp\`.`,
+      );
     const config = (args.config ?? {}) as Record<string, unknown>;
-    const valid = validConfig.get(webhook.name)!;
-    if (!valid(config)) throw invalid(`The webhook config is not valid: ${ajv.errorsText(valid.errors)}.`, "Pass --url https://… (or http:// for a receiver on this machine).");
-    const t = pushes.upsert({ agent: who.agent, adapter: webhook.name, instance: String(config.url), config, callback: "tools" });
+    const valid = validator(webhook.name);
+    if (!valid(config))
+      throw invalid(
+        `The webhook config is not valid: ${ajv.errorsText(valid.errors)}.`,
+        "Pass --url https://… (or http:// for a receiver on this machine).",
+      );
+    const t = pushes.upsert({
+      agent: who.agent,
+      adapter: webhook.name,
+      instance: String(config.url),
+      config,
+      callback: "tools",
+    });
     // A new secret each time a webhook is added; adding the same URL again rotates it.
     const secret = `whsec_${randomBytes(24).toString("base64url")}`;
     pushes.setSecret(t.id, secret);
     o.log("push_target_added", { target: t.id, agent: who.name, adapter: webhook.name, url: config.url });
-    return { ok: true, ...shown(pushes.get(t.id)!), secret, next: "Keep the secret in your receiver to check each request's reflex-signature. It is not shown again; adding the same URL again makes a new one." };
+    return {
+      ok: true,
+      ...shown(pushes.get(t.id) ?? t),
+      secret,
+      next: "Keep the secret in your receiver to check each request's reflex-signature. It is not shown again; adding the same URL again makes a new one.",
+    };
   };
 
-  const server = await serveHost({ core, socket: o.socket, token: o.token, authorize, connect, listen, adapters: manage, log: o.log });
-  return { core, server, pushes, dispatcher, live: (t: PushTarget) => adapters.some((a) => a.name === t.adapter && a.liveSince(t) !== undefined) };
+  const server = await serveHost({
+    core,
+    socket: o.socket,
+    token: o.token,
+    authorize,
+    connect,
+    listen,
+    adapters: manage,
+    log: o.log,
+  });
+  return {
+    core,
+    server,
+    pushes,
+    dispatcher,
+    live: (t: PushTarget) => adapters.some((a) => a.name === t.adapter && a.liveSince(t) !== undefined),
+  };
 }

@@ -8,11 +8,12 @@
     "reflex": "./bin/reflex.mjs"
   },
   "scripts": {
+    "format": "biome check --write .",
+    "lint": "biome ci --error-on-warnings .",
     "typecheck": "tsc -p ."
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.32.2",
-    "ajv": "8.17.1"
+    "@modelcontextprotocol/sdk": "1.32.2"
   },
   "devDependencies": {
     "@types/node": "26.6.5",

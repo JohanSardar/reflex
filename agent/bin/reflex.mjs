@@ -34,18 +34,29 @@ async function prepare() {
     try {
       execFileSync(file, args, { cwd: at("."), stdio: "inherit" });
     } catch {
-      console.error(`Error: ${what} failed. Run \`${[file, ...args].join(" ")}\` in ${at(".")} to see why, then \`reflex setup\` again.`);
+      console.error(
+        `Error: ${what} failed. Run \`${[file, ...args].join(" ")}\` in ${at(".")} to see why, then \`reflex setup\` again.`,
+      );
       process.exit(1);
     }
   };
-  if (!existsSync(at("node_modules/bonjour-service"))) run("installing packages (npm install)", "npm", ["install", "--no-audit", "--no-fund"]);
+  if (!existsSync(at("node_modules/bonjour-service")))
+    run("installing packages (npm install)", "npm", ["install", "--no-audit", "--no-fund"]);
   // Apple peer-to-peer Wi-Fi: the iPad reaches this Mac even on a network that keeps devices apart (campus, hotel).
   if (process.platform === "darwin" && !existsSync(at("link/transports/p2p/.build/release/reflex-p2p"))) {
     try {
       execFileSync("swift", ["--version"], { stdio: "ignore" });
-      run("building the peer-to-peer Wi-Fi helper (once)", "swift", ["build", "-c", "release", "--package-path", "link/transports/p2p"]);
+      run("building the peer-to-peer Wi-Fi helper (once)", "swift", [
+        "build",
+        "-c",
+        "release",
+        "--package-path",
+        "link/transports/p2p",
+      ]);
     } catch {
-      console.log("Setting up Reflex: no Swift (Xcode's command-line tools), so peer-to-peer Wi-Fi stays off; the iPad needs the same network.");
+      console.log(
+        "Setting up Reflex: no Swift (Xcode's command-line tools), so peer-to-peer Wi-Fi stays off; the iPad needs the same network.",
+      );
     }
   }
 }

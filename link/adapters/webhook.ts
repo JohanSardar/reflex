@@ -42,11 +42,29 @@ export class Webhook implements PushAdapter {
     return target.created_at;
   }
 
-  async deliver(target: PushTarget, push: Push, ctx: { secret?: string; attempt: number; log: (m: string) => void }): Promise<PushOutcome> {
+  async deliver(
+    target: PushTarget,
+    push: Push,
+    ctx: { secret?: string; attempt: number; log: (m: string) => void },
+  ): Promise<PushOutcome> {
     if (!ctx.secret) return { ok: false, reason: "the target has no signing secret" };
     const url = String(target.config.url);
-    const bundle = { ...push.bundle, images: (push.bundle.images ?? []).map((img, i) => ({ ...img, mime: "image/png", data: push.images[i]?.toString("base64") })) };
-    const body = JSON.stringify({ type: "send", delivery: `${push.space}/${push.send}`, target: target.id, agent: target.agent, attempt: ctx.attempt, bundle });
+    const bundle = {
+      ...push.bundle,
+      images: (push.bundle.images ?? []).map((img, i) => ({
+        ...img,
+        mime: "image/png",
+        data: push.images[i]?.toString("base64"),
+      })),
+    };
+    const body = JSON.stringify({
+      type: "send",
+      delivery: `${push.space}/${push.send}`,
+      target: target.id,
+      agent: target.agent,
+      attempt: ctx.attempt,
+      bundle,
+    });
     const timestamp = String(Date.now());
     try {
       const res = await fetch(url, {
@@ -69,7 +87,10 @@ export class Webhook implements PushAdapter {
       return { ok: false, reason: `the receiver answered ${res.status}`, retry };
     } catch (e) {
       const err = e as Error & { cause?: { code?: string } };
-      const reason = err.name === "TimeoutError" ? `no answer within ${TIMEOUT_MS / 1000} s` : `could not reach it (${err.cause?.code ?? err.message})`;
+      const reason =
+        err.name === "TimeoutError"
+          ? `no answer within ${TIMEOUT_MS / 1000} s`
+          : `could not reach it (${err.cause?.code ?? err.message})`;
       return { ok: false, reason, retry: true };
     }
   }
@@ -79,4 +100,3 @@ export class Webhook implements PushAdapter {
 export function sign(secret: string, timestamp: string, body: string): string {
   return `v1=${createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex")}`;
 }
-

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // reflex relay (also reflex-relay): run a Relay of your own.
-import { spawn } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
+import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
 import { startRelay } from "../server.ts";
 
@@ -37,13 +38,19 @@ if (f.help) {
 }
 const relay = await startRelay({ port: Number(f.port ?? process.env.PORT ?? 8787), host: f.host, origin: f.origin });
 const say = (url: string) =>
-  console.log(`relay: reachable from anywhere at ${url}\nrelay: on your Mac, set REFLEX_RELAY=${url} (see the README's "Run your own relay")`);
+  console.log(
+    `relay: reachable from anywhere at ${url}\nrelay: on your Mac, set REFLEX_RELAY=${url} (see the README's "Run your own relay")`,
+  );
 
-let tunnel: ReturnType<typeof spawn> | null = null;
+let tunnel: ChildProcessByStdio<null, Readable, Readable> | null = null;
 if (f.tunnel) {
-  tunnel = spawn("cloudflared", ["tunnel", "--no-autoupdate", "--url", `http://localhost:${relay.port}`], { stdio: ["ignore", "pipe", "pipe"] });
+  tunnel = spawn("cloudflared", ["tunnel", "--no-autoupdate", "--url", `http://localhost:${relay.port}`], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   tunnel.on("error", () => {
-    console.error("relay: --tunnel needs cloudflared (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/, or `brew install cloudflared`).");
+    console.error(
+      "relay: --tunnel needs cloudflared (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/, or `brew install cloudflared`).",
+    );
     process.exit(1);
   });
   let told = false;
@@ -54,8 +61,8 @@ if (f.tunnel) {
       say(m[0].replace("https://", "wss://"));
     }
   };
-  tunnel.stdout!.on("data", read);
-  tunnel.stderr!.on("data", read);
+  tunnel.stdout.on("data", read);
+  tunnel.stderr.on("data", read);
   tunnel.on("exit", (code) => {
     console.error(`relay: the tunnel stopped (${code})`);
     process.exit(1);

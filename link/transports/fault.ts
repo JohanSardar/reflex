@@ -26,10 +26,16 @@ const NONE: Faults = { drop: 0, dup: 0, delay: 0, jitter: 0 };
 /** Parses a spec into faults per transport name. */
 export function parseFaults(spec: string): Map<string, Faults> {
   const out = new Map<string, Faults>();
-  for (const rule of spec.split(";").map((r) => r.trim()).filter(Boolean)) {
+  for (const rule of spec
+    .split(";")
+    .map((r) => r.trim())
+    .filter(Boolean)) {
     const [name, settings = ""] = rule.split(":");
     const f: Faults = { ...NONE };
-    for (const kv of settings.split(",").map((s) => s.trim()).filter(Boolean)) {
+    for (const kv of settings
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)) {
       const [k, v] = kv.split("=");
       const n = Number(v);
       if (!(k in f) || !Number.isFinite(n) || n < 0 || ((k === "drop" || k === "dup") && n > 1))
@@ -114,7 +120,7 @@ class FaultPath implements Path {
 
   next(): Promise<Uint8Array | null> {
     if (this.#inbox.length) {
-      const f = this.#inbox.shift()!;
+      const f = this.#inbox.shift() ?? null; // never undefined: the inbox isn't empty
       if (f === null) this.#inbox.unshift(null); // stays closed
       return Promise.resolve(f);
     }

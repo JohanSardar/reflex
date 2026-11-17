@@ -1,4 +1,5 @@
 {
+  // The shared compiler settings, and the Link's project (link/**). agent/ and relay/ extend it.
   "compilerOptions": {
     "target": "ES2023",
     "module": "NodeNext",
@@ -6,17 +7,18 @@
     "strict": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
+    // Node runs these sources directly by stripping types, so only syntax it can strip is allowed.
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
-    "lib": [
-      "ES2023",
-      "DOM"
-    ],
-    "types": [
-      "node",
-      "@cloudflare/workers-types"
-    ]
+    "lib": ["ES2023", "DOM"],
+    "types": ["node", "@cloudflare/workers-types"]
   },
-  "include": [
-    "link/**/*.ts"
-  ]
+  "include": ["link/**/*.ts"],
+  "exclude": ["link/transports/p2p/.build/**"]
 }

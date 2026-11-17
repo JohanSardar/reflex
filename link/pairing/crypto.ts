@@ -16,10 +16,10 @@ import {
   diffieHellman,
   generateKeyPairSync,
   hkdfSync,
+  type KeyObject,
   sign,
   timingSafeEqual,
   verify,
-  type KeyObject,
 } from "node:crypto";
 
 export const PROTOCOL = "reflex-link/v0";
@@ -43,7 +43,7 @@ const xPublic = (raw: Uint8Array): KeyObject =>
 
 /** The device ID that belongs to an Ed25519 public key. */
 export function deviceIdFor(publicKey: Uint8Array): string {
-  return "dev-" + sha256(publicKey).subarray(0, 8).toString("hex");
+  return `dev-${sha256(publicKey).subarray(0, 8).toString("hex")}`;
 }
 
 export interface DeviceKey {

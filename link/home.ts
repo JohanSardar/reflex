@@ -13,8 +13,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { loadDeviceKey, newDeviceKey, type DeviceKey } from "./pairing/crypto.ts";
 import type { Person } from "./pairing/catalog.ts";
+import { type DeviceKey, loadDeviceKey, newDeviceKey } from "./pairing/crypto.ts";
 
 export interface Identity {
   /** When this profile was made (ms); profiles from before this field use identity.json's birth time. */
@@ -56,7 +56,11 @@ function writeSecret(path: string, text: string): void {
 function computerName(): string {
   if (process.platform === "darwin") {
     try {
-      const n = execFileSync("scutil", ["--get", "ComputerName"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+      const n = execFileSync("scutil", ["--get", "ComputerName"], {
+        encoding: "utf8",
+        timeout: 2000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
       if (n) return n;
     } catch {}
   }
@@ -74,7 +78,7 @@ export function identity(dir: string, opts: { name?: string; person?: string } =
     const body = {
       v: 0,
       key: pem,
-      person: { id: "p_" + randomBytes(6).toString("hex"), name: personName },
+      person: { id: `p_${randomBytes(6).toString("hex")}`, name: personName },
       name: opts.name ?? computerName(),
       actor: randomBytes(16).toString("hex"),
       created_at: Date.now(),
@@ -85,7 +89,13 @@ export function identity(dir: string, opts: { name?: string; person?: string } =
   // Profiles made before the computer name was used are named after a network host name ("wirelessprv-10-….edu"),
   // which changes with the network and means nothing on the iPad: show the computer name instead.
   const name = opts.name ?? (/^[\w-]+(\.[\w-]+)+$/.test(j.name) ? computerName() : j.name);
-  return { key: loadDeviceKey(j.key), person: j.person, name, actor: j.actor, ...(j.created_at ? { created_at: j.created_at } : {}) };
+  return {
+    key: loadDeviceKey(j.key),
+    person: j.person,
+    name,
+    actor: j.actor,
+    ...(j.created_at ? { created_at: j.created_at } : {}),
+  };
 }
 
 /** A per-profile local RPC credential: `rpc.key` for Agents, `admin.key` for the user's commands. */

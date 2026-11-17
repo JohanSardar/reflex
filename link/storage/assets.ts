@@ -5,9 +5,20 @@
 // the manifest last, each with fsync and an atomic rename, so an asset is
 // either fully durable or absent: it is durable before anything refers to it.
 // Every read checks every chunk and the whole asset against their hashes.
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, writeSync } from "node:fs";
-import { dirname, join } from "node:path";
+
 import { randomBytes } from "node:crypto";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  writeSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { sha256 } from "../pairing/crypto.ts";
 
 const CHUNK = 1024 * 1024;

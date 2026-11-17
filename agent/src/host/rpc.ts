@@ -11,13 +11,16 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import type { Json } from "../protocol.ts";
 
 /** The Link's profile folder, the same one `reflex link` uses. */
 export const home = () => resolve(process.env.REFLEX_HOME ?? join(homedir(), ".reflex", "link"));
 /** Unix socket paths are capped near 104 bytes; a long profile path gets a short hashed one in tmp. */
 export const socketPath = (dir = home()) => {
   const p = join(dir, "agent.sock");
-  return Buffer.byteLength(p) <= 100 ? p : join(tmpdir(), `reflex-agent-${createHash("sha256").update(dir).digest("hex").slice(0, 12)}.sock`);
+  return Buffer.byteLength(p) <= 100
+    ? p
+    : join(tmpdir(), `reflex-agent-${createHash("sha256").update(dir).digest("hex").slice(0, 12)}.sock`);
 };
 /** A surface's log in the profile folder, which a first run on a new computer makes (0700, as the Link does). */
 export const logPath = (name: string) => {
@@ -38,8 +41,8 @@ export function token(): string {
 export function credential(name: string): string {
   const dir = join(home(), "agents");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const file = join(dir, createHash("sha256").update(name).digest("hex").slice(0, 16) + ".cred");
-  if (!existsSync(file)) writeFileSync(file, "rxa_" + randomBytes(32).toString("base64url"), { mode: 0o600 });
+  const file = join(dir, `${createHash("sha256").update(name).digest("hex").slice(0, 16)}.cred`);
+  if (!existsSync(file)) writeFileSync(file, `rxa_${randomBytes(32).toString("base64url")}`, { mode: 0o600 });
   return readFileSync(file, "utf8").trim();
 }
 
@@ -61,25 +64,32 @@ export type WireFile = { id: string; name: string; mime: string; data: string };
 
 export type HostFrame =
   | { t: "ready" }
-  | { t: "result"; id: number; json: Record<string, any>; images: string[]; files?: WireFile[]; isError: boolean }
+  | { t: "result"; id: number; json: Json; images: string[]; files?: WireFile[]; isError: boolean }
   | { t: "progress"; id: number; elapsed_s: number; timeout_s: number; message?: string }
   | { t: "failed"; id: number; message: string }
   /** The listen request was accepted: Sends for this Agent are pushed on this connection. */
   | { t: "listening"; id: number; target: string; agent: string }
   /** A Send Bundle pushed to a listening surface. It answers with a "pushed" frame. */
   /** `deadline` (ms since the epoch): after it the Link has counted the push as failed, so the surface must drop it. */
-  | { t: "push"; id: number; push: number; json: Record<string, any>; images: string[]; deadline: number };
+  | { t: "push"; id: number; push: number; json: Json; images: string[]; deadline: number };
 
-/** Splits a stream into JSON frames. */
-export function frames(onFrame: (f: any) => void) {
+/** Splits a stream into lines, without the newline. `onLine` returns false to stop reading (the stream is being closed). */
+export function lines(onLine: (line: string) => boolean | undefined) {
   let buf = "";
   return (chunk: Buffer | string) => {
     buf += chunk.toString();
-    let i;
-    while ((i = buf.indexOf("\n")) >= 0) {
+    for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) {
       const line = buf.slice(0, i);
       buf = buf.slice(i + 1);
-      if (line.trim()) onFrame(JSON.parse(line));
+      if (onLine(line) === false) return;
     }
   };
+}
+
+/** Splits a stream into JSON frames, one per line. */
+export function frames<F = Json>(onFrame: (f: F) => void) {
+  return lines((line) => {
+    if (line.trim()) onFrame(JSON.parse(line));
+    return true;
+  });
 }

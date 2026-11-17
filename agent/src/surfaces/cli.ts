@@ -5,20 +5,23 @@
 //   stdout carries only the answer; --json prints exactly one document.
 //   On failure stderr gets one line of JSON with a stable reason and next steps.
 //   Exit codes: 0 success, 1 operational failure, 2 usage error, 130 cancelled.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
-import { Client, type CallResult } from "../host/client.ts";
+import { basename, join } from "node:path";
+import { type CallResult, Client } from "../host/client.ts";
 import { credential, NoLink, type Who } from "../host/rpc.ts";
-import { TOOLS, description } from "../protocol.ts";
+import { description, type Json, TOOLS } from "../protocol.ts";
 
 type Flags = Record<string, string | boolean>;
 type Cmd = { usage: string; summary: string; flags?: string[]; run: (pos: string[], f: Flags) => Promise<number> };
 
 const VERSION = "0.1.0";
-const out = (s: string) => process.stdout.write(s + "\n");
+const out = (s: string) => process.stdout.write(`${s}\n`);
 const errLine = (reason: string, msg: string, fix: string, next: string[] = []) =>
-  process.stderr.write(JSON.stringify({ ok: false, reason, errors: [{ code: reason, msg, fix }], ...(next.length ? { next } : {}) }) + "\n");
+  process.stderr.write(
+    JSON.stringify({ ok: false, reason, errors: [{ code: reason, msg, fix }], ...(next.length ? { next } : {}) }) +
+      "\n",
+  );
 
 class Usage extends Error {
   next: string[];
@@ -63,19 +66,31 @@ function imageDir() {
 }
 
 /** Calls a tool and prints the result. Images go to files. */
-async function call(tool: string, args: Record<string, unknown>, f: Flags, human: (r: CallResult, files: string[]) => string[], o: { signal?: AbortSignal; files?: (r: CallResult) => string[] } = {}) {
+async function call(
+  tool: string,
+  args: Record<string, unknown>,
+  f: Flags,
+  human: (r: CallResult, files: string[]) => string[],
+  o: { signal?: AbortSignal; files?: (r: CallResult) => string[] } = {},
+) {
   const r = await (await host()).call(tool, args, who(f), { signal: o.signal });
   if (r.isError) {
-    process.stderr.write(JSON.stringify(r.json) + "\n");
+    process.stderr.write(`${JSON.stringify(r.json)}\n`);
     return 1;
   }
-  const files = (o.files?.(r) ?? r.images.map((_, i) => join(imageDir(), `${tool}-${Date.now()}-${i + 1}.png`))).slice(0, r.images.length);
-  r.images.forEach((b64, i) => writeFileSync(files[i], Buffer.from(b64, "base64")));
+  const files = (o.files?.(r) ?? r.images.map((_, i) => join(imageDir(), `${tool}-${Date.now()}-${i + 1}.png`))).slice(
+    0,
+    r.images.length,
+  );
+  for (const [i, b64] of r.images.entries()) writeFileSync(files[i], Buffer.from(b64, "base64"));
   // A file Element's bytes (read detail full) go next to the images; the JSON says where.
   for (const fb of r.files ?? []) {
-    const path = join(imageDir(), `${fb.id.replace(/[^A-Za-z0-9_.-]/g, "_")}-${basename(fb.name).replace(/[^A-Za-z0-9_. -]/g, "_")}`);
+    const path = join(
+      imageDir(),
+      `${fb.id.replace(/[^A-Za-z0-9_.-]/g, "_")}-${basename(fb.name).replace(/[^A-Za-z0-9_. -]/g, "_")}`,
+    );
     writeFileSync(path, Buffer.from(fb.data, "base64"));
-    const entry = (r.json.files ?? []).find((x: any) => x.id === fb.id);
+    const entry = (r.json.files ?? []).find((x: Json) => x.id === fb.id);
     if (entry) entry.file = path;
   }
   if (f.json) out(JSON.stringify(r.json));
@@ -84,10 +99,10 @@ async function call(tool: string, args: Record<string, unknown>, f: Flags, human
 }
 
 /** Calls the Link's push-target management for this Agent and prints the answer. */
-async function adapters(action: string, args: Record<string, unknown>, f: Flags, human: (j: any) => string[]) {
+async function adapters(action: string, args: Record<string, unknown>, f: Flags, human: (j: Json) => string[]) {
   const r = await (await host()).adapters(who(f), action, args);
   if (r.isError) {
-    process.stderr.write(JSON.stringify(r.json) + "\n");
+    process.stderr.write(`${JSON.stringify(r.json)}\n`);
     return 1;
   }
   if (f.json) out(JSON.stringify(r.json));
@@ -126,10 +141,13 @@ const COMMANDS: Record<string, Cmd> = {
           return [
             `${j.kind} ${j.send} from ${j.from.name} in ${j.space}${j.redelivered ? " (redelivered)" : ""}${j.said ? `: "${j.said}"` : ""}`,
             ...j.marks.map(
-              (m: any) =>
+              (m: Json) =>
                 `  ${m.id} ${m.kind}${m.on ? ` on ${m.on.join(", ")}` : ""}${m.from || m.to ? ` from ${m.from ?? "?"} to ${m.to ?? "?"}` : ""}${m.text_guess ? ` "${m.text_guess}" (${m.confidence})` : ""}${m.near ? ` near ${m.near}` : ""}${m.moved_since_marked ? " (moved since)" : ""}${m.image ? ` (image ${m.image})` : ""}`,
             ),
-            ...j.changes.map((c: any) => `  ${c.kind} ${c.id}${c.file ? ` ${c.file} (${c.mime})` : ""}${c.values ? ` ${JSON.stringify(c.values)}` : ""}${c.image ? ` (image ${c.image})` : ""}`),
+            ...j.changes.map(
+              (c: Json) =>
+                `  ${c.kind} ${c.id}${c.file ? ` ${c.file} (${c.mime})` : ""}${c.values ? ` ${JSON.stringify(c.values)}` : ""}${c.image ? ` (image ${c.image})` : ""}`,
+            ),
             ...(j.element ? [`  on ${j.element}${j.payload ? ` ${JSON.stringify(j.payload)}` : ""}`] : []),
             ...files.map((p, i) => `  image ${i + 1}: ${p}`),
             j.next,
@@ -138,7 +156,7 @@ const COMMANDS: Record<string, Cmd> = {
         {
           signal: ac.signal,
           files: (r) =>
-            (r.json.images ?? []).map((img: any) => {
+            (r.json.images ?? []).map((img: Json) => {
               img.file = join(imageDir(), `${r.json.send}-${img.n}.png`);
               return img.file;
             }),
@@ -155,7 +173,8 @@ const COMMANDS: Record<string, Cmd> = {
     run: async (p, f) => {
       const usage = "reflex adapters add webhook --url <url>";
       const adapter = need(p, 0, "adapter", usage);
-      if (adapter !== "webhook") throw new Usage(`Only a webhook can be added by hand, not '${adapter}'. Usage: ${usage}`);
+      if (adapter !== "webhook")
+        throw new Usage(`Only a webhook can be added by hand, not '${adapter}'. Usage: ${usage}`);
       if (typeof f.url !== "string") throw new Usage(`Missing --url. Usage: ${usage}`);
       return adapters("add", { adapter, config: { url: f.url } }, f, (j) => [
         `Added ${j.target}: Sends for you are POSTed to ${j.config.url}.`,
@@ -170,14 +189,20 @@ const COMMANDS: Record<string, Cmd> = {
     run: (_p, f) =>
       adapters("list", {}, f, (j) =>
         j.targets.length
-          ? j.targets.map((t: any) => `${t.target}  ${t.adapter.padEnd(15)} ${t.live ? "live   " : "offline"}  ${t.config.url ?? t.config.harness ?? t.config.host ?? ""}`)
+          ? j.targets.map(
+              (t: Json) =>
+                `${t.target}  ${t.adapter.padEnd(15)} ${t.live ? "live   " : "offline"}  ${t.config.url ?? t.config.harness ?? t.config.host ?? ""}`,
+            )
           : ["No push targets. Add a webhook: reflex adapters add webhook --url <url>"],
       ),
   },
   "adapters remove": {
     usage: "reflex adapters remove <target>",
     summary: "Remove one of your push targets and its secret",
-    run: (p, f) => adapters("remove", { target: need(p, 0, "target", "reflex adapters remove <target>") }, f, (j) => [`Removed ${j.removed}.`]),
+    run: (p, f) =>
+      adapters("remove", { target: need(p, 0, "target", "reflex adapters remove <target>") }, f, (j) => [
+        `Removed ${j.removed}.`,
+      ]),
   },
   mcp: {
     usage: "reflex mcp [--channel]",
@@ -190,11 +215,14 @@ const COMMANDS: Record<string, Cmd> = {
       return -1; // keep running
     },
   },
-
 };
 
 function help() {
-  return ["Reflex — receive Sends from your iPad", "reflex setup · reflex pair · reflex link", ...Object.values(COMMANDS).map(c => c.usage)].join("\n");
+  return [
+    "Reflex — receive Sends from your iPad",
+    "reflex setup · reflex pair · reflex link",
+    ...Object.values(COMMANDS).map((c) => c.usage),
+  ].join("\n");
 }
 
 function parse(argv: string[]) {
@@ -218,7 +246,9 @@ function closest(word: string, options: string[]) {
   const d = (a: string, b: string) => {
     const m = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
     for (let j = 1; j <= b.length; j++) m[0][j] = j;
-    for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) m[i][j] = Math.min(m[i - 1][j] + 1, m[i][j - 1] + 1, m[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    for (let i = 1; i <= a.length; i++)
+      for (let j = 1; j <= b.length; j++)
+        m[i][j] = Math.min(m[i - 1][j] + 1, m[i][j - 1] + 1, m[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
     return m[a.length][b.length];
   };
   return options.map((o) => [d(word, o), o] as const).sort((a, b) => a[0] - b[0])[0];
@@ -226,35 +256,66 @@ function closest(word: string, options: string[]) {
 
 export async function main(argv: string[]): Promise<number> {
   const { pos, f } = parse(argv);
-  if (f.version) return out(VERSION), 0;
+  if (f.version) {
+    out(VERSION);
+    return 0;
+  }
   const two = pos.slice(0, 2).join(" ");
   const key = COMMANDS[two] ? two : COMMANDS[pos[0] ?? ""] ? pos[0] : undefined;
   if (!key) {
-    if (!pos.length || f.help) return out(help()), pos.length ? 0 : f.help ? 0 : 2;
+    if (!pos.length || f.help) {
+      out(help());
+      return pos.length ? 0 : f.help ? 0 : 2;
+    }
     const [dist, near] = closest(two || pos[0], Object.keys(COMMANDS));
-    errLine("invalid_input", `Unknown command 'reflex ${pos.join(" ")}'.`, dist <= 4 ? `Did you mean 'reflex ${near}'?` : "Run reflex --help for the commands.", dist <= 4 ? [`reflex ${near} --help`] : ["reflex --help"]);
+    errLine(
+      "invalid_input",
+      `Unknown command 'reflex ${pos.join(" ")}'.`,
+      dist <= 4 ? `Did you mean 'reflex ${near}'?` : "Run reflex --help for the commands.",
+      dist <= 4 ? [`reflex ${near} --help`] : ["reflex --help"],
+    );
     return 2;
   }
   const cmd = COMMANDS[key];
   if (f.help) {
     // A command that wraps a tool also prints that tool's text, so a CLI Agent learns the op shapes an MCP Agent sees.
     const tool = /\((\w+)/.exec(cmd.summary)?.[1];
-    const guide = tool && (TOOLS as readonly string[]).includes(tool) ? `\n\n${description(tool as (typeof TOOLS)[number])}` : "";
+    const guide =
+      tool && (TOOLS as readonly string[]).includes(tool) ? `\n\n${description(tool as (typeof TOOLS)[number])}` : "";
     out(`${cmd.summary}\n\nUsage: ${cmd.usage}\n\nAlso: --json, --agent <name>${guide}`);
     return 0;
   }
   const known = new Set([...(cmd.flags ?? []), "json", "agent", "help"]);
   const unknown = Object.keys(f).filter((k) => !known.has(k));
   try {
-    if (unknown.length) throw new Usage(`Unknown flag --${unknown[0]} for 'reflex ${key}'. Usage: ${cmd.usage}`, [`reflex ${key} --help`]);
+    if (unknown.length)
+      throw new Usage(`Unknown flag --${unknown[0]} for 'reflex ${key}'. Usage: ${cmd.usage}`, [
+        `reflex ${key} --help`,
+      ]);
     return await cmd.run(pos.slice(key.split(" ").length), f);
   } catch (e) {
     if (e instanceof Usage) {
-      errLine("invalid_input", e.message, `See: reflex ${key} --help`, e.next.length ? e.next : [`reflex ${key} --help`]);
+      errLine(
+        "invalid_input",
+        e.message,
+        `See: reflex ${key} --help`,
+        e.next.length ? e.next : [`reflex ${key} --help`],
+      );
       return 2;
     }
-    if (e instanceof NoLink) errLine("unavailable", e.message, "Ask the person to run `reflex setup` (or `reflex link`), then run this again.", ["reflex setup"]);
-    else errLine("unavailable", (e as Error).message, "Check the Link's log (~/.reflex/link/link.log) or its terminal for errors.");
+    if (e instanceof NoLink)
+      errLine(
+        "unavailable",
+        e.message,
+        "Ask the person to run `reflex setup` (or `reflex link`), then run this again.",
+        ["reflex setup"],
+      );
+    else
+      errLine(
+        "unavailable",
+        (e as Error).message,
+        "Check the Link's log (~/.reflex/link/link.log) or its terminal for errors.",
+      );
     return 1;
   } finally {
     if (key !== "mcp") client?.close();

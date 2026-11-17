@@ -7,7 +7,8 @@
 // Wire format: relay/domain/wire.ts (`reflex-relay/v0`). It is restated here
 // because nothing imports `relay/`.
 import { createHash } from "node:crypto";
-import { b64, signWith, type DeviceKey } from "../pairing/crypto.ts";
+import type { Json } from "../../agent/src/protocol.ts";
+import { b64, type DeviceKey, signWith } from "../pairing/crypto.ts";
 import type { Candidate, Path, PathMeasurements, Priority, Transport } from "./transport.ts";
 
 export const RELAY_PROTOCOL = "reflex-relay/v0";
@@ -17,7 +18,8 @@ const OPENER = 0x8000_0000;
 const HIGH_WATER = 2 * 1024 * 1024;
 
 /** The room where one person's devices meet. */
-export const roomFor = (person: string): string => createHash("sha256").update(`${RELAY_PROTOCOL} room ${person}`).digest("hex").slice(0, 32);
+export const roomFor = (person: string): string =>
+  createHash("sha256").update(`${RELAY_PROTOCOL} room ${person}`).digest("hex").slice(0, 32);
 
 /** The Relay a Link uses when the person set none: the project's free public one. */
 export const DEFAULT_RELAY = "wss://reflex.eilmer.si";
@@ -137,7 +139,14 @@ export class RelayTransport implements Transport {
   /** Called each time the relay welcomes this device (on every reconnect). */
   onReady: () => void = () => {};
 
-  constructor(o: { url: string; key: DeviceKey; room: () => string; watch: () => string[]; log: (m: string) => void; name?: string }) {
+  constructor(o: {
+    url: string;
+    key: DeviceKey;
+    room: () => string;
+    watch: () => string[];
+    log: (m: string) => void;
+    name?: string;
+  }) {
     this.name = o.name ?? "relay";
     this.url = o.url.replace(/\/+$/, "");
     this.#key = o.key;
@@ -198,7 +207,8 @@ export class RelayTransport implements Transport {
       this.#watched = "";
       for (const p of [...this.#paths.values()]) p.finish("relay connection closed");
       this.#online.clear();
-      if (was && this.name === "relay") this.#log(`relay: disconnected from ${this.url} (${ev.code}${ev.reason ? ` ${ev.reason}` : ""})`);
+      if (was && this.name === "relay")
+        this.#log(`relay: disconnected from ${this.url} (${ev.code}${ev.reason ? ` ${ev.reason}` : ""})`);
       if (this.#stopped) return;
       const t = setTimeout(() => this.#connect(), this.#backoff);
       t.unref();
@@ -207,7 +217,7 @@ export class RelayTransport implements Transport {
     ws.onerror = () => {};
   }
 
-  #control(m: Record<string, any>): void {
+  #control(m: Json): void {
     switch (m.t) {
       case "challenge": {
         const sig = signWith(this.#key, `${RELAY_PROTOCOL} hello ${this.#room()} ${m.nonce}`);
@@ -225,7 +235,8 @@ export class RelayTransport implements Transport {
         const d = String(m.device);
         if (m.online) {
           // A device that joined anew lost every channel it had through its old socket.
-          if (m.joined) for (const p of [...this.#paths.values()]) if (p.device === d) p.finish(`${d} reconnected to the relay`);
+          if (m.joined)
+            for (const p of [...this.#paths.values()]) if (p.device === d) p.finish(`${d} reconnected to the relay`);
           this.#online.add(d);
           this.#onCandidate?.({ transport: this.name, device: d, host: this.url, port: 0 });
         } else {
@@ -242,7 +253,6 @@ export class RelayTransport implements Transport {
         p?.finish(m.t === "close" ? "closed by the other device" : `${m.device} is not reachable on the relay`);
         return;
       }
-
     }
   }
 
@@ -279,7 +289,8 @@ export class RelayTransport implements Transport {
     const ws = this.#ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error("relay connection closed");
     ws.send(b);
-    while (ws.readyState === WebSocket.OPEN && ws.bufferedAmount > HIGH_WATER) await new Promise((r) => setTimeout(r, 5));
+    while (ws.readyState === WebSocket.OPEN && ws.bufferedAmount > HIGH_WATER)
+      await new Promise((r) => setTimeout(r, 5));
   }
 
   buffered(): number {

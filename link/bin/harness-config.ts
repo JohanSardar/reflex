@@ -35,9 +35,11 @@ function inlineSet(table: string, key: string, value: string | null): string {
     if (value === null) {
       const rest = table.slice(m.index + m[0].length);
       // Removing the first pair takes the comma after it; any other, the comma before it.
-      return m[1].startsWith("{") ? `{ ${rest.replace(/^\s*,\s*/, "").replace(/^\s*/, "")}` : table.slice(0, m.index) + rest;
+      return m[1].startsWith("{")
+        ? `{ ${rest.replace(/^\s*,\s*/, "").replace(/^\s*/, "")}`
+        : table.slice(0, m.index) + rest;
     }
-    return table.slice(0, m.index) + `${m[1]}${key} = ${value}` + table.slice(m.index + m[0].length);
+    return `${table.slice(0, m.index)}${m[1]}${key} = ${value}${table.slice(m.index + m[0].length)}`;
   }
   if (value === null) return table;
   const inner = table.replace(/^\{\s*/, "").replace(/\s*\}$/, "");
@@ -66,7 +68,8 @@ export function unsupported(text: string): string | null {
   let section = "";
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    if (/^\s*\[\[\s*"?mcp_servers"?\s*\.\s*"?reflex"?\b/.test(l)) return `line ${i + 1} makes it an array of tables ([[…]])`;
+    if (/^\s*\[\[\s*"?mcp_servers"?\s*\.\s*"?reflex"?\b/.test(l))
+      return `line ${i + 1} makes it an array of tables ([[…]])`;
     const h = header(l);
     if (h !== undefined) {
       section = h;
@@ -74,9 +77,12 @@ export function unsupported(text: string): string | null {
     }
     const mine = section === "mcp_servers.reflex" || section.startsWith("mcp_servers.reflex.");
     const inline = section === "mcp_servers" && /^\s*"?reflex"?\s*=/.test(l);
-    if (section === "" && /^\s*"?mcp_servers"?\s*\.\s*"?reflex"?\s*[.=]/.test(l)) return `line ${i + 1} sets it with dotted keys (mcp_servers.reflex.…)`;
-    if (section === "mcp_servers" && /^\s*"?reflex"?\s*\./.test(l)) return `line ${i + 1} sets it with dotted keys (reflex.…)`;
-    if (inline && /=\s*\{/.test(l) && !/\}\s*(#.*)?$/.test(l)) return `line ${i + 1} spreads its inline table over several lines`;
+    if (section === "" && /^\s*"?mcp_servers"?\s*\.\s*"?reflex"?\s*[.=]/.test(l))
+      return `line ${i + 1} sets it with dotted keys (mcp_servers.reflex.…)`;
+    if (section === "mcp_servers" && /^\s*"?reflex"?\s*\./.test(l))
+      return `line ${i + 1} sets it with dotted keys (reflex.…)`;
+    if (inline && /=\s*\{/.test(l) && !/\}\s*(#.*)?$/.test(l))
+      return `line ${i + 1} spreads its inline table over several lines`;
     if ((mine || inline) && /"""|'''/.test(l)) return `line ${i + 1} has a multi-line string`;
   }
   return null;
@@ -101,7 +107,7 @@ export function codexConfig(text: string, want: Want): string {
     if (!m) continue;
     let t = inlineSet(inlineSet(m[2], "command", cmd), "args", args);
     if (!/(^\{|,)\s*"?tool_timeout_sec"?\s*=/.test(t)) t = inlineSet(t, "tool_timeout_sec", "300");
-    const env = new RegExp(String.raw`(^\{|,)\s*"?env"?\s*=\s*(\{[^}]*\})`).exec(t);
+    const env = /(^\{|,)\s*"?env"?\s*=\s*(\{[^}]*\})/.exec(t);
     const envNow = env ? inlineSet(env[2], "REFLEX_HOME", home) : home ? `{ REFLEX_HOME = ${home} }` : null;
     if (envNow !== null) t = inlineSet(t, "env", envNow === "{ }" || envNow === "{}" ? null : envNow);
     lines[i] = m[1] + t + m[3];
@@ -122,7 +128,7 @@ export function codexConfig(text: string, want: Want): string {
     return text + (text && !text.endsWith("\n\n") ? (text.endsWith("\n") ? "\n" : "\n\n") : "") + block;
   }
   let end = start + 1;
-  while (end < lines.length && !(header(lines[end]) !== undefined && !header(lines[end])!.startsWith("mcp_servers.reflex."))) end++;
+  while (end < lines.length && (header(lines[end])?.startsWith("mcp_servers.reflex.") ?? true)) end++;
   const sub = lines.findIndex((l, i) => i > start && i < end && header(l) !== undefined);
   const mainEnd = sub < 0 ? end : sub;
   const envAt = lines.findIndex((l, i) => i > start && i < end && header(l) === "mcp_servers.reflex.env");
@@ -138,7 +144,7 @@ export function codexConfig(text: string, want: Want): string {
         lines.splice(i, last - i + 1);
         return -(last - i + 1);
       }
-      lines.splice(i, last - i + 1, `${lines[i].match(/^\s*/)![0]}${key} = ${value}${comment}`);
+      lines.splice(i, last - i + 1, `${/^\s*/.exec(lines[i])?.[0] ?? ""}${key} = ${value}${comment}`);
       return -(last - i);
     }
     if (value === null) return 0;
@@ -160,8 +166,8 @@ export function codexConfig(text: string, want: Want): string {
     set(from, to, "REFLEX_HOME", home);
   } else {
     const at = lines.findIndex((l, i) => i > start && i < mainEnd + shift && /^\s*"?env"?\s*=\s*\{.*\}/.test(l));
-    if (at >= 0) {
-      const m = /^(\s*"?env"?\s*=\s*)(\{[^}]*\})(.*)$/.exec(lines[at])!;
+    const m = at >= 0 ? /^(\s*"?env"?\s*=\s*)(\{[^}]*\})(.*)$/.exec(lines[at]) : null;
+    if (m) {
       const t = inlineSet(m[2], "REFLEX_HOME", home);
       if (/^\{\s*\}$/.test(t)) lines.splice(at, 1);
       else lines[at] = m[1] + t + m[3];
@@ -192,4 +198,6 @@ export function claudeEntry(old: ClaudeEntry | undefined, want: Want): ClaudeEnt
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 export const sameEntry = (a: ClaudeEntry, b: ClaudeEntry): boolean =>
-  a.command === b.command && same(a.args ?? [], b.args ?? []) && same(Object.entries(a.env ?? {}).sort(), Object.entries(b.env ?? {}).sort());
+  a.command === b.command &&
+  same(a.args ?? [], b.args ?? []) &&
+  same(Object.entries(a.env ?? {}).sort(), Object.entries(b.env ?? {}).sort());

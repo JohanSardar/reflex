@@ -1,6 +1,6 @@
 // The handshake that turns a pending Path into a session bound to one device.
 //
-//   I → R  hello  { device, key, eph, person, name, pair?, invite? }
+//   I → R  hello  { device, key, eph, person, name, pair? }
 //   R → I  hello  { device, key, eph, person, name }
 //   I → R  auth   { sig: Ed25519(transcript), mac?: HMAC(pairing secret, transcript) }
 //   R → I  auth   { sig, mac? }
@@ -9,9 +9,8 @@
 // other's signature against the key in its hello, and that the device ID is the
 // one derived from that key. Then a peer is trusted only if it is already
 // paired with exactly that key, or it proves it knows the secret of a live
-// pairing offer (which only someone who saw the QR code knows), or of a live
-// invite to a shared Space (link/sharing.ts), which makes it a peer for that
-// Space only. Everything after the handshake is encrypted with keys from the
+// pairing offer (which only someone who saw the QR code knows), or a live typed
+// code (below). Everything after the handshake is encrypted with keys from the
 // X25519 exchange.
 //
 // A typed 6-digit code (`pair: "code"`) is too short to use as an HMAC key:
@@ -37,8 +36,14 @@
 //
 //   R → I  who  { person, name }     sealed
 //   I → R  who  { person, name }     sealed; the iPad becomes the Link's person's device
+
+import { randomBytes } from "node:crypto";
+import type { Path, PathMeasurements, Priority } from "../transports/transport.ts";
+import type { Person } from "./catalog.ts";
+import { Cpace } from "./cpace.ts";
 import {
   b64,
+  type DeviceKey,
   deviceIdFor,
   FrameCipher,
   mac,
@@ -50,12 +55,7 @@ import {
   signWith,
   unb64,
   verifyFrom,
-  type DeviceKey,
 } from "./crypto.ts";
-import { randomBytes } from "node:crypto";
-import { Cpace } from "./cpace.ts";
-import type { Person } from "./catalog.ts";
-import type { Path, PathMeasurements, Priority } from "../transports/transport.ts";
 
 export interface Hello {
   t: "hello";
@@ -132,8 +132,10 @@ async function nextJson(path: Path, ms: number): Promise<{ raw: Uint8Array; msg:
 
 function checkHello(m: Record<string, unknown>): Hello {
   const h = m as unknown as Hello;
-  if (h.t !== "hello" || h.v !== 0 || h.protocol !== PROTOCOL) throw new Error(`peer speaks ${String(h.protocol)}, not ${PROTOCOL}`);
-  if (typeof h.key !== "string" || typeof h.eph !== "string" || typeof h.device !== "string") throw new Error("malformed hello");
+  if (h.t !== "hello" || h.v !== 0 || h.protocol !== PROTOCOL)
+    throw new Error(`peer speaks ${String(h.protocol)}, not ${PROTOCOL}`);
+  if (typeof h.key !== "string" || typeof h.eph !== "string" || typeof h.device !== "string")
+    throw new Error("malformed hello");
   if (deviceIdFor(unb64(h.key)) !== h.device) throw new Error(`device ID ${h.device} does not belong to its key`);
   return h;
 }
@@ -161,7 +163,13 @@ export async function handshake(path: Path, me: Me, trust: Trust, scanned?: Scan
   let seen: HandshakeError["peer"];
   try {
     return await handshakeInner(path, me, trust, scanned, (h) => {
-      seen = { device: h.device, name: String(h.name ?? ""), kind: h.kind === "ipad" ? "ipad" : "link", paired: trust.pairedKey(h.device) === h.key, ...(typeof h.pair === "string" ? { pair: h.pair } : {}) };
+      seen = {
+        device: h.device,
+        name: String(h.name ?? ""),
+        kind: h.kind === "ipad" ? "ipad" : "link",
+        paired: trust.pairedKey(h.device) === h.key,
+        ...(typeof h.pair === "string" ? { pair: h.pair } : {}),
+      };
     });
   } catch (e) {
     const err = new HandshakeError((e as Error).message);
@@ -170,7 +178,13 @@ export async function handshake(path: Path, me: Me, trust: Trust, scanned?: Scan
   }
 }
 
-async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: ScannedOffer | undefined, saw: (h: Hello) => void): Promise<HandshakeResult> {
+async function handshakeInner(
+  path: Path,
+  me: Me,
+  trust: Trust,
+  scanned: ScannedOffer | undefined,
+  saw: (h: Hello) => void,
+): Promise<HandshakeResult> {
   const role = path.initiator ? "i" : "r";
   const eph = newEphemeral();
   // A Relay forwards the hellos as they are: they name no one there (the person's ID stays, it is how a Link
@@ -185,7 +199,9 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
     person: cpace ? { id: "", name: "" } : path.transport === "relay" ? { id: me.person.id, name: "" } : me.person,
     name: cpace || path.transport === "relay" ? "" : me.name,
     kind: me.kind,
-    ...(scanned && role === "i" ? { pair: scanned.cpace !== undefined ? "cpace" : scanned.code !== undefined ? "code" : scanned.offer } : {}),
+    ...(scanned && role === "i"
+      ? { pair: scanned.cpace !== undefined ? "cpace" : scanned.code !== undefined ? "code" : scanned.offer }
+      : {}),
   });
   let mine: Buffer;
   let theirsRaw: Uint8Array;
@@ -208,7 +224,8 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
   const transcript = role === "i" ? sha256(PROTOCOL, mine, theirsRaw) : sha256(PROTOCOL, theirsRaw, mine);
   const other = role === "i" ? "r" : "i";
 
-  if ((role === "i" && scanned?.cpace !== undefined) || (role === "r" && theirs.pair === "cpace")) return cpaceRest(path, me, trust, role, scanned?.cpace, eph, theirs, transcript);
+  if ((role === "i" && scanned?.cpace !== undefined) || (role === "r" && theirs.pair === "cpace"))
+    return cpaceRest(path, me, trust, role, scanned?.cpace, eph, theirs, transcript);
 
   // Which secret, if any, this connection pairs with.
   let secret: Uint8Array | undefined;
@@ -222,7 +239,8 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
     if (scanned.code !== undefined) secret = await codeRounds(path, role, scanned.code, transcript);
   } else if (role === "r" && theirs.pair === "code") {
     const code = trust.liveCode?.();
-    if (!code) throw new Error("no pairing code is live on this Link (they last 10 minutes; ask your agent for a new one)");
+    if (!code)
+      throw new Error("no pairing code is live on this Link (they last 10 minutes; ask your agent for a new one)");
     try {
       secret = await codeRounds(path, role, code, transcript);
     } catch (e) {
@@ -237,7 +255,6 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
     secret = trust.offerSecret(theirs.pair);
     if (!secret) throw new Error("unknown or expired pairing offer");
     offer = theirs.pair;
-
   }
 
   const auth = {
@@ -269,7 +286,13 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
     new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript),
   );
   const kind = theirs.kind === "ipad" ? "ipad" : "link";
-  return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind }, paired, offer, ...(offer === "code" ? { code: true, codeAgents: codeAgents ?? [] } : {}) };
+  return {
+    session,
+    peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind },
+    paired,
+    offer,
+    ...(offer === "code" ? { code: true, codeAgents: codeAgents ?? [] } : {}),
+  };
 }
 
 /**
@@ -287,8 +310,9 @@ async function cpaceRest(
   transcript: Buffer,
 ): Promise<HandshakeResult> {
   const other = role === "i" ? "r" : "i";
-  const code = role === "i" ? typed! : trust.liveCode?.();
-  if (!code) throw new Error("no pairing code is live on this Link (they last 10 minutes; ask your agent for a new one)");
+  const code = role === "i" ? typed : trust.liveCode?.();
+  if (!code)
+    throw new Error("no pairing code is live on this Link (they last 10 minutes; ask your agent for a new one)");
   if (!/^\d{6}$/.test(code)) throw new WrongCode("a pairing code is 6 digits");
   const cp = new Cpace(code, transcript);
   await path.send(enc({ t: "cpace", y: b64(cp.share) }), "control");
@@ -326,11 +350,16 @@ async function cpaceRest(
   if (known && known !== theirs.key) throw new Error(`device ${theirs.device} is already paired with another key`);
 
   const keys = sessionKeys(eph, unb64(theirs.eph), transcript);
-  const session = new Session(path, new FrameCipher(role === "i" ? keys.i2r : keys.r2i, transcript), new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript));
+  const session = new Session(
+    path,
+    new FrameCipher(role === "i" ? keys.i2r : keys.r2i, transcript),
+    new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript),
+  );
   const who = async (): Promise<{ person: Person; name: string }> => {
     const m = await Promise.race([session.next(), new Promise<null>((r) => setTimeout(() => r(null), 10_000).unref())]);
     const p = m?.h.person as Person | undefined;
-    if (m?.h.t !== "who" || typeof p?.id !== "string" || typeof p.name !== "string") throw new Error("expected who after the code check");
+    if (m?.h.t !== "who" || typeof p?.id !== "string" || typeof p.name !== "string")
+      throw new Error("expected who after the code check");
     return { person: { id: p.id, name: p.name }, name: String(m.h.name ?? "") };
   };
   let them: { person: Person; name: string };
@@ -343,7 +372,15 @@ async function cpaceRest(
     await session.send({ t: "who", person: them.person, name: me.name }, undefined, "control");
   }
   const kind = theirs.kind === "ipad" ? "ipad" : "link";
-  return { session, peer: { device: theirs.device, key: theirs.key, person: them.person, name: them.name, kind }, paired: !known, offer: "code", code: true, cpace: true, codeAgents: codeAgents ?? [] };
+  return {
+    session,
+    peer: { device: theirs.device, key: theirs.key, person: them.person, name: them.name, kind },
+    paired: !known,
+    offer: "code",
+    code: true,
+    cpace: true,
+    codeAgents: codeAgents ?? [],
+  };
 }
 
 /** A typed code that doesn't match, as opposed to a connection that broke. */
@@ -407,7 +444,11 @@ export class Session {
     const plain = Buffer.concat([len, head, body]);
     // Refuse before sealing: a frame that is sealed but never sent would put the nonces out of step.
     if (plain.length + 16 > this.path.limits.maxFrameBytes)
-      return Promise.reject(new Error(`a ${h.t} message of ${plain.length} bytes is over the ${this.path.limits.maxFrameBytes}-byte frame limit`));
+      return Promise.reject(
+        new Error(
+          `a ${h.t} message of ${plain.length} bytes is over the ${this.path.limits.maxFrameBytes}-byte frame limit`,
+        ),
+      );
     return this.path.send(this.#tx.seal(plain), priority);
   }
 

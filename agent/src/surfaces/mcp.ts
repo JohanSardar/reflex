@@ -8,10 +8,15 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { TOOLS, description, inputSchema, instructions } from "../protocol.ts";
+import {
+  CallToolRequestSchema,
+  type CallToolResult,
+  type JSONRPCMessage,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "../host/client.ts";
 import { credential, logPath, NoLink } from "../host/rpc.ts";
+import { description, inputSchema, instructions, type Json, TOOLS } from "../protocol.ts";
 
 const KNOWN: Record<string, string> = { "claude-code": "Claude Code", "codex-mcp-client": "Codex", codex: "Codex" };
 // Longest wait_for_user the surface holds, a little under the harness's default hard tool timeout, so a long
@@ -40,7 +45,10 @@ function sessionHasChannels(): { on: boolean; why: string } {
   let pid = process.ppid;
   try {
     for (let depth = 0; depth < 4 && pid > 1; depth++) {
-      const line = execFileSync("ps", ["-o", "ppid=,args=", "-p", String(pid)], { encoding: "utf8", timeout: 2000 }).trim();
+      const line = execFileSync("ps", ["-o", "ppid=,args=", "-p", String(pid)], {
+        encoding: "utf8",
+        timeout: 2000,
+      }).trim();
       const m = /^(\d+)\s+(.*)$/s.exec(line);
       if (!m) break;
       if (flag.test(` ${m[2]} `)) return { on: true, why: "the session was started with a channels flag" };
@@ -55,7 +63,16 @@ function sessionHasChannels(): { on: boolean; why: string } {
 export async function runMcp(o: { channel?: boolean } = {}) {
   const started = Date.now();
   const log = (event: string, data: Record<string, unknown> = {}) =>
-    appendFileSync(logPath("mcp"), JSON.stringify({ at: new Date().toISOString(), pid: process.pid, t_s: Math.round((Date.now() - started) / 100) / 10, event, ...data }) + "\n");
+    appendFileSync(
+      logPath("mcp"),
+      `${JSON.stringify({
+        at: new Date().toISOString(),
+        pid: process.pid,
+        t_s: Math.round((Date.now() - started) / 100) / 10,
+        event,
+        ...data,
+      })}\n`,
+    );
   // The Link is reached on the first call, and again after it restarts, so a harness can start before it.
   let host: Promise<Client> | undefined;
   const link = () =>
@@ -78,11 +95,16 @@ export async function runMcp(o: { channel?: boolean } = {}) {
   const session = o.channel ? sessionHasChannels() : { on: false, why: "" };
   const server = new Server(
     { name: "reflex", version: "0.1.0" },
-    { capabilities: { tools: {}, ...(o.channel ? { experimental: { [CHANNEL]: {} } } : {}) }, instructions: instructions + (session.on ? CHANNEL_INSTRUCTIONS : "") },
+    {
+      capabilities: { tools: {}, ...(o.channel ? { experimental: { [CHANNEL]: {} } } : {}) },
+      instructions: instructions + (session.on ? CHANNEL_INSTRUCTIONS : ""),
+    },
   );
   const who = () => {
     const c = server.getClientVersion();
-    const name = process.env.REFLEX_AGENT_NAME ?? `${KNOWN[c?.name ?? ""] ?? c?.name ?? "MCP client"} · ${basename(process.cwd())}`.slice(0, 80);
+    const name =
+      process.env.REFLEX_AGENT_NAME ??
+      `${KNOWN[c?.name ?? ""] ?? c?.name ?? "MCP client"} · ${basename(process.cwd())}`.slice(0, 80);
     return { name, credential: credential(name) };
   };
 
@@ -94,8 +116,17 @@ export async function runMcp(o: { channel?: boolean } = {}) {
     const progressToken = req.params._meta?.progressToken;
     const callStarted = Date.now();
     let progressSent = 0;
-    log("call_start", { tool, request: extra.requestId, progressToken: progressToken ?? null, args_bytes: JSON.stringify(req.params.arguments ?? {}).length });
-    extra.signal.addEventListener("abort", () => log("call_aborted", { tool, request: extra.requestId, after_s: (Date.now() - callStarted) / 1000 }), { once: true });
+    log("call_start", {
+      tool,
+      request: extra.requestId,
+      progressToken: progressToken ?? null,
+      args_bytes: JSON.stringify(req.params.arguments ?? {}).length,
+    });
+    extra.signal.addEventListener(
+      "abort",
+      () => log("call_aborted", { tool, request: extra.requestId, after_s: (Date.now() - callStarted) / 1000 }),
+      { once: true },
+    );
     let args: Record<string, unknown> = req.params.arguments ?? {};
     const cap = Number(process.env.REFLEX_MAX_WAIT_S) || MAX_WAIT_S[KNOWN[server.getClientVersion()?.name ?? ""] ?? ""];
     if (tool === "wait_for_user" && cap && typeof args.timeout_s === "number" && args.timeout_s > cap) {
@@ -109,7 +140,17 @@ export async function runMcp(o: { channel?: boolean } = {}) {
       } catch (e) {
         if (!(e instanceof NoLink)) throw e;
         log("no_link", { tool, error: e.message });
-        const json = { ok: false, reason: "unavailable", errors: [{ code: "unavailable", msg: e.message, fix: "Ask the person to run `reflex setup` in a terminal (it starts the Reflex Link), then call again." }] };
+        const json = {
+          ok: false,
+          reason: "unavailable",
+          errors: [
+            {
+              code: "unavailable",
+              msg: e.message,
+              fix: "Ask the person to run `reflex setup` in a terminal (it starts the Reflex Link), then call again.",
+            },
+          ],
+        };
         return { content: [{ type: "text", text: JSON.stringify(json) }], isError: true };
       }
       const r = await client.call(tool, args, who(), {
@@ -119,20 +160,40 @@ export async function runMcp(o: { channel?: boolean } = {}) {
           progressSent++;
           void extra.sendNotification({
             method: "notifications/progress",
-            params: { progressToken, progress: p.elapsed_s, total: p.timeout_s, message: `${p.message ?? "Waiting for the person to press Send"} (${p.elapsed_s}s)` },
+            params: {
+              progressToken,
+              progress: p.elapsed_s,
+              total: p.timeout_s,
+              message: `${p.message ?? "Waiting for the person to press Send"} (${p.elapsed_s}s)`,
+            },
           });
         },
       });
-      log("call_end", { tool, request: extra.requestId, s: (Date.now() - callStarted) / 1000, isError: r.isError, progressSent, status: r.json.status ?? r.json.kind ?? (r.json.ok === false ? r.json.reason : "ok") });
-      const content: any[] = [{ type: "text", text: JSON.stringify(r.json) }];
+      log("call_end", {
+        tool,
+        request: extra.requestId,
+        s: (Date.now() - callStarted) / 1000,
+        isError: r.isError,
+        progressSent,
+        status: r.json.status ?? r.json.kind ?? (r.json.ok === false ? r.json.reason : "ok"),
+      });
+      const content: CallToolResult["content"] = [{ type: "text", text: JSON.stringify(r.json) }];
       for (const data of r.images) content.push({ type: "image", data, mimeType: "image/png" });
       // A file the person added that isn't text: its bytes as an embedded resource (text is already in the JSON).
       for (const f of r.files ?? []) {
-        const entry = (r.json.files ?? []).find((x: any) => x.id === f.id);
-        if (entry?.text === undefined) content.push({ type: "resource", resource: { uri: `reflex://${r.json.space}/files/${f.id}`, mimeType: f.mime, blob: f.data } });
+        const entry = (r.json.files ?? []).find((x: Json) => x.id === f.id);
+        if (entry?.text === undefined)
+          content.push({
+            type: "resource",
+            resource: { uri: `reflex://${r.json.space}/files/${f.id}`, mimeType: f.mime, blob: f.data },
+          });
       }
       const pending = r.json.pending_sends ?? r.json.pending_after;
-      if (pending > 0 && tool !== "wait_for_user") content.push({ type: "text", text: `📥 ${pending} pending Send${pending === 1 ? "" : "s"}. Read with wait_for_user(timeout_s: 0).` });
+      if (pending > 0 && tool !== "wait_for_user")
+        content.push({
+          type: "text",
+          text: `📥 ${pending} pending Send${pending === 1 ? "" : "s"}. Read with wait_for_user(timeout_s: 0).`,
+        });
       return { content, isError: r.isError };
     } catch (e) {
       log("call_failed", { tool, error: String((e as Error).message) });
@@ -144,38 +205,58 @@ export async function runMcp(o: { channel?: boolean } = {}) {
   let asked = ""; // the protocol version the harness asked for in initialize
   await server.connect(transport);
   // Log every message the harness sends, before the SDK handles it.
-  const handle = transport.onmessage!;
-  transport.onmessage = (msg: any) => {
+  const handle = transport.onmessage;
+  transport.onmessage = (message: JSONRPCMessage) => {
+    const msg: Json = message;
     const p = msg.params ?? {};
     if (msg.method === "initialize") asked = String(p.protocolVersion ?? "");
     log("recv", {
       method: msg.method ?? "(response)",
       id: msg.id ?? null,
-      ...(msg.method === "initialize" ? { protocolVersion: p.protocolVersion, clientInfo: p.clientInfo, capabilities: p.capabilities } : {}),
+      ...(msg.method === "initialize"
+        ? { protocolVersion: p.protocolVersion, clientInfo: p.clientInfo, capabilities: p.capabilities }
+        : {}),
       ...(msg.method === "tools/call" ? { tool: p.name, meta: p._meta ?? null } : {}),
       ...(msg.method === "notifications/cancelled" ? { cancelled: p } : {}),
     });
-    handle(msg);
+    handle?.(message);
   };
   server.oninitialized = () => {
-    log("initialized", { negotiated: (transport as any)._protocolVersion ?? null, client: server.getClientVersion(), capabilities: server.getClientCapabilities() });
+    log("initialized", {
+      negotiated: (transport as unknown as { _protocolVersion?: string })._protocolVersion ?? null,
+      client: server.getClientVersion(),
+      capabilities: server.getClientCapabilities(),
+    });
     const harness = KNOWN[server.getClientVersion()?.name ?? ""] ?? server.getClientVersion()?.name ?? "MCP client";
     if (!o.channel) return;
     // Only Claude Code has channels. Elsewhere Sends reach the Agent the guaranteed way, through wait_for_user.
     if (!CHANNEL_HARNESSES.has(harness)) return log("channel_unsupported", { harness });
     if (!session.on) return log("channel_off", { harness, why: session.why });
-    void openTarget("channel", "claude-channel", () => ({ harness, version: server.getClientVersion()?.version ?? "", protocol: asked, pid: process.pid }), push);
+    void openTarget(
+      "channel",
+      "claude-channel",
+      () => ({ harness, version: server.getClientVersion()?.version ?? "", protocol: asked, pid: process.pid }),
+      push,
+    );
   };
 
   // A push target: a second connection to the Link that holds one for this Agent (the channel, or the MCP App
   // view's). The Link pushes each new Send that no wait_for_user took. If the Link isn't running or restarts,
   // it reconnects.
-  async function openTarget(event: string, adapter: string, config: () => Record<string, unknown>, onPush: typeof push) {
+  async function openTarget(
+    event: string,
+    adapter: string,
+    config: () => Record<string, unknown>,
+    onPush: typeof push,
+  ) {
     for (;;) {
       let c: Client | undefined;
       try {
-        c = await Client.open(`mcp-${event}:${process.pid}`);
-        const closed = new Promise<void>((r) => (c!.onClose = r));
+        const client = await Client.open(`mcp-${event}:${process.pid}`);
+        c = client;
+        const closed = new Promise<void>((r) => {
+          client.onClose = r;
+        });
         const { target, agent } = await c.listen(who(), adapter, config(), onPush);
         log(`${event}_open`, { target, agent });
         await closed;
@@ -187,13 +268,14 @@ export async function runMcp(o: { channel?: boolean } = {}) {
         // The person turned this Agent away or didn't answer: stop, so the target never asks them again on its
         // own. Tool calls still work; restarting the session opens the target once they approve.
         // Still waiting for their answer is not a no: keep the target asking.
-        if (/^(rate_limited|not_approved)/.test(error) && !/Still waiting/.test(error)) return log(`${event}_stopped`, { error });
+        if (/^(rate_limited|not_approved)/.test(error) && !/Still waiting/.test(error))
+          return log(`${event}_stopped`, { error });
       }
       await new Promise((r) => setTimeout(r, 3000));
     }
   }
 
-  async function push(p: { json: Record<string, any>; images: string[]; deadline: number }) {
+  async function push(p: { json: Json; images: string[]; deadline: number }) {
     const bundle = p.json;
     if (!process.stdout.writable) return { ok: false, reason: "the session's pipe is closed" };
     // Channel content is text, so the crops go to files the session can read, as on the CLI.
@@ -205,18 +287,38 @@ export async function runMcp(o: { channel?: boolean } = {}) {
       const entry = bundle.images?.[i];
       if (entry) entry.file = file;
     });
-    const meta: Record<string, string> = { space: String(bundle.space), send: String(bundle.send), kind: String(bundle.kind) };
+    const meta: Record<string, string> = {
+      space: String(bundle.space),
+      send: String(bundle.send),
+      kind: String(bundle.kind),
+    };
     if (bundle.from?.name) meta.from = String(bundle.from.name);
     // Writing the images took time; past the deadline the Link has given up on this push, so it must not land.
     if (Date.now() > p.deadline) return { ok: false, reason: "arrived after its deadline" };
-    await server.notification({ method: "notifications/claude/channel", params: { content: JSON.stringify(bundle), meta } });
-    log("channel_push", { send: bundle.send, space: bundle.space, kind: bundle.kind, bytes: JSON.stringify(bundle).length, images: p.images.length });
+    await server.notification({
+      method: "notifications/claude/channel",
+      params: { content: JSON.stringify(bundle), meta },
+    });
+    log("channel_push", {
+      send: bundle.send,
+      space: bundle.space,
+      kind: bundle.kind,
+      bytes: JSON.stringify(bundle).length,
+      images: p.images.length,
+    });
     return { ok: true };
   }
   process.stdin.on("end", () => {
     log("stdin_closed");
-    void host?.then((c) => c.close(), () => {});
+    void host?.then(
+      (c) => c.close(),
+      () => {},
+    );
     process.exit(0);
   });
-  log("mcp_started", { cwd: process.cwd(), env_agent: process.env.REFLEX_AGENT_NAME ?? null, channel: Boolean(o.channel) });
+  log("mcp_started", {
+    cwd: process.cwd(),
+    env_agent: process.env.REFLEX_AGENT_NAME ?? null,
+    channel: Boolean(o.channel),
+  });
 }

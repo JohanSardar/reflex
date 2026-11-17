@@ -16,17 +16,27 @@
     "relay"
   ],
   "scripts": {
+    "build": "node agent/build.mjs",
     "build:p2p": "swift build -c release --package-path link/transports/p2p",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p agent --noEmit && tsc -p relay --noEmit",
+    "check": "npm run lint && npm run typecheck && npm test && npm run check:versions && npm run check:dist",
+    "check:dist": "node agent/build.mjs && git diff --exit-code --stat -- dist/",
+    "check:versions": "node agent/check-versions.mjs",
+    "format": "npm run format --workspaces",
+    "lint": "npm run lint --workspaces",
     "reflex-link": "node link/bin/reflex-link.ts",
     "reflex-relay": "node relay/node/bin/reflex-relay.ts",
-    "build": "node agent/build.mjs"
+    "test": "node --test link/test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p agent --noEmit && tsc -p relay --noEmit"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.6.4",
     "@cloudflare/workers-types": "5.20261024.1",
     "@types/node": "26.6.5",
     "esbuild": "0.28.2",
     "typescript": "7.0.2",
     "wrangler": "4.152.0"
+  },
+  "engines": {
+    "node": ">=22.18"
   }
 }
