@@ -1,3 +1,5 @@
+// What a room needs from its host: a socket that keeps its state. Node (relay/node) and Cloudflare
+// (relay/cloudflare) each provide one, so relay/domain stays the same for both.
 /** One WebSocket in a room, with the state it carries across hibernation. */
 export interface Sock {
   send(data: string | Uint8Array): void;

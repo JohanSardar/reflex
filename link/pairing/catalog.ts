@@ -30,8 +30,8 @@ export interface PairedDevice {
   /**
    * "offer": it scanned a code this Link showed, so the person was at both. "join": this Link scanned its code.
    * "admin-offer": it scanned a code made by an admin call (`reflex pair`, `reflex setup`), which anything with the
-   * person's shell can make. "invite": another person's Link, met through an invite to a shared Space (link/sharing.ts);
-   * it syncs only those Spaces.
+   * person's shell can make. "invite": another person's Link, met through a shared Space in an earlier version (shared
+   * Spaces are gone; the record can still be in an old database).
    */
   via?: "offer" | "admin-offer" | "join" | "invite" | "code";
   /**
@@ -108,12 +108,6 @@ export class Catalog {
   /** Records whose signature did not verify since start. */
   get rejected(): number {
     return this.#rejected;
-  }
-
-  // Other signed records (shared Spaces, link/sharing.ts)
-
-  records<T>(kind: string): T[] {
-    return this.#all<T>(kind);
   }
 
   putRecord(kind: string, id: string, body: unknown): void {

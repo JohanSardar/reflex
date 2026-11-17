@@ -1,6 +1,6 @@
 // The handshake that turns a pending Path into a session bound to one device.
 //
-//   I → R  hello  { device, key, eph, person, name, pair?, invite? }
+//   I → R  hello  { device, key, eph, person, name, pair? }
 //   R → I  hello  { device, key, eph, person, name }
 //   I → R  auth   { sig: Ed25519(transcript), mac?: HMAC(pairing secret, transcript) }
 //   R → I  auth   { sig, mac? }
@@ -9,9 +9,8 @@
 // other's signature against the key in its hello, and that the device ID is the
 // one derived from that key. Then a peer is trusted only if it is already
 // paired with exactly that key, or it proves it knows the secret of a live
-// pairing offer (which only someone who saw the QR code knows), or of a live
-// invite to a shared Space (link/sharing.ts), which makes it a peer for that
-// Space only. Everything after the handshake is encrypted with keys from the
+// pairing offer (which only someone who saw the QR code knows), or a live typed
+// code (below). Everything after the handshake is encrypted with keys from the
 // X25519 exchange.
 //
 // A typed 6-digit code (`pair: "code"`) is too short to use as an HMAC key:

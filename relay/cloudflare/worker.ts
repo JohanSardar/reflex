@@ -1,4 +1,5 @@
-// Only live encrypted device forwarding; no log, assets, OAuth or cloud agents.
+// The Cloudflare Relay (reflex.eilmer.si): one Durable Object per room, with hibernatable WebSockets, around
+// relay/domain/room.ts. Only live encrypted device forwarding; no log, assets, OAuth or cloud agents.
 import { DurableObject } from "cloudflare:workers";
 import type { Sock, SockState } from "../domain/ports.ts";
 import { Room } from "../domain/room.ts";

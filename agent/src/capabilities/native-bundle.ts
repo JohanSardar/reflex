@@ -1,7 +1,8 @@
 // Project the immutable local PencilKit snapshot into the same review-comment
 // bundle for wait_for_user and every push adapter. No live page reads are needed.
-import type { Bounds, InkStroke, NativeSend } from "../../../link/storage/sends.ts";
+
 import type { Json } from "../protocol.ts";
+import type { Bounds, InkStroke, NativeSend } from "../store.ts";
 
 type Point = number[];
 type Target = { id: string; bounds: Bounds; text?: string };

@@ -1,33 +1,12 @@
 // Native Sends are immutable snapshots. They are committed with their Inbox index
 // before the iPad is acknowledged; retrying an ID never creates another delivery.
 import type { DatabaseSync } from "node:sqlite";
+import type { Bounds, InkStroke, NativeSend } from "../../agent/src/store.ts";
 import { tx } from "./db.ts";
 import type { Inbox } from "./inbox.ts";
 
-export type Bounds = [number, number, number, number];
-export interface InkStroke {
-  id: string;
-  points: number[][];
-  bounds: Bounds;
-  color: string;
-  width: number;
-  at: number;
-}
-export interface NativeSend {
-  send: string;
-  space: string;
-  by: { person: string; device: string };
-  at: number;
-  trigger: string;
-  viewport: Bounds;
-  strokes: InkStroke[];
-  /** The page as it was when Send was pressed, for targets around earlier writing. */
-  context?: InkStroke[];
-  said?: string;
-  words?: { text: string; start_ms: number; end_ms?: number }[];
-  hints?: { strokes: string[]; text: string; confidence: number }[];
-  crops?: { asset: string; bounds: Bounds; strokes?: string[]; kind?: "screen" | "recent_strokes" }[];
-}
+// The Send's shape is the Agent layer's (agent/src/store.ts): the Link checks and stores it, surfaces read it.
+export type { Bounds, InkStroke, NativeSend };
 
 const id = (v: unknown): v is string => typeof v === "string" && /^[\w-]{1,200}$/.test(v);
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);

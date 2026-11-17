@@ -8982,10 +8982,6 @@ ${r.body}`, r.sig)) out3.push(JSON.parse(r.body));
       get rejected() {
         return this.#rejected;
       }
-      // Other signed records (shared Spaces, link/sharing.ts)
-      records(kind) {
-        return this.#all(kind);
-      }
       putRecord(kind, id2, body) {
         this.#put(kind, id2, body);
       }

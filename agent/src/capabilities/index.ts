@@ -1,6 +1,7 @@
-import type { NativeSend } from "../../../link/storage/sends.ts";
+// The capability table: the Agent tools (connect, wait_for_user) as plain functions over the Link's Inbox and
+// assets. Every surface (MCP, CLI, push adapters) reaches the same Core through the host (../host/).
 import type { Json } from "../protocol.ts";
-import type { Assets, Inbox } from "../store.ts";
+import type { Assets, Inbox, NativeSend } from "../store.ts";
 import { nativeBundle } from "./native-bundle.ts";
 
 export type Identity = { agent: string; name: string; color: string };

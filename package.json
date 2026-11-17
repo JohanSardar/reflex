@@ -18,8 +18,9 @@
   "scripts": {
     "build": "node agent/build.mjs",
     "build:p2p": "swift build -c release --package-path link/transports/p2p",
-    "check": "npm run lint && npm run typecheck && npm test && npm run check:dist",
+    "check": "npm run lint && npm run typecheck && npm test && npm run check:versions && npm run check:dist",
     "check:dist": "node agent/build.mjs && git diff --exit-code --stat -- dist/",
+    "check:versions": "node agent/check-versions.mjs",
     "format": "npm run format --workspaces",
     "lint": "npm run lint --workspaces",
     "reflex-link": "node link/bin/reflex-link.ts",
