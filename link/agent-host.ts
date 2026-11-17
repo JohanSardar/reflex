@@ -211,7 +211,7 @@ export async function startAgentHost(o: AgentHostOptions) {
     return {
       code: spaced(c.code),
       expires_in_s: Math.round((c.expires - Date.now()) / 1000),
-      tell_the_person: `Open Reflex on your iPad, tap Pair with Mac, and type ${spaced(c.code)}. ${o.relay ? "The iPad finds this Mac on the same Wi-Fi or nearby, or through the relay from anywhere." : "The iPad needs to be on the same Wi-Fi as this Mac."} The code works once, for 10 minutes.`,
+      tell_the_person: `Open Reflex on your iPad, tap the connection button at the top right, and type ${spaced(c.code)}. ${o.relay ? "The iPad finds this Mac on the same Wi-Fi or nearby, or through the relay from anywhere." : "The iPad needs to be on the same Wi-Fi as this Mac."} The code works once, for 10 minutes.`,
       next: "Write the code and tell_the_person in your reply now: the person can't see this tool result. Then call wait_for_user: it returns once they have typed the code and pressed Send.",
     };
   }
@@ -274,7 +274,7 @@ export async function startAgentHost(o: AgentHostOptions) {
           {
             code: "not_approved",
             msg: `Still waiting for the person to type the code ${code} in Reflex on their iPad. Nothing is wrong.`,
-            fix: `If they haven't yet, tell them: "Open Reflex on your iPad, tap Pair with Mac, and type ${code}." Then call wait_for_user again: you're let in as soon as they type it.`,
+            fix: `If they haven't yet, tell them: "Open Reflex on your iPad, tap the connection button at the top right, and type ${code}." Then call wait_for_user again: you're let in as soon as they type it.`,
           },
         ],
         ["Call wait_for_user again: it waits for the code."],

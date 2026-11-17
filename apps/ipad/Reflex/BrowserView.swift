@@ -303,7 +303,7 @@ struct BrowserView: View {
         }
         // The connection lives in the top-right corner, as it does on a board.
         ToolbarItem(placement: .topBarTrailing) {
-            StatusCapsule(link: link, compact: true, action: onStatus).fixedSize()
+            StatusCapsule(link: link, action: onStatus).fixedSize()
         }
         .sharedBackgroundVisibility(.hidden)
     }

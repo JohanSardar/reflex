@@ -100,7 +100,7 @@ function answering(socket: string, ms = 1000): Promise<boolean> {
 const APPROVAL_WAIT_S = 300;
 /** The one line under a pairing code: what to do on the iPad. With a Relay the iPad can be anywhere. */
 export const pairLine = (relay: boolean): string =>
-  `On your iPad: open Reflex, tap Pair with Mac, and type the code. ${relay ? "The iPad finds this Mac on the same Wi-Fi or nearby, or through the relay from anywhere." : "The iPad needs to be on the same Wi-Fi as this Mac."} Single use, 10 minutes.`;
+  `On your iPad: open Reflex, tap the connection button at the top right, and type the code. ${relay ? "The iPad finds this Mac on the same Wi-Fi or nearby, or through the relay from anywhere." : "The iPad needs to be on the same Wi-Fi as this Mac."} Single use, 10 minutes.`;
 /** How long the pairing room stays open after the code is used or gone: the new iPad's first session runs there until it hears where the person's room is. */
 const PAIRING_ROOM_LINGER_MS = 30_000;
 /** How long after the profile is made (or its last approving iPad is forgotten) a `reflex pair` code pairs an approving iPad. */

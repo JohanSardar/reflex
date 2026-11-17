@@ -8668,7 +8668,7 @@ async function startAgentHost(o) {
     return {
       code: spaced(c.code),
       expires_in_s: Math.round((c.expires - Date.now()) / 1e3),
-      tell_the_person: `Open Reflex on your iPad, tap Pair with Mac, and type ${spaced(c.code)}. ${o.relay ? "The iPad finds this Mac on the same Wi-Fi or nearby, or through the relay from anywhere." : "The iPad needs to be on the same Wi-Fi as this Mac."} The code works once, for 10 minutes.`,
+      tell_the_person: `Open Reflex on your iPad, tap the connection button at the top right, and type ${spaced(c.code)}. ${o.relay ? "The iPad finds this Mac on the same Wi-Fi or nearby, or through the relay from anywhere." : "The iPad needs to be on the same Wi-Fi as this Mac."} The code works once, for 10 minutes.`,
       next: "Write the code and tell_the_person in your reply now: the person can't see this tool result. Then call wait_for_user: it returns once they have typed the code and pressed Send."
     };
   }
@@ -8722,7 +8722,7 @@ async function startAgentHost(o) {
           {
             code: "not_approved",
             msg: `Still waiting for the person to type the code ${code} in Reflex on their iPad. Nothing is wrong.`,
-            fix: `If they haven't yet, tell them: "Open Reflex on your iPad, tap Pair with Mac, and type ${code}." Then call wait_for_user again: you're let in as soon as they type it.`
+            fix: `If they haven't yet, tell them: "Open Reflex on your iPad, tap the connection button at the top right, and type ${code}." Then call wait_for_user again: you're let in as soon as they type it.`
           }
         ],
         ["Call wait_for_user again: it waits for the code."]
@@ -14800,7 +14800,7 @@ var init_link = __esm({
       }
     };
     APPROVAL_WAIT_S = 300;
-    pairLine = (relay2) => `On your iPad: open Reflex, tap Pair with Mac, and type the code. ${relay2 ? "The iPad finds this Mac on the same Wi-Fi or nearby, or through the relay from anywhere." : "The iPad needs to be on the same Wi-Fi as this Mac."} Single use, 10 minutes.`;
+    pairLine = (relay2) => `On your iPad: open Reflex, tap the connection button at the top right, and type the code. ${relay2 ? "The iPad finds this Mac on the same Wi-Fi or nearby, or through the relay from anywhere." : "The iPad needs to be on the same Wi-Fi as this Mac."} Single use, 10 minutes.`;
     PAIRING_ROOM_LINGER_MS = 3e4;
     firstPairMs = () => Number(process.env.REFLEX_FIRST_PAIR_S ?? 900) * 1e3;
     Link = class {

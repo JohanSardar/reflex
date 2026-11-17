@@ -856,6 +856,13 @@ public final class LinkSync {
     private func bind(_ s: Session) {
         // Over a Relay the Link's hello names no one: it is the paired Link, by key.
         if s.peer.name.isEmpty, let paired { s.peer.name = paired.name }
+        // The Link names itself after the Mac's computer name; one paired under an older name (a network host name)
+        // is shown by the name it says now.
+        if var p = paired, p.device == s.peer.device, !s.peer.name.isEmpty, p.name != s.peer.name {
+            p.name = s.peer.name
+            paired = p
+            Self.writeSecret(p, to: Self.linkDir.appending(path: "paired.json"))
+        }
         if let old = paths.on(s.transport) {
             old.close()
             _ = paths.remove(old)
