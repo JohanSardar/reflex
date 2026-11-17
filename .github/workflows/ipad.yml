@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 25
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
-      DESTINATION: platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=26.4
+      DESTINATION: platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=26.4.1
     steps:
       - uses: actions/checkout@v4
         with:

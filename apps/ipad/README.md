@@ -90,7 +90,7 @@ From the repository root, list installed destinations with
 Then run the same check as CI (use an available iPad destination):
 
 ```sh
-DESTINATION='platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=26.4' \
+DESTINATION='platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=26.4.1' \
   apps/ipad/scripts/check.sh
 ```
 

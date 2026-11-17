@@ -82,3 +82,13 @@ review. No findings were declined or fixes requested. The branch is pushed
 only after approval. No new TestFlight binary is needed for a user-visible fix;
 shipping this source cleanup would require a separately authorized new build
 number, upload and Beta App Review.
+
+## CI bring-up corrections
+
+The first GitHub evaluation failed before starting jobs because runner.temp
+is unavailable in a job-level env expression. Moved DERIVED_DATA into the
+check step env; actionlint then passed. Also verified Xcode requires the full
+runtime version: requesting OS=26.4 locally rejected the available 26.4.1
+Simulator. Updated the workflow and README examples to OS=26.4.1. The local
+full-suite run used the dedicated device UUID and was unaffected. No Swift
+product code changed in these corrections.
