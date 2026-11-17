@@ -2,11 +2,13 @@
 import { DurableObject } from "cloudflare:workers";
 import { Room } from "../domain/room.ts";
 import type { Sock, SockState } from "../domain/ports.ts";
-import { ROOM_ID } from "../domain/wire.ts";
+import { RELAY_PROTOCOL, ROOM_ID } from "../domain/wire.ts";
 interface Env { ROOM: DurableObjectNamespace<RoomDO>; }
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
+    if (url.pathname === "/" || url.pathname === "/health")
+      return new Response(`Reflex relay (${RELAY_PROTOCOL}). It forwards end-to-end encrypted frames between paired devices and keeps nothing.\n`);
     if (url.pathname !== "/v0/connect") return new Response("Not found", { status: 404 });
     const room = url.searchParams.get("room") ?? "";
     if (!ROOM_ID.test(room) || req.headers.get("upgrade") !== "websocket") return new Response("a WebSocket to a room is expected", { status: 400 });
@@ -28,7 +30,8 @@ export class RoomDO extends DurableObject<Env> {
     this.ctx.storage.kv.put("room", id);
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server);
-    this.#get(id).open(sock(server));
+    // The client's address, for the room's per-address limits (Cloudflare sets this header; clients can't).
+    this.#get(id).open(sock(server), req.headers.get("cf-connecting-ip") ?? "");
     return new Response(null, { status: 101, webSocket: client });
   }
 

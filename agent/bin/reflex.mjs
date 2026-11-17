@@ -7,6 +7,10 @@ if (cmd === "link") {
   // The composition root, so the Agent layer's own code never imports the Link.
   process.argv = [process.argv[0], "reflex link", ...rest];
   await import("../../link/bin/reflex-link.ts");
+} else if (cmd === "relay") {
+  // A Relay of your own (relay/node/bin/reflex-relay.ts): `npx -y github:JohanSardar/reflex#npx relay`.
+  process.argv = [process.argv[0], "reflex relay", ...rest];
+  await import("../../relay/node/bin/reflex-relay.ts");
 } else if (cmd === "setup" || cmd === "pair") {
   // First-time setup and a fresh pairing code (link/bin/setup.ts). A fresh clone has no packages and no
   // dependencies yet: get them first, so this one command is all it takes.

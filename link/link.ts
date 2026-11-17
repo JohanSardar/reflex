@@ -29,7 +29,7 @@ import { createInterface } from "node:readline";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { adoptPerson, home, identity, localKey, type Home, type Identity } from "./home.ts";
 import { Catalog, mayApprove, type AgentRecord, type PairedDevice } from "./pairing/catalog.ts";
-import { b64 } from "./pairing/crypto.ts";
+import { b64, newDeviceKey } from "./pairing/crypto.ts";
 import type { Me } from "./pairing/handshake.ts";
 import { Offers, parseOffer } from "./pairing/offer.ts";
 import { AssetStore } from "./storage/assets.ts";
@@ -42,7 +42,7 @@ import { recipient } from "./routing.ts";
 import { socketPath as agentSocketPath } from "../agent/src/host/rpc.ts";
 import { FaultTransport, parseFaults } from "./transports/fault.ts";
 import { LanTransport } from "./transports/lan.ts";
-import { RelayTransport, roomFor } from "./transports/relay.ts";
+import { DEFAULT_RELAY, PAIRING_ROOM, RelayTransport, roomFor } from "./transports/relay.ts";
 import type { Transport } from "./transports/transport.ts";
 import { P2pTransport } from "./transports/p2p.ts";
 
@@ -98,8 +98,11 @@ function answering(socket: string, ms = 1000): Promise<boolean> {
 }
 
 const APPROVAL_WAIT_S = 300;
-/** The one line under a pairing code: what to do on the iPad. */
-export const PAIR_LINE = "On your iPad: open Reflex, tap Pair with Mac, and type the code. The iPad needs to be on the same Wi-Fi as this Mac. Single use, 10 minutes.";
+/** The one line under a pairing code: what to do on the iPad. With a Relay the iPad can be anywhere. */
+export const pairLine = (relay: boolean): string =>
+  `On your iPad: open Reflex, tap Pair with Mac, and type the code. ${relay ? "The iPad finds this Mac on the same Wi-Fi or nearby, or through the relay from anywhere." : "The iPad needs to be on the same Wi-Fi as this Mac."} Single use, 10 minutes.`;
+/** How long the pairing room stays open after the code is used or gone: the new iPad's first session runs there until it hears where the person's room is. */
+const PAIRING_ROOM_LINGER_MS = 30_000;
 /** How long after the profile is made (or its last approving iPad is forgotten) a `reflex pair` code pairs an approving iPad. */
 const firstPairMs = (): number => Number(process.env.REFLEX_FIRST_PAIR_S ?? 900) * 1000;
 type Decision = "approved" | "denied" | "revoked";
@@ -128,6 +131,12 @@ export class Link {
   #faults: FaultTransport[] = [];
   #log: (msg: string) => void;
   #relayT: RelayTransport | null = null;
+  /** The Relay's pairing room, while a typed code is live (link/pairing/cpace.ts), and since when no code is. */
+  #pairRoom: RelayTransport | null = null;
+  #pairIdle = 0;
+  /** On the default Relay, when the person runs their own: points a new iPad to it. */
+  #pointer: RelayTransport | null = null;
+  #pairTimer: NodeJS.Timeout | null = null;
   /** A sign-in the person is approving in this terminal, step by step. */
   #reask: NodeJS.Timeout | undefined;
   /** What this Link wrote into link.lock, while it holds it. */
@@ -238,6 +247,7 @@ export class Link {
       announce: (a) => this.#announce(a),
       code: (agent) => this.typedCode(agent),
       codeFor: (agent) => this.#offers.codeFor(agent)?.code,
+      relay: this.#relayT?.url,
       ipads: () => this.#catalog.devices().filter((d) => d.kind === "ipad" && d.person.id === this.#id.person.id).map((d) => d.name),
       remind: (a) => this.#coord.askAboutAgent({ id: a.id, name: a.name, color: a.color, requested_at: a.requested_at }),
       decision: (id, ms, signal) => this.#waitDecision(id, ms, signal),
@@ -259,6 +269,46 @@ export class Link {
     );
     // Like a pairing code, the viewer's address carries its key and is shown only here.
     if (this.#opts.prompt && process.stdin.isTTY) this.#terminal();
+    this.#pairTimer = setInterval(() => this.#syncPairingRoom(), 5_000);
+    this.#pairTimer.unref();
+  }
+
+  /**
+   * Waits in the Relay's pairing room while a typed code is live, so an iPad that isn't nearby can try it there.
+   * It goes in under a relay identity of its own, made for this, so the room never sees this Link's device ID.
+   * A Link on its own Relay also waits on the default one, only to tell a new iPad (which knows no other Relay)
+   * where to go: `{t:"moved", relay}`. The code is checked on the person's Relay, never there.
+   */
+  #syncPairingRoom(): void {
+    const url = this.#relayT?.url;
+    if (!url) return;
+    if (this.#offers.liveCode() !== undefined) {
+      this.#pairIdle = 0;
+      if (this.#pairRoom) return;
+      const room = new RelayTransport({ url, key: newDeviceKey().key, room: () => PAIRING_ROOM, watch: () => ["*"], log: this.#log, name: "relay-pairing" });
+      room.onReady = () => this.#log(`relay: waiting in the pairing room on ${url} while the code is live`);
+      this.#pairRoom = room;
+      void this.#coord.addTransport(room);
+      if (url !== DEFAULT_RELAY) {
+        const pointer = new RelayTransport({ url: DEFAULT_RELAY, key: newDeviceKey().key, room: () => PAIRING_ROOM, watch: () => ["*"], log: this.#log, name: "relay-pointer" });
+        pointer.onReady = () => this.#log(`relay: pointing new iPads from ${DEFAULT_RELAY} to ${url} while the code is live`);
+        this.#pointer = pointer;
+        void pointer.listen((p) => {
+          void p
+            .send(Buffer.from(JSON.stringify({ t: "moved", relay: url })), "control")
+            .catch(() => {})
+            .finally(() => setTimeout(() => p.close("pointed to the person's Relay"), 1000).unref());
+        });
+      }
+      return;
+    }
+    if (!this.#pairRoom) return;
+    this.#pairIdle ||= Date.now();
+    if (Date.now() - this.#pairIdle < PAIRING_ROOM_LINGER_MS) return;
+    void this.#coord.removeTransport(this.#pairRoom);
+    void this.#pointer?.close();
+    this.#pairRoom = this.#pointer = null;
+    this.#log(`relay: left the pairing room (no code is live)`);
   }
 
   /** Wraps the transports (LAN, peer-to-peer Wi-Fi where it runs, Relay) in fault injection when the Link was started with --fault. */
@@ -283,23 +333,25 @@ export class Link {
         this.#decide(a.id, /^y/i.test(line.trim()) ? "approved" : "denied", "terminal");
         return this.#ask();
       }
-      if (this.#ports.lan === undefined) return void process.stdout.write("Pairing needs the LAN; this Link was started without it.\n");
+      if (this.#ports.lan === undefined && !this.#relayT) return void process.stdout.write("Pairing needs the LAN or a Relay; this Link was started without either.\n");
       void this.showPairingCode();
     });
-    if (this.#ports.lan !== undefined) void this.showPairingCode();
+    if (this.#ports.lan !== undefined || this.#relayT) void this.showPairingCode();
   }
 
   async showPairingCode(): Promise<void> {
     const { code } = this.typedCode();
-    process.stdout.write(`\nPairing code: ${code.slice(0, 3)} ${code.slice(3)}\n${PAIR_LINE}\nPress Enter for a new code.\n`);
+    process.stdout.write(`\nPairing code: ${code.slice(0, 3)} ${code.slice(3)}\n${pairLine(this.#relayT !== null)}\nPress Enter for a new code.\n`);
   }
 
   /** The live 6-digit code (a new one if none is live), with `agent` among the Agents typing it approves. */
   typedCode(agent?: string): { code: string; expires: number } {
-    if (this.#ports.lan === undefined) throw new LinkError("no_lan", "Pairing an iPad needs the local network, and this Link was started with --no-lan.", "Restart it without --no-lan.");
+    if (this.#ports.lan === undefined && !this.#relayT)
+      throw new LinkError("no_lan", "Pairing an iPad needs the local network or a Relay, and this Link was started with --no-lan and no Relay.", "Restart it without --no-lan, or with a Relay.");
     const before = this.#offers.liveCode();
     const c = this.#offers.code(agent);
-    if (c.code !== before) this.#log("made a pairing code (6 digits, single use, 10 minutes)");
+    if (c.code !== before) this.#log(`made a pairing code (6 digits, single use, 10 minutes)${this.#relayT ? `; it also works through the relay at ${this.#relayT.url}` : ""}`);
+    this.#syncPairingRoom();
     return { code: c.code, expires: c.expires };
   }
 
@@ -433,6 +485,8 @@ export class Link {
 
   async stop(): Promise<void> {
     this.#rl?.close();
+    if (this.#pairTimer) clearInterval(this.#pairTimer);
+    await this.#pointer?.close();
     this.#push?.dispatcher.stop();
     await new Promise<void>((r) => (this.#agentServer ? this.#agentServer.close(() => r()) : r()));
     await this.#coord.stop();
@@ -589,7 +643,7 @@ export class Link {
         // `reflex pair` and `reflex setup`, from any terminal: the live 6-digit code. The iPad that types it may
         // approve Agents. Each code is logged here, and the person's iPads hear of each new device.
         const { code, expires } = this.typedCode();
-        return { code, offer: code, expires, line: PAIR_LINE };
+        return { code, offer: code, expires, line: pairLine(this.#relayT !== null) };
       }
       case "pair.check": {
         // Whether a code from pair.offer was used, and by which device (it may have been paired already).

@@ -134,7 +134,7 @@ private final class Once<T: Sendable>: @unchecked Sendable {
 @MainActor
 final class Session {
     let conn: any FrameChannel
-    let peer: PeerInfo
+    var peer: PeerInfo
     var transport: String { conn.transport }
     /// Smoothed round trip from this side's pings, as on the Link (`FramedPath.recordRtt`).
     private(set) var rttMs: Double?
@@ -205,6 +205,9 @@ struct DeviceIdentity {
 /// Set once this side has revealed a digit of a typed code to the other device (`handshake` with a code).
 final class CodeExposure: @unchecked Sendable { var revealed = false }
 
+/// In the default Relay's pairing room, a Link that waits on the person's own Relay: try the code there.
+struct RelayMoved: Error { var relay: String }
+
 /// The handshake, as the side that dials (`link/pairing/handshake.ts`):
 ///
 ///     I → R  hello  { device, key, eph, person, name, kind, pair? }
@@ -212,9 +215,16 @@ final class CodeExposure: @unchecked Sendable { var revealed = false }
 ///     I → R  auth   { sig: Ed25519(transcript), mac?: HMAC(pairing secret, transcript) }
 ///     R → I  auth   { sig, mac? }
 ///
-/// `pairedKey` is the Link's key when already paired; `offer` when pairing.
+/// `pairedKey` is the Link's key when already paired; `offer` when pairing; `relayCode` for a typed code tried
+/// in a Relay's pairing room, checked with CPace (Cpace.swift). Over a Relay the hellos carry no names; with
+/// `relayCode`, each side says who it is inside the session once the code is proven:
+///
+///     I → R  cpace  { y }      R → I  cpace  { y }
+///     I → R  auth   { sig, mac }      R → I  auth (only once it checked this side's)
+///     R → I  who    { person, name }  sealed; this iPad becomes that person's
+///     I → R  who    { person, name }  sealed
 @MainActor
-func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?, offer: PairingOffer?, exposure: CodeExposure? = nil) async throws -> Session {
+func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?, offer: PairingOffer?, exposure: CodeExposure? = nil, relayCode: String? = nil) async throws -> Session {
     var it = conn.frames.makeAsyncIterator()
     func next() async throws -> (raw: Data, msg: [String: Any]) {
         // A Link that never answers is cut off; its stream then ends.
@@ -231,15 +241,18 @@ func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?,
     }
 
     let eph = Curve25519.KeyAgreement.PrivateKey()
+    let relay = conn.transport == "relay"
     var hello: [String: Any] = [
         "t": "hello", "v": 0, "protocol": linkProtocol, "device": me.device, "key": B64.encode(me.publicRaw),
-        "eph": B64.encode(eph.publicKey.rawRepresentation), "person": ["id": me.person.id, "name": me.person.name],
-        "name": me.name, "kind": "ipad",
+        "eph": B64.encode(eph.publicKey.rawRepresentation),
+        "person": ["id": relayCode != nil ? "" : me.person.id, "name": relay ? "" : me.person.name],
+        "name": relay ? "" : me.name, "kind": "ipad",
     ]
-    if let offer { hello["pair"] = offer.code != nil ? "code" : offer.offer }
+    if relayCode != nil { hello["pair"] = "cpace" } else if let offer { hello["pair"] = offer.code != nil ? "code" : offer.offer }
     let mine = try JSONSerialization.data(withJSONObject: hello)
     conn.send(mine)
     let (theirsRaw, theirs) = try await next()
+    if theirs["t"] as? String == "moved", let to = theirs["relay"] as? String { throw RelayMoved(relay: to) }
     guard theirs["t"] as? String == "hello", theirs["v"] as? Int == 0, theirs["protocol"] as? String == linkProtocol,
           let key = theirs["key"] as? String, let keyRaw = B64.decode(key), let device = theirs["device"] as? String,
           let ephRaw = (theirs["eph"] as? String).flatMap(B64.decode)
@@ -248,7 +261,7 @@ func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?,
     if let offer, offer.device != device || offer.key != key {
         throw LinkError.refused("The device that answered is not the one in the pairing code.")
     }
-    if offer == nil, pairedKey != key {
+    if offer == nil, relayCode == nil, pairedKey != key {
         // Say why before closing, so the Link's log names the cause instead of "closed during the handshake".
         if let why = try? JSONSerialization.data(withJSONObject: ["t": "refused", "reason": "this iPad is paired with another Link identity at this address (the Link changed); it stops dialing and asks the person to scan this Link's code"]) {
             conn.send(why)
@@ -258,6 +271,38 @@ func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?,
 
     let transcript = sha256(Data(linkProtocol.utf8), mine, theirsRaw)
     let label = { (s: String) in Data("\(linkProtocol) \(s) ".utf8) + transcript }
+    if let code = relayCode {
+        let cp = try Cpace(code: code, transcript: transcript)
+        conn.send(try JSONSerialization.data(withJSONObject: ["t": "cpace", "y": B64.encode(cp.share)]))
+        let (_, c) = try await next()
+        guard c["t"] as? String == "cpace", let y = (c["y"] as? String).flatMap(B64.decode) else { throw LinkError.protocolError("The Link broke off the code check.") }
+        let secret = try cp.secret(theirs: y, initiator: true, transcript: transcript)
+        let auth: [String: Any] = [
+            "t": "auth", "sig": B64.encode(try me.key.signature(for: label("auth i"))),
+            "mac": B64.encode(Data(HMAC<SHA256>.authenticationCode(for: label("pair i"), using: SymmetricKey(data: secret)))),
+        ]
+        conn.send(try JSONSerialization.data(withJSONObject: auth))
+        // A wrong code: the Link answers `refused` (next() throws) instead of its auth.
+        let (_, a) = try await next()
+        let want = Data(HMAC<SHA256>.authenticationCode(for: label("pair r"), using: SymmetricKey(data: secret)))
+        guard a["t"] as? String == "auth", let mac = (a["mac"] as? String).flatMap(B64.decode), mac == want else { throw LinkError.refused("The Link refused: wrong pairing code") }
+        guard let sig = (a["sig"] as? String).flatMap(B64.decode), try Curve25519.Signing.PublicKey(rawRepresentation: keyRaw).isValidSignature(sig, for: label("auth r"))
+        else { throw LinkError.refused("The Link did not prove its key.") }
+        let s = try session(conn, eph: eph, ephRaw: ephRaw, transcript: transcript, peer: PeerInfo(device: device, key: key, person: Person(id: "", name: ""), name: ""), it: it)
+        // Who the Link is, inside the session; this iPad becomes its person's.
+        let timer = Task { [conn] in
+            try await Task.sleep(for: .seconds(10))
+            conn.close()
+        }
+        defer { timer.cancel() }
+        guard let (w, _) = try await s.next(), w["t"] as? String == "who", let p = w["person"] as? [String: Any], let pid = p["id"] as? String, !pid.isEmpty else {
+            throw LinkError.protocolError("The Link didn't say who it is after the code check.")
+        }
+        let person = Person(id: pid, name: p["name"] as? String ?? "")
+        s.send(["t": "who", "person": ["id": person.id, "name": person.name], "name": me.name])
+        s.peer = PeerInfo(device: device, key: key, person: person, name: w["name"] as? String ?? "Reflex Link")
+        return s
+    }
     // A typed code is checked digit by digit first (link/pairing/handshake.ts), then makes the secret the MACs use.
     var secret = offer?.secret ?? Data()
     if let code = offer?.code {
@@ -291,12 +336,18 @@ func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?,
         guard let mac = (a["mac"] as? String).flatMap(B64.decode), mac == want else { throw LinkError.refused("The Link does not know this pairing code's secret.") }
     }
 
+    let person = theirs["person"] as? [String: Any]
+    let peer = PeerInfo(device: device, key: key, person: Person(id: person?["id"] as? String ?? "", name: person?["name"] as? String ?? ""), name: theirs["name"] as? String ?? "Reflex Link")
+    return try session(conn, eph: eph, ephRaw: ephRaw, transcript: transcript, peer: peer, it: it)
+}
+
+/// The session keys from the X25519 exchange, once the handshake proved both sides.
+@MainActor
+private func session(_ conn: any FrameChannel, eph: Curve25519.KeyAgreement.PrivateKey, ephRaw: Data, transcript: Data, peer: PeerInfo, it: AsyncThrowingStream<Data, Error>.AsyncIterator) throws -> Session {
     let shared = try eph.sharedSecretFromKeyAgreement(with: Curve25519.KeyAgreement.PublicKey(rawRepresentation: ephRaw))
     let okm = shared.withUnsafeBytes { Data($0) }
     let keys = HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: okm), salt: transcript, info: Data("\(linkProtocol) session keys".utf8), outputByteCount: 64)
         .withUnsafeBytes { Data($0) }
     let i2r = SymmetricKey(data: keys.prefix(32)), r2i = SymmetricKey(data: keys.suffix(32))
-    let person = theirs["person"] as? [String: Any]
-    let peer = PeerInfo(device: device, key: key, person: Person(id: person?["id"] as? String ?? "", name: person?["name"] as? String ?? ""), name: theirs["name"] as? String ?? "Reflex Link")
     return Session(conn: conn, peer: peer, tx: FrameCipher(key: i2r, aad: transcript), rx: FrameCipher(key: r2i, aad: transcript), iterator: it)
 }

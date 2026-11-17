@@ -77,7 +77,7 @@ It is for people who direct coding agents and think better with a pen. It feels 
 
 ### Connectivity
 - The iPad reaches the Mac over the same Wi-Fi network, or over Apple's peer-to-peer Wi-Fi when they are near each other.
-- An optional Relay forwards encrypted traffic between them when nothing closer works. It holds no boards and runs no agents.
+- When the Mac isn't nearby, the iPad pairs and sends through a Relay, still with just the typed code. The Relay forwards only encrypted traffic, holds no boards and runs no agents. reflex.eilmer.si is the free default; one command runs your own, and one setting on the Mac points to it.
 
 ## 4. Scenarios
 
@@ -139,7 +139,6 @@ Drafted: this shows intent. The architecture decides.
 
 ## 9. Open questions
 
-- **Keeping the Relay.** Whether it stays as the off-network path at all. Without it, the iPad can send only when it can reach the Mac directly.
 - **Typed text in a Send.** Whether a Send also carries the typed text of sticky notes and text boxes as text, not just inside the screen image. This belongs with the later work on voice and Send.
 - **The later voice and Send work.** What a better voice prompt and Send look like beyond where the buttons sit and how they look.
 

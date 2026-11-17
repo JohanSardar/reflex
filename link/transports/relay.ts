@@ -19,6 +19,16 @@ const HIGH_WATER = 2 * 1024 * 1024;
 /** The room where one person's devices meet. */
 export const roomFor = (person: string): string => createHash("sha256").update(`${RELAY_PROTOCOL} room ${person}`).digest("hex").slice(0, 32);
 
+/** The Relay a Link uses when the person set none: the project's free public one. */
+export const DEFAULT_RELAY = "wss://reflex.eilmer.si";
+
+/**
+ * The pairing room: where a Link with a live typed code waits on its Relay, and where an iPad that can't find
+ * the Mac nearby tries the code (link/pairing/cpace.ts). One room for everyone on a Relay, and its name says
+ * nothing about any code, so the Relay learns none of it.
+ */
+export const PAIRING_ROOM = createHash("sha256").update(`${RELAY_PROTOCOL} pairing room`).digest("hex").slice(0, 32);
+
 function frame(device: string, ch: number, payload: Uint8Array): Buffer {
   const id = Buffer.from(device);
   const head = Buffer.alloc(1 + id.length + 4);

@@ -27,6 +27,16 @@
 // someone in the middle gets through a round with 1 chance in 10, and through
 // all six with 1 in a million. Then the code and transcript make the secret
 // the auth MACs use, as for a scanned code.
+//
+// Through a Relay's pairing room (`pair: "cpace"`) the iPad may try the code on
+// several Links, so the code is checked with CPace instead (cpace.ts): every
+// try costs a party without the code one guess and tells it nothing. There the
+// hellos carry no names, and the Link answers the iPad's auth only once it has
+// checked it, so a wrong code counts toward its 5 tries before anything is
+// proven back. Once the session is up, each side says who it is inside it:
+//
+//   R → I  who  { person, name }     sealed
+//   I → R  who  { person, name }     sealed; the iPad becomes the Link's person's device
 import {
   b64,
   deviceIdFor,
@@ -43,6 +53,7 @@ import {
   type DeviceKey,
 } from "./crypto.ts";
 import { randomBytes } from "node:crypto";
+import { Cpace } from "./cpace.ts";
 import type { Person } from "./catalog.ts";
 import type { Path, PathMeasurements, Priority } from "../transports/transport.ts";
 
@@ -90,6 +101,8 @@ export interface ScannedOffer {
   secret: Uint8Array;
   /** A typed 6-digit code instead of a scanned secret: `offer` is "code" and `secret` is unused. */
   code?: string;
+  /** A typed code tried through a Relay's pairing room: checked with CPace, and `device` and `key` are unknown (""). */
+  cpace?: string;
 }
 
 export interface Me {
@@ -133,6 +146,8 @@ export interface HandshakeResult {
   offer?: string;
   /** True when the device paired with a typed code. */
   code?: boolean;
+  /** True when that code was checked with CPace, through a Relay's pairing room. */
+  cpace?: boolean;
   /** The Agents the typed code approves (responder side). */
   codeAgents?: string[];
 }
@@ -158,22 +173,25 @@ export async function handshake(path: Path, me: Me, trust: Trust, scanned?: Scan
 async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: ScannedOffer | undefined, saw: (h: Hello) => void): Promise<HandshakeResult> {
   const role = path.initiator ? "i" : "r";
   const eph = newEphemeral();
-  const hello: Hello = {
+  // A Relay forwards the hellos as they are: they name no one there (the person's ID stays, it is how a Link
+  // knows its own devices). Names go inside the session.
+  const hello = (cpace: boolean): Hello => ({
     t: "hello",
     v: 0,
     protocol: PROTOCOL,
     device: me.key.device,
     key: b64(me.key.publicRaw),
     eph: b64(eph.publicRaw),
-    person: me.person,
-    name: me.name,
+    person: cpace ? { id: "", name: "" } : path.transport === "relay" ? { id: me.person.id, name: "" } : me.person,
+    name: cpace || path.transport === "relay" ? "" : me.name,
     kind: me.kind,
-    ...(scanned && role === "i" ? { pair: scanned.code !== undefined ? "code" : scanned.offer } : {}),
-  };
-  const mine = enc(hello);
+    ...(scanned && role === "i" ? { pair: scanned.cpace !== undefined ? "cpace" : scanned.code !== undefined ? "code" : scanned.offer } : {}),
+  });
+  let mine: Buffer;
   let theirsRaw: Uint8Array;
   let theirs: Hello;
   if (role === "i") {
+    mine = enc(hello(scanned?.cpace !== undefined));
     await path.send(mine, "control");
     const r = await nextJson(path, 10_000);
     theirsRaw = r.raw;
@@ -184,10 +202,13 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
     theirsRaw = r.raw;
     theirs = checkHello(r.msg);
     saw(theirs);
+    mine = enc(hello(theirs.pair === "cpace"));
     await path.send(mine, "control");
   }
   const transcript = role === "i" ? sha256(PROTOCOL, mine, theirsRaw) : sha256(PROTOCOL, theirsRaw, mine);
   const other = role === "i" ? "r" : "i";
+
+  if ((role === "i" && scanned?.cpace !== undefined) || (role === "r" && theirs.pair === "cpace")) return cpaceRest(path, me, trust, role, scanned?.cpace, eph, theirs, transcript);
 
   // Which secret, if any, this connection pairs with.
   let secret: Uint8Array | undefined;
@@ -249,6 +270,80 @@ async function handshakeInner(path: Path, me: Me, trust: Trust, scanned: Scanned
   );
   const kind = theirs.kind === "ipad" ? "ipad" : "link";
   return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind }, paired, offer, ...(offer === "code" ? { code: true, codeAgents: codeAgents ?? [] } : {}) };
+}
+
+/**
+ * The rest of a handshake whose code is checked with CPace (the top of this file): the shares, then auth with
+ * the Link answering only after it checked the iPad's, then each side's name and person inside the session.
+ */
+async function cpaceRest(
+  path: Path,
+  me: Me,
+  trust: Trust,
+  role: "i" | "r",
+  typed: string | undefined,
+  eph: ReturnType<typeof newEphemeral>,
+  theirs: Hello,
+  transcript: Buffer,
+): Promise<HandshakeResult> {
+  const other = role === "i" ? "r" : "i";
+  const code = role === "i" ? typed! : trust.liveCode?.();
+  if (!code) throw new Error("no pairing code is live on this Link (they last 10 minutes; ask your agent for a new one)");
+  if (!/^\d{6}$/.test(code)) throw new WrongCode("a pairing code is 6 digits");
+  const cp = new Cpace(code, transcript);
+  await path.send(enc({ t: "cpace", y: b64(cp.share) }), "control");
+  const { msg: c } = await nextJson(path, 10_000);
+  if (c.t !== "cpace" || typeof c.y !== "string") throw new Error("expected cpace during the code check");
+  let secret: Buffer;
+  try {
+    secret = cp.secret(unb64(c.y), role === "i", transcript);
+  } catch {
+    if (role === "r") trust.codeFailed?.();
+    throw new WrongCode("wrong pairing code");
+  }
+  const label = (what: string, who: string) => Buffer.concat([Buffer.from(`${PROTOCOL} ${what} ${who} `), transcript]);
+  const auth = { t: "auth", sig: signWith(me.key, label("auth", role)), mac: mac(secret, label("pair", role)) };
+  const check = (a: Record<string, unknown>): void => {
+    if (a.t !== "auth" || typeof a.sig !== "string") throw new Error("malformed auth");
+    if (typeof a.mac !== "string" || !macEqual(a.mac, mac(secret, label("pair", other)))) {
+      if (role === "r") trust.codeFailed?.();
+      throw new WrongCode("wrong pairing code");
+    }
+    if (!verifyFrom(unb64(theirs.key), label("auth", other), a.sig)) throw new Error("peer did not prove its key");
+  };
+  let codeAgents: string[] | undefined;
+  if (role === "i") {
+    await path.send(enc(auth), "control");
+    check((await nextJson(path, 10_000)).msg);
+  } else {
+    check((await nextJson(path, 10_000)).msg);
+    // Single use, checked once the code is proven: one expired, replaced or used by another device meanwhile doesn't pair.
+    codeAgents = trust.takeCode?.(code, theirs.device);
+    if (!codeAgents) throw new Error("the pairing code expired or was already used (ask your agent for a new one)");
+    await path.send(enc(auth), "control");
+  }
+  const known = trust.pairedKey(theirs.device);
+  if (known && known !== theirs.key) throw new Error(`device ${theirs.device} is already paired with another key`);
+
+  const keys = sessionKeys(eph, unb64(theirs.eph), transcript);
+  const session = new Session(path, new FrameCipher(role === "i" ? keys.i2r : keys.r2i, transcript), new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript));
+  const who = async (): Promise<{ person: Person; name: string }> => {
+    const m = await Promise.race([session.next(), new Promise<null>((r) => setTimeout(() => r(null), 10_000).unref())]);
+    const p = m?.h.person as Person | undefined;
+    if (m?.h.t !== "who" || typeof p?.id !== "string" || typeof p.name !== "string") throw new Error("expected who after the code check");
+    return { person: { id: p.id, name: p.name }, name: String(m.h.name ?? "") };
+  };
+  let them: { person: Person; name: string };
+  if (role === "r") {
+    await session.send({ t: "who", person: me.person, name: me.name }, undefined, "control");
+    them = await who();
+  } else {
+    them = await who();
+    // The device that typed the code becomes the Link's person's (ADR-0008).
+    await session.send({ t: "who", person: them.person, name: me.name }, undefined, "control");
+  }
+  const kind = theirs.kind === "ipad" ? "ipad" : "link";
+  return { session, peer: { device: theirs.device, key: theirs.key, person: them.person, name: them.name, kind }, paired: !known, offer: "code", code: true, cpace: true, codeAgents: codeAgents ?? [] };
 }
 
 /** A typed code that doesn't match, as opposed to a connection that broke. */

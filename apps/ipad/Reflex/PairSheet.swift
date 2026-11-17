@@ -189,7 +189,7 @@ struct PairSheet: View {
                 } header: {
                     Text(s.paired ? "Pair Again or Another Mac" : "Pairing Code")
                 } footer: {
-                    Text("Your iPad looks for the Mac on this Wi-Fi, and nearby. Typing the code also lets in the agent that gave it to you.")
+                    Text("Your iPad looks for the Mac on this Wi-Fi and nearby, then through the relay, so the Mac can be anywhere. Typing the code also lets in the agent that gave it to you.")
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("pair-error") }

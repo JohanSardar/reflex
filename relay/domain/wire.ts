@@ -1,10 +1,15 @@
 // Device forwarding wire, reflex-relay/v0. /v0/connect?room=<32 hex>.
+import { sha256 } from "@noble/hashes/sha2.js";
+import { hex } from "./seal.ts";
 export const RELAY_PROTOCOL = "reflex-relay/v0";
 export const MAX_FRAME = 4 * 1024 * 1024;
 export const OPENER = 0x8000_0000;
 
 export const ROOM_ID = /^[0-9a-f]{32}$/;
 export const DEVICE_ID = /^dev-[0-9a-f]{16}$/;
+
+/** The pairing room (link/transports/relay.ts): everyone on this Relay with a live typed code meets there. */
+export const PAIRING_ROOM = hex(sha256(new TextEncoder().encode(`${RELAY_PROTOCOL} pairing room`))).slice(0, 32);
 
 export function helloText(room: string, nonce: string): string {
   return `${RELAY_PROTOCOL} hello ${room} ${nonce}`;
