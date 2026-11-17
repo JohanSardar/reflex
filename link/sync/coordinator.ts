@@ -198,6 +198,7 @@ export class Coordinator {
         // A typed code: the iPad that typed it may approve, and the Agents that asked for it are approved (the
         // person read the code off that Agent and typed it, which is the approval).
         const agents = r.codeAgents ?? [];
+        if (r.cpace) this.#log(`${r.peer.name} (${r.peer.device}) proved the code through the relay's pairing room (${path.remote})`);
         if (r.paired) this.#remember(r.peer, null, "code");
         const d = this.#catalog.device(r.peer.device)!;
         if (d.kind === "ipad" && d.person.id === this.#me.person.id && !mayApprove(d, this.#me.person.id)) {
@@ -452,6 +453,8 @@ export class Coordinator {
    * another transport is another path to the same peer.
    */
   #bind(session: Session, device: string, name: string, initiator: string): void {
+    // Over a Relay the hello names no one: the device is known by its key, and by the name it paired with.
+    name ||= this.#catalog.device(device)?.name ?? device;
     const transport = session.path.transport;
     const known = this.#peers.get(device);
     if (known) {

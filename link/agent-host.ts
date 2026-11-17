@@ -107,6 +107,8 @@ export interface AgentHostOptions {
   code?: (agent: string) => { code: string; expires: number };
   /** The live typed code this Agent waits on, if any. */
   codeFor?: (agent: string) => string | undefined;
+  /** The Relay a typed code also works through, if the Link has one: then the iPad can be anywhere. */
+  relay?: string;
   /** Names of the iPads paired with this Link. */
   ipads?: () => string[];
 }
@@ -174,7 +176,7 @@ export async function startAgentHost(o: AgentHostOptions) {
     return {
       code: spaced(c.code),
       expires_in_s: Math.round((c.expires - Date.now()) / 1000),
-      tell_the_person: `Open Reflex on your iPad, tap Pair with Mac, and type ${spaced(c.code)}. The iPad needs to be on the same Wi-Fi as this Mac. The code works once, for 10 minutes.`,
+      tell_the_person: `Open Reflex on your iPad, tap Pair with Mac, and type ${spaced(c.code)}. ${o.relay ? "The iPad finds this Mac on the same Wi-Fi or nearby, or through the relay from anywhere." : "The iPad needs to be on the same Wi-Fi as this Mac."} The code works once, for 10 minutes.`,
       next: "Write the code and tell_the_person in your reply now: the person can't see this tool result. Then call wait_for_user: it returns once they have typed the code and pressed Send.",
     };
   }

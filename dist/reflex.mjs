@@ -561,7 +561,7 @@ var init_assets = __esm({
       list() {
         const out3 = [];
         const objects = join2(this.#root, "objects");
-        for (const d of safeReaddir(objects)) for (const f2 of safeReaddir(join2(objects, d))) if (HASH.test(f2)) out3.push(f2);
+        for (const d of safeReaddir(objects)) for (const f3 of safeReaddir(join2(objects, d))) if (HASH.test(f3)) out3.push(f3);
         return out3.sort();
       }
     };
@@ -782,6 +782,59 @@ var init_sends = __esm({
   }
 });
 
+// link/pairing/cpace.ts
+import { createPrivateKey as createPrivateKey2, createPublicKey as createPublicKey2, diffieHellman as diffieHellman2, generateKeyPairSync as generateKeyPairSync2 } from "node:crypto";
+function modpow(b, e) {
+  let r = 1n;
+  b %= P;
+  while (e > 0n) {
+    if (e & 1n) r = r * b % P;
+    b = b * b % P;
+    e >>= 1n;
+  }
+  return r;
+}
+function cpaceGenerator(code, transcript) {
+  for (let i = 0; i < 1e3; i++) {
+    const h = sha256(PROTOCOL, ` cpace generator ${i} `, code, " ", transcript);
+    h[31] &= 127;
+    const u = le(h);
+    if (u < 2n || u >= P) continue;
+    if (modpow((u * (u * (u + A) % P) + u) % P, (P - 1n) / 2n) === 1n) return h;
+  }
+  throw new Error("no generator found");
+}
+function x25519(scalar, u) {
+  return diffieHellman2({ privateKey: scalar, publicKey: createPublicKey2({ key: Buffer.concat([X_SPKI2, u]), format: "der", type: "spki" }) });
+}
+var P, A, le, X_SPKI2, X_PKCS8, Cpace;
+var init_cpace = __esm({
+  "link/pairing/cpace.ts"() {
+    "use strict";
+    init_crypto();
+    P = 2n ** 255n - 19n;
+    A = 486662n;
+    le = (b) => b.reduceRight((n, x) => n << 8n | BigInt(x), 0n);
+    X_SPKI2 = Buffer.from("302a300506032b656e032100", "hex");
+    X_PKCS8 = Buffer.from("302e020100300506032b656e04220420", "hex");
+    Cpace = class {
+      #y;
+      share;
+      constructor(code, transcript, scalar) {
+        this.#y = scalar ? createPrivateKey2({ key: Buffer.concat([X_PKCS8, scalar]), format: "der", type: "pkcs8" }) : generateKeyPairSync2("x25519").privateKey;
+        this.share = x25519(this.#y, cpaceGenerator(code, transcript));
+      }
+      /** The pairing secret the auth MACs use: from K, both shares (initiator's first) and the transcript. */
+      secret(theirs, initiator, transcript) {
+        if (theirs.length !== 32) throw new Error("malformed CPace share");
+        const k = x25519(this.#y, theirs);
+        const [ya, yb] = initiator ? [this.share, theirs] : [theirs, this.share];
+        return sha256(PROTOCOL, " cpace secret ", k, ya, yb, transcript);
+      }
+    };
+  }
+});
+
 // link/pairing/handshake.ts
 import { randomBytes as randomBytes5 } from "node:crypto";
 async function nextJson(path, ms) {
@@ -821,22 +874,23 @@ async function handshake(path, me, trust, scanned) {
 async function handshakeInner(path, me, trust, scanned, saw) {
   const role = path.initiator ? "i" : "r";
   const eph = newEphemeral();
-  const hello = {
+  const hello = (cpace) => ({
     t: "hello",
     v: 0,
     protocol: PROTOCOL,
     device: me.key.device,
     key: b64(me.key.publicRaw),
     eph: b64(eph.publicRaw),
-    person: me.person,
-    name: me.name,
+    person: cpace ? { id: "", name: "" } : path.transport === "relay" ? { id: me.person.id, name: "" } : me.person,
+    name: cpace || path.transport === "relay" ? "" : me.name,
     kind: me.kind,
-    ...scanned && role === "i" ? { pair: scanned.code !== void 0 ? "code" : scanned.offer } : {}
-  };
-  const mine = enc(hello);
+    ...scanned && role === "i" ? { pair: scanned.cpace !== void 0 ? "cpace" : scanned.code !== void 0 ? "code" : scanned.offer } : {}
+  });
+  let mine;
   let theirsRaw;
   let theirs;
   if (role === "i") {
+    mine = enc(hello(scanned?.cpace !== void 0));
     await path.send(mine, "control");
     const r = await nextJson(path, 1e4);
     theirsRaw = r.raw;
@@ -847,10 +901,12 @@ async function handshakeInner(path, me, trust, scanned, saw) {
     theirsRaw = r.raw;
     theirs = checkHello(r.msg);
     saw(theirs);
+    mine = enc(hello(theirs.pair === "cpace"));
     await path.send(mine, "control");
   }
   const transcript = role === "i" ? sha256(PROTOCOL, mine, theirsRaw) : sha256(PROTOCOL, theirsRaw, mine);
   const other = role === "i" ? "r" : "i";
+  if (role === "i" && scanned?.cpace !== void 0 || role === "r" && theirs.pair === "cpace") return cpaceRest(path, me, trust, role, scanned?.cpace, eph, theirs, transcript);
   let secret;
   let offer;
   let codeAgents;
@@ -906,6 +962,63 @@ async function handshakeInner(path, me, trust, scanned, saw) {
   const kind = theirs.kind === "ipad" ? "ipad" : "link";
   return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind }, paired, offer, ...offer === "code" ? { code: true, codeAgents: codeAgents ?? [] } : {} };
 }
+async function cpaceRest(path, me, trust, role, typed, eph, theirs, transcript) {
+  const other = role === "i" ? "r" : "i";
+  const code = role === "i" ? typed : trust.liveCode?.();
+  if (!code) throw new Error("no pairing code is live on this Link (they last 10 minutes; ask your agent for a new one)");
+  if (!/^\d{6}$/.test(code)) throw new WrongCode("a pairing code is 6 digits");
+  const cp = new Cpace(code, transcript);
+  await path.send(enc({ t: "cpace", y: b64(cp.share) }), "control");
+  const { msg: c } = await nextJson(path, 1e4);
+  if (c.t !== "cpace" || typeof c.y !== "string") throw new Error("expected cpace during the code check");
+  let secret;
+  try {
+    secret = cp.secret(unb64(c.y), role === "i", transcript);
+  } catch {
+    if (role === "r") trust.codeFailed?.();
+    throw new WrongCode("wrong pairing code");
+  }
+  const label = (what, who3) => Buffer.concat([Buffer.from(`${PROTOCOL} ${what} ${who3} `), transcript]);
+  const auth = { t: "auth", sig: signWith(me.key, label("auth", role)), mac: mac(secret, label("pair", role)) };
+  const check = (a) => {
+    if (a.t !== "auth" || typeof a.sig !== "string") throw new Error("malformed auth");
+    if (typeof a.mac !== "string" || !macEqual(a.mac, mac(secret, label("pair", other)))) {
+      if (role === "r") trust.codeFailed?.();
+      throw new WrongCode("wrong pairing code");
+    }
+    if (!verifyFrom(unb64(theirs.key), label("auth", other), a.sig)) throw new Error("peer did not prove its key");
+  };
+  let codeAgents;
+  if (role === "i") {
+    await path.send(enc(auth), "control");
+    check((await nextJson(path, 1e4)).msg);
+  } else {
+    check((await nextJson(path, 1e4)).msg);
+    codeAgents = trust.takeCode?.(code, theirs.device);
+    if (!codeAgents) throw new Error("the pairing code expired or was already used (ask your agent for a new one)");
+    await path.send(enc(auth), "control");
+  }
+  const known = trust.pairedKey(theirs.device);
+  if (known && known !== theirs.key) throw new Error(`device ${theirs.device} is already paired with another key`);
+  const keys = sessionKeys(eph, unb64(theirs.eph), transcript);
+  const session = new Session(path, new FrameCipher(role === "i" ? keys.i2r : keys.r2i, transcript), new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript));
+  const who2 = async () => {
+    const m = await Promise.race([session.next(), new Promise((r) => setTimeout(() => r(null), 1e4).unref())]);
+    const p = m?.h.person;
+    if (m?.h.t !== "who" || typeof p?.id !== "string" || typeof p.name !== "string") throw new Error("expected who after the code check");
+    return { person: { id: p.id, name: p.name }, name: String(m.h.name ?? "") };
+  };
+  let them;
+  if (role === "r") {
+    await session.send({ t: "who", person: me.person, name: me.name }, void 0, "control");
+    them = await who2();
+  } else {
+    them = await who2();
+    await session.send({ t: "who", person: them.person, name: me.name }, void 0, "control");
+  }
+  const kind = theirs.kind === "ipad" ? "ipad" : "link";
+  return { session, peer: { device: theirs.device, key: theirs.key, person: them.person, name: them.name, kind }, paired: !known, offer: "code", code: true, cpace: true, codeAgents: codeAgents ?? [] };
+}
 async function codeRounds(path, role, code, transcript) {
   if (!/^\d{6}$/.test(code)) throw new WrongCode("a pairing code is 6 digits");
   const other = role === "i" ? "r" : "i";
@@ -941,6 +1054,7 @@ var init_handshake = __esm({
   "link/pairing/handshake.ts"() {
     "use strict";
     init_crypto();
+    init_cpace();
     enc = (v) => Buffer.from(JSON.stringify(v));
     HandshakeError = class extends Error {
       peer;
@@ -967,9 +1081,9 @@ var init_handshake = __esm({
         return this.path.send(this.#tx.seal(plain), priority);
       }
       async next() {
-        const f2 = await this.path.next();
-        if (!f2) return null;
-        const plain = this.#rx.open(f2);
+        const f3 = await this.path.next();
+        if (!f3) return null;
+        const plain = this.#rx.open(f3);
         const n = plain.readUInt32BE(0);
         return { h: JSON.parse(plain.subarray(4, 4 + n).toString("utf8")), body: plain.subarray(4 + n) };
       }
@@ -1220,13 +1334,14 @@ var init_coordinator = __esm({
           const r = await handshake(path, this.#me, this.#trust());
           if (r.code) {
             const agents = r.codeAgents ?? [];
+            if (r.cpace) this.#log(`${r.peer.name} (${r.peer.device}) proved the code through the relay's pairing room (${path.remote})`);
             if (r.paired) this.#remember(r.peer, null, "code");
             const d = this.#catalog.device(r.peer.device);
             if (d.kind === "ipad" && d.person.id === this.#me.person.id && !mayApprove(d, this.#me.person.id)) {
               const { approver_asked: _, ...rest2 } = d;
               this.#catalog.pairDevice({ ...rest2, approves: true });
             }
-            if (!r.paired) for (const f2 of this.#onPaired) f2(this.#catalog.device(r.peer.device));
+            if (!r.paired) for (const f3 of this.#onPaired) f3(this.#catalog.device(r.peer.device));
             this.onCodePaired(this.#catalog.device(r.peer.device), agents);
           } else if (r.offer) {
             const source = this.#offers.source(r.offer) ?? "terminal";
@@ -1235,7 +1350,7 @@ var init_coordinator = __esm({
             else {
               const known = this.#catalog.device(r.peer.device);
               if (known.kind === "ipad" && known.person.id === this.#me.person.id && !mayApprove(known, this.#me.person.id)) this.#letApprove(known, source);
-              for (const f2 of this.#onPaired) f2(this.#catalog.device(r.peer.device));
+              for (const f3 of this.#onPaired) f3(this.#catalog.device(r.peer.device));
             }
           }
           this.#quiet.clear(`${hostOf(path.remote)}|`);
@@ -1260,7 +1375,7 @@ var init_coordinator = __esm({
         if (peer.kind === "ipad" && own2 && source) this.#letApprove(d, source);
         if (via === "invite") return;
         for (const p of this.#peers.values()) this.#news(p);
-        for (const f2 of this.#onPaired) f2(this.#catalog.device(d.device) ?? d);
+        for (const f3 of this.#onPaired) f3(this.#catalog.device(d.device) ?? d);
       }
       /** iPads of this person's whose Allow counts. */
       #approvers() {
@@ -1436,6 +1551,7 @@ var init_coordinator = __esm({
        * another transport is another path to the same peer.
        */
       #bind(session, device, name, initiator) {
+        name ||= this.#catalog.device(device)?.name ?? device;
         const transport = session.path.transport;
         const known = this.#peers.get(device);
         if (known) {
@@ -1811,14 +1927,14 @@ var init_capabilities = __esm({
             if (d) return { ...this.project(d.send, ctx.who.agent, d.redelivered), isError: false };
             const left = deadline - Date.now();
             if (left <= 0 || ctx.signal?.aborted) break;
-            const tick = new AbortController(), stop = () => tick.abort();
-            ctx.signal?.addEventListener("abort", stop, { once: true });
-            const timer = setTimeout(stop, Math.min(left, (this.opts.progressEvery ?? 15) * 1e3));
+            const tick = new AbortController(), stop2 = () => tick.abort();
+            ctx.signal?.addEventListener("abort", stop2, { once: true });
+            const timer = setTimeout(stop2, Math.min(left, (this.opts.progressEvery ?? 15) * 1e3));
             try {
               await this.opts.inbox.arrival(ctx.who.agent, tick.signal);
             } finally {
               clearTimeout(timer);
-              ctx.signal?.removeEventListener("abort", stop);
+              ctx.signal?.removeEventListener("abort", stop2);
             }
             ctx.progress?.({ elapsed_s: Math.round((Date.now() - started) / 1e3), timeout_s: timeout });
           }
@@ -1907,16 +2023,16 @@ function serveHost(o) {
     let authed = false;
     let client2 = "?";
     const calls = /* @__PURE__ */ new Map();
-    const send = (f2) => sock.writable && sock.write(JSON.stringify(f2) + "\n");
+    const send = (f3) => sock.writable && sock.write(JSON.stringify(f3) + "\n");
     const pushes = /* @__PURE__ */ new Map();
     let pushNo = 0;
     let closed2;
     const closedP = new Promise((r) => closed2 = r);
-    sock.on("data", frames(async (f2) => {
-      if (f2.t === "hello") {
-        const got = Buffer.from(String(f2.token ?? ""));
+    sock.on("data", frames(async (f3) => {
+      if (f3.t === "hello") {
+        const got = Buffer.from(String(f3.token ?? ""));
         authed = got.length === want2.length && timingSafeEqual2(got, want2);
-        client2 = String(f2.client);
+        client2 = String(f3.client);
         if (!authed) {
           log("rejected", { client: client2 });
           sock.destroy();
@@ -1924,49 +2040,49 @@ function serveHost(o) {
         return;
       }
       if (!authed) return sock.destroy();
-      if (f2.t === "pushed") {
-        pushes.get(f2.push)?.({ ok: f2.ok === true, ...f2.reason ? { reason: String(f2.reason).slice(0, 300) } : {} });
+      if (f3.t === "pushed") {
+        pushes.get(f3.push)?.({ ok: f3.ok === true, ...f3.reason ? { reason: String(f3.reason).slice(0, 300) } : {} });
         return;
       }
-      if (f2.t === "cancel") {
-        calls.get(f2.id)?.abort();
-        log("cancel", { client: client2, id: f2.id });
+      if (f3.t === "cancel") {
+        calls.get(f3.id)?.abort();
+        log("cancel", { client: client2, id: f3.id });
         return;
       }
       const ac = new AbortController();
-      calls.set(f2.id, ac);
+      calls.set(f3.id, ac);
       try {
-        if (f2.t === "call" && f2.tool === "connect") {
+        if (f3.t === "call" && f3.tool === "connect") {
           if (!o.connect) throw new ReflexError("unavailable", [{ code: "unavailable", msg: "This host can't pair an iPad.", fix: "Use wait_for_user." }]);
-          const json = o.connect(f2.who);
+          const json = o.connect(f3.who);
           log("call", { client: client2, tool: "connect", connected: Boolean(json.connected) });
-          send({ t: "result", id: f2.id, json, images: [], isError: json.ok === false });
-        } else if (f2.t === "call") {
-          const who2 = await o.authorize(f2.who, ac.signal, (p) => send({ t: "progress", id: f2.id, ...p }));
+          send({ t: "result", id: f3.id, json, images: [], isError: json.ok === false });
+        } else if (f3.t === "call") {
+          const who2 = await o.authorize(f3.who, ac.signal, (p) => send({ t: "progress", id: f3.id, ...p }));
           const started = Date.now();
-          if (f2.tool === "wait_for_user") log("wait_start", { client: client2, who: who2.name, args: f2.args });
-          const r = await core.call(f2.tool, f2.args, {
+          if (f3.tool === "wait_for_user") log("wait_start", { client: client2, who: who2.name, args: f3.args });
+          const r = await core.call(f3.tool, f3.args, {
             who: who2,
             signal: ac.signal,
-            progress: (p) => send({ t: "progress", id: f2.id, ...p })
+            progress: (p) => send({ t: "progress", id: f3.id, ...p })
           });
-          log("call", { client: client2, who: who2.name, tool: f2.tool, ms: Date.now() - started, isError: r.isError, ...r.isError ? { reason: r.json.reason } : {}, aborted: ac.signal.aborted });
+          log("call", { client: client2, who: who2.name, tool: f3.tool, ms: Date.now() - started, isError: r.isError, ...r.isError ? { reason: r.json.reason } : {}, aborted: ac.signal.aborted });
           send({
             t: "result",
-            id: f2.id,
+            id: f3.id,
             json: r.json,
             images: r.images.map((b) => b.toString("base64")),
             ...r.files?.length ? { files: r.files.map((x) => ({ id: x.id, name: x.name, mime: x.mime, data: x.data.toString("base64") })) } : {},
             isError: r.isError
           });
-        } else if (f2.t === "listen") {
+        } else if (f3.t === "listen") {
           if (!o.listen) throw new ReflexError("unavailable", [{ code: "unavailable", msg: "This host takes no push targets.", fix: "Use wait_for_user." }]);
-          const who2 = await o.authorize(f2.who, ac.signal);
-          const id2 = f2.id;
+          const who2 = await o.authorize(f3.who, ac.signal);
+          const id2 = f3.id;
           const target = o.listen({
             who: who2,
-            adapter: String(f2.adapter),
-            config: f2.config && typeof f2.config === "object" ? f2.config : {},
+            adapter: String(f3.adapter),
+            config: f3.config && typeof f3.config === "object" ? f3.config : {},
             client: client2,
             closed: closedP,
             push: (json, images, ms = 5e3) => new Promise((resolve5) => {
@@ -1983,22 +2099,22 @@ function serveHost(o) {
               send({ t: "push", id: id2, push: n, json, images: images.map((b) => b.toString("base64")), deadline: Date.now() + ms - 250 });
             })
           });
-          log("listening", { client: client2, who: who2.name, adapter: f2.adapter, target });
+          log("listening", { client: client2, who: who2.name, adapter: f3.adapter, target });
           send({ t: "listening", id: id2, target, agent: who2.agent });
-        } else if (f2.t === "adapters") {
+        } else if (f3.t === "adapters") {
           if (!o.adapters) throw new ReflexError("unavailable", [{ code: "unavailable", msg: "This host takes no push targets.", fix: "Use wait_for_user." }]);
-          const who2 = await o.authorize(f2.who, ac.signal);
-          const json = o.adapters(who2, String(f2.action), f2.args && typeof f2.args === "object" ? f2.args : {});
-          log("adapters", { client: client2, who: who2.name, action: f2.action });
-          send({ t: "result", id: f2.id, json, images: [], isError: false });
+          const who2 = await o.authorize(f3.who, ac.signal);
+          const json = o.adapters(who2, String(f3.action), f3.args && typeof f3.args === "object" ? f3.args : {});
+          log("adapters", { client: client2, who: who2.name, action: f3.action });
+          send({ t: "result", id: f3.id, json, images: [], isError: false });
         } else {
           throw new ReflexError("invalid_input", [{ code: "invalid_input", msg: "Unknown receiver request.", fix: "Use wait_for_user or a Send adapter." }]);
         }
       } catch (e) {
-        if (e instanceof ReflexError) send({ t: "result", id: f2.id, json: { ok: false, ...e.body }, images: [], isError: true });
-        else send({ t: "failed", id: f2.id, message: String(e.message) });
+        if (e instanceof ReflexError) send({ t: "result", id: f3.id, json: { ok: false, ...e.body }, images: [], isError: true });
+        else send({ t: "failed", id: f3.id, message: String(e.message) });
       } finally {
-        calls.delete(f2.id);
+        calls.delete(f3.id);
       }
     }));
     sock.on("close", () => {
@@ -2337,8 +2453,8 @@ CREATE INDEX IF NOT EXISTS push_attempts_send ON push_attempts(space, send, reci
         writeFileSync3(this.#secretFile(id2), secret, { mode: 384 });
       }
       secret(id2) {
-        const f2 = this.#secretFile(id2);
-        return existsSync4(f2) ? readFileSync4(f2, "utf8") : void 0;
+        const f3 = this.#secretFile(id2);
+        return existsSync4(f3) ? readFileSync4(f3, "utf8") : void 0;
       }
       /** Records that a push started; durable before the adapter runs. */
       begin(target, space, send, recipient2, now = Date.now()) {
@@ -3464,12 +3580,12 @@ var require_util = __commonJS({
       return str.replace(/~1/g, "/").replace(/~0/g, "~");
     }
     exports.unescapeJsonPointer = unescapeJsonPointer;
-    function eachItem(xs, f2) {
+    function eachItem(xs, f3) {
       if (Array.isArray(xs)) {
         for (const x of xs)
-          f2(x);
+          f3(x);
       } else {
-        f2(xs);
+        f3(xs);
       }
     }
     exports.eachItem = eachItem;
@@ -3516,10 +3632,10 @@ var require_util = __commonJS({
     }
     exports.setEvaluated = setEvaluated;
     var snippets = {};
-    function useFunc(gen, f2) {
+    function useFunc(gen, f3) {
       return gen.scopeValue("func", {
-        ref: f2,
-        code: snippets[f2.code] || (snippets[f2.code] = new code_1._Code(f2.code))
+        ref: f3,
+        code: snippets[f3.code] || (snippets[f3.code] = new code_1._Code(f3.code))
       });
     }
     exports.useFunc = useFunc;
@@ -5712,9 +5828,9 @@ var require_utils = __commonJS({
       let output = "";
       for (let i = 0; i < input.length; i++) {
         if (input[i] === "%" && i + 2 < input.length) {
-          const hex = input.slice(i + 1, i + 3);
-          if (isHexPair(hex)) {
-            const normalizedHex = hex.toUpperCase();
+          const hex2 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex2)) {
+            const normalizedHex = hex2.toUpperCase();
             const decoded = String.fromCharCode(parseInt(normalizedHex, 16));
             if (decodeUnreserved && isUnreserved(decoded)) {
               output += decoded;
@@ -5734,9 +5850,9 @@ var require_utils = __commonJS({
       for (let i = 0; i < input.length; i++) {
         const ch = input[i];
         if (ch === "%" && i + 2 < input.length) {
-          const hex = input.slice(i + 1, i + 3);
-          if (isHexPair(hex)) {
-            const normalizedHex = hex.toUpperCase();
+          const hex2 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex2)) {
+            const normalizedHex = hex2.toUpperCase();
             const decoded = String.fromCharCode(parseInt(normalizedHex, 16));
             if (decoded !== "." && isUnreserved(decoded)) {
               output += decoded;
@@ -5776,9 +5892,9 @@ var require_utils = __commonJS({
       for (let i = 0; i < input.length; i++) {
         const ch = input[i];
         if (ch === "%" && i + 2 < input.length) {
-          const hex = input.slice(i + 1, i + 3);
-          if (isHexPair(hex)) {
-            output += "%" + hex.toUpperCase();
+          const hex2 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex2)) {
+            output += "%" + hex2.toUpperCase();
             i += 2;
             continue;
           }
@@ -5814,9 +5930,9 @@ var require_utils = __commonJS({
       for (let i = 0; i < input.length; i++) {
         const ch = input[i];
         if (ch === "%" && i + 2 < input.length) {
-          const hex = input.slice(i + 1, i + 3);
-          if (isHexPair(hex)) {
-            output += "%" + hex.toUpperCase();
+          const hex2 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex2)) {
+            output += "%" + hex2.toUpperCase();
             i += 2;
             continue;
           }
@@ -5861,9 +5977,9 @@ var require_utils = __commonJS({
       for (let i = 0; i < input.length; i++) {
         const ch = input[i];
         if (ch === "%" && i + 2 < input.length) {
-          const hex = input.slice(i + 1, i + 3);
-          if (isHexPair(hex)) {
-            const normalizedHex = hex.toUpperCase();
+          const hex2 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex2)) {
+            const normalizedHex = hex2.toUpperCase();
             const decoded = String.fromCharCode(parseInt(normalizedHex, 16));
             if (isUnreserved(decoded)) {
               output += decoded;
@@ -5901,9 +6017,9 @@ var require_utils = __commonJS({
       let output = "";
       for (let i = 0; i < input.length; i++) {
         if (input[i] === "%" && i + 2 < input.length) {
-          const hex = input.slice(i + 1, i + 3);
-          if (isHexPair(hex)) {
-            output += "%" + hex.toUpperCase();
+          const hex2 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex2)) {
+            output += "%" + hex2.toUpperCase();
             i += 2;
             continue;
           }
@@ -9882,7 +9998,7 @@ async function startAgentHost(o) {
     return {
       code: spaced(c.code),
       expires_in_s: Math.round((c.expires - Date.now()) / 1e3),
-      tell_the_person: `Open Reflex on your iPad, tap Pair with Mac, and type ${spaced(c.code)}. The iPad needs to be on the same Wi-Fi as this Mac. The code works once, for 10 minutes.`,
+      tell_the_person: `Open Reflex on your iPad, tap Pair with Mac, and type ${spaced(c.code)}. ${o.relay ? "The iPad finds this Mac on the same Wi-Fi or nearby, or through the relay from anywhere." : "The iPad needs to be on the same Wi-Fi as this Mac."} The code works once, for 10 minutes.`,
       next: "Write the code and tell_the_person in your reply now: the person can't see this tool result. Then call wait_for_user: it returns once they have typed the code and pressed Send."
     };
   }
@@ -10044,8 +10160,8 @@ var init_agent_host = __esm({
         const v = this.#store.get(send);
         return v?.space === space ? v : void 0;
       }
-      take(agent, f2) {
-        for (const e of this.#inbox.pending(recipient(agent), f2.space)) {
+      take(agent, f3) {
+        for (const e of this.#inbox.pending(recipient(agent), f3.space)) {
           const send = this.#frozen(e.space, e.send);
           if (!send) continue;
           if (this.inFlight(e.space, e.send, recipient(agent))) continue;
@@ -10095,15 +10211,15 @@ function parseFaults(spec) {
   const out3 = /* @__PURE__ */ new Map();
   for (const rule of spec.split(";").map((r) => r.trim()).filter(Boolean)) {
     const [name, settings = ""] = rule.split(":");
-    const f2 = { ...NONE };
+    const f3 = { ...NONE };
     for (const kv of settings.split(",").map((s) => s.trim()).filter(Boolean)) {
       const [k, v] = kv.split("=");
       const n = Number(v);
-      if (!(k in f2) || !Number.isFinite(n) || n < 0 || (k === "drop" || k === "dup") && n > 1)
+      if (!(k in f3) || !Number.isFinite(n) || n < 0 || (k === "drop" || k === "dup") && n > 1)
         throw new Error(`bad fault setting '${kv}' (use drop=0..1, dup=0..1, delay=<ms>, jitter=<ms>)`);
-      f2[k] = n;
+      f3[k] = n;
     }
-    out3.set(name.trim(), f2);
+    out3.set(name.trim(), f3);
   }
   return out3;
 }
@@ -10144,43 +10260,43 @@ var init_fault = __esm({
       }
       /** How many copies of a frame get through (0, 1 or 2), and after how long. */
       #fate() {
-        const f2 = this.#faults();
-        const copies = Math.random() < f2.drop ? 0 : Math.random() < f2.dup ? 2 : 1;
-        return { copies, wait: f2.delay + (f2.jitter ? Math.random() * f2.jitter : 0) };
+        const f3 = this.#faults();
+        const copies = Math.random() < f3.drop ? 0 : Math.random() < f3.dup ? 2 : 1;
+        return { copies, wait: f3.delay + (f3.jitter ? Math.random() * f3.jitter : 0) };
       }
-      send(frame2, priority) {
+      send(frame3, priority) {
         const { copies, wait } = this.#fate();
         this.#outChain = this.#outChain.then(async () => {
           if (wait) await new Promise((r) => setTimeout(r, wait));
-          for (let i = 0; i < copies; i++) await this.#inner.send(frame2, priority).catch(() => {
+          for (let i = 0; i < copies; i++) await this.#inner.send(frame3, priority).catch(() => {
           });
         });
         return this.#outChain;
       }
       async #pull() {
         for (; ; ) {
-          const f2 = await this.#inner.next();
-          if (!f2) {
+          const f3 = await this.#inner.next();
+          if (!f3) {
             this.#inChain = this.#inChain.then(() => this.#deliver(null));
             return;
           }
           const { copies, wait } = this.#fate();
           this.#inChain = this.#inChain.then(async () => {
             if (wait) await new Promise((r) => setTimeout(r, wait));
-            for (let i = 0; i < copies; i++) this.#deliver(f2);
+            for (let i = 0; i < copies; i++) this.#deliver(f3);
           });
         }
       }
-      #deliver(f2) {
+      #deliver(f3) {
         const w = this.#waiters.shift();
-        if (w) w(f2);
-        else this.#inbox.push(f2);
+        if (w) w(f3);
+        else this.#inbox.push(f3);
       }
       next() {
         if (this.#inbox.length) {
-          const f2 = this.#inbox.shift();
-          if (f2 === null) this.#inbox.unshift(null);
-          return Promise.resolve(f2);
+          const f3 = this.#inbox.shift();
+          if (f3 === null) this.#inbox.unshift(null);
+          return Promise.resolve(f3);
         }
         return new Promise((r) => this.#waiters.push(r));
       }
@@ -10205,8 +10321,8 @@ var init_fault = __esm({
         return this.#inner.name;
       }
       /** Changes the faults; live Paths take them from their next frame. */
-      set(f2) {
-        this.#faults = f2 ?? { ...NONE };
+      set(f3) {
+        this.#faults = f3 ?? { ...NONE };
       }
       faults() {
         return this.#faults;
@@ -10361,10 +10477,10 @@ var require_service = __commonJS({
     var service_types_1 = require_service_types();
     var TLD = ".local";
     var Service = class extends events_1.EventEmitter {
-      constructor(config2, start2, stop) {
+      constructor(config2, start2, stop2) {
         super();
         this.start = start2;
-        this.stop = stop;
+        this.stop = stop2;
         this.probe = true;
         this.published = false;
         this.activated = false;
@@ -10503,7 +10619,7 @@ var require_registry = __commonJS({
       }
       publish(config2) {
         const configProbe = config2.probe !== false;
-        const service = new service_1.default(config2, start2.bind(null, this), stop.bind(null, this));
+        const service = new service_1.default(config2, start2.bind(null, this), stop2.bind(null, this));
         function start2(registry2, { probe = configProbe } = {}) {
           if (service.activated)
             return;
@@ -10525,7 +10641,7 @@ var require_registry = __commonJS({
             registry2.announce(registry2.server, service);
           }
         }
-        function stop(registry2, callback) {
+        function stop2(registry2, callback) {
           if (!callback)
             callback = noop;
           if (!service.activated)
@@ -13548,11 +13664,11 @@ var init_lan = __esm({
           const n = this.#buf.readUInt32BE(0);
           if (n > MAX_FRAME) return this.close(`frame of ${n} bytes is over the limit`);
           if (this.#buf.length < 4 + n) break;
-          const f2 = this.#buf.subarray(4, 4 + n);
+          const f3 = this.#buf.subarray(4, 4 + n);
           this.#buf = this.#buf.subarray(4 + n);
           const w = this.#waiters.shift();
-          if (w) w(f2);
-          else this.#frames.push(f2);
+          if (w) w(f3);
+          else this.#frames.push(f3);
         }
       }
       #finish(reason) {
@@ -13561,13 +13677,13 @@ var init_lan = __esm({
         for (const w of this.#waiters.splice(0)) w(null);
         this.#resolveClosed(reason);
       }
-      async send(frame2, _priority) {
+      async send(frame3, _priority) {
         if (this.#done) throw new Error("path closed");
-        if (frame2.length > MAX_FRAME) throw new Error(`frame of ${frame2.length} bytes is over the limit`);
+        if (frame3.length > MAX_FRAME) throw new Error(`frame of ${frame3.length} bytes is over the limit`);
         const head = Buffer.alloc(4);
-        head.writeUInt32BE(frame2.length);
-        this.#m.sentBytes += frame2.length + 4;
-        const ok2 = this.#socket.write(Buffer.concat([head, frame2]));
+        head.writeUInt32BE(frame3.length);
+        this.#m.sentBytes += frame3.length + 4;
+        const ok2 = this.#socket.write(Buffer.concat([head, frame3]));
         this.#m.queuedBytes = this.#socket.writableLength;
         if (!ok2) {
           await new Promise((r) => {
@@ -13583,8 +13699,8 @@ var init_lan = __esm({
         }
       }
       next() {
-        const f2 = this.#frames.shift();
-        if (f2) return Promise.resolve(f2);
+        const f3 = this.#frames.shift();
+        if (f3) return Promise.resolve(f3);
         if (this.#done) return Promise.resolve(null);
         return new Promise((r) => this.#waiters.push(r));
       }
@@ -13708,7 +13824,7 @@ function unframe(b) {
   const n = b[0];
   return { device: b.subarray(1, 1 + n).toString(), ch: b.readUInt32BE(1 + n), payload: b.subarray(5 + n) };
 }
-var RELAY_PROTOCOL, MAX_FRAME2, OPENER, HIGH_WATER, roomFor, RelayPath, RelayTransport;
+var RELAY_PROTOCOL, MAX_FRAME2, OPENER, HIGH_WATER, roomFor, DEFAULT_RELAY, PAIRING_ROOM, RelayPath, RelayTransport;
 var init_relay = __esm({
   "link/transports/relay.ts"() {
     "use strict";
@@ -13718,6 +13834,8 @@ var init_relay = __esm({
     OPENER = 2147483648;
     HIGH_WATER = 2 * 1024 * 1024;
     roomFor = (person) => createHash4("sha256").update(`${RELAY_PROTOCOL} room ${person}`).digest("hex").slice(0, 32);
+    DEFAULT_RELAY = "wss://reflex.eilmer.si";
+    PAIRING_ROOM = createHash4("sha256").update(`${RELAY_PROTOCOL} pairing room`).digest("hex").slice(0, 32);
     RelayPath = class {
       id;
       transport = "relay";
@@ -13743,11 +13861,11 @@ var init_relay = __esm({
         this.remote = `${t.url} \u2192 ${device}`;
         this.closed = new Promise((r) => this.#resolveClosed = r);
       }
-      deliver(f2) {
-        this.#m.receivedBytes += f2.length;
+      deliver(f3) {
+        this.#m.receivedBytes += f3.length;
         const w = this.#waiters.shift();
-        if (w) w(f2);
-        else this.#frames.push(f2);
+        if (w) w(f3);
+        else this.#frames.push(f3);
       }
       finish(reason) {
         if (this.#done) return;
@@ -13756,15 +13874,15 @@ var init_relay = __esm({
         this.#t.forget(this);
         this.#resolveClosed(reason);
       }
-      async send(f2, _p) {
+      async send(f3, _p) {
         if (this.#done) throw new Error("path closed");
-        if (f2.length > MAX_FRAME2) throw new Error(`frame of ${f2.length} bytes is over the limit`);
-        this.#m.sentBytes += f2.length;
-        await this.#t.write(frame(this.device, this.wireCh, f2));
+        if (f3.length > MAX_FRAME2) throw new Error(`frame of ${f3.length} bytes is over the limit`);
+        this.#m.sentBytes += f3.length;
+        await this.#t.write(frame(this.device, this.wireCh, f3));
       }
       next() {
-        const f2 = this.#frames.shift();
-        if (f2) return Promise.resolve(f2);
+        const f3 = this.#frames.shift();
+        if (f3) return Promise.resolve(f3);
         if (this.#done) return Promise.resolve(null);
         return new Promise((r) => this.#waiters.push(r));
       }
@@ -13902,19 +14020,19 @@ var init_relay = __esm({
         }
       }
       #data(b) {
-        const f2 = unframe(b);
-        if (!f2) return;
-        const theyOpened = (f2.ch & OPENER) !== 0;
-        const ch = f2.ch & 2147483647;
-        const id2 = `relay-${f2.device}-${theyOpened ? "a" : "o"}${ch}`;
+        const f3 = unframe(b);
+        if (!f3) return;
+        const theyOpened = (f3.ch & OPENER) !== 0;
+        const ch = f3.ch & 2147483647;
+        const id2 = `relay-${f3.device}-${theyOpened ? "a" : "o"}${ch}`;
         let p = this.#paths.get(id2);
         if (!p) {
           if (!theyOpened) return;
-          p = new RelayPath(this, f2.device, ch, false);
+          p = new RelayPath(this, f3.device, ch, false);
           this.#paths.set(id2, p);
           this.#onPath?.(p);
         }
-        p.deliver(f2.payload);
+        p.deliver(f3.payload);
       }
       #sendWatch() {
         if (!this.#ready) return;
@@ -13977,11 +14095,11 @@ var init_framed = __esm({
           const n = this.#buf.readUInt32BE(0);
           if (n > MAX_FRAME3) return this.close(`frame of ${n} bytes is over the limit`);
           if (this.#buf.length < 4 + n) break;
-          const f2 = this.#buf.subarray(4, 4 + n);
+          const f3 = this.#buf.subarray(4, 4 + n);
           this.#buf = this.#buf.subarray(4 + n);
           const w = this.#waiters.shift();
-          if (w) w(f2);
-          else this.#frames.push(f2);
+          if (w) w(f3);
+          else this.#frames.push(f3);
         }
       }
       finish(reason) {
@@ -13990,17 +14108,17 @@ var init_framed = __esm({
         for (const w of this.#waiters.splice(0)) w(null);
         this.#resolveClosed(reason);
       }
-      async send(frame2, _priority) {
+      async send(frame3, _priority) {
         if (this.#done) throw new Error("path closed");
-        if (frame2.length > MAX_FRAME3) throw new Error(`frame of ${frame2.length} bytes is over the limit`);
+        if (frame3.length > MAX_FRAME3) throw new Error(`frame of ${frame3.length} bytes is over the limit`);
         const head = Buffer.alloc(4);
-        head.writeUInt32BE(frame2.length);
-        this.m.sentBytes += frame2.length + 4;
-        await this.write(Buffer.concat([head, frame2]));
+        head.writeUInt32BE(frame3.length);
+        this.m.sentBytes += frame3.length + 4;
+        await this.write(Buffer.concat([head, frame3]));
       }
       next() {
-        const f2 = this.#frames.shift();
-        if (f2) return Promise.resolve(f2);
+        const f3 = this.#frames.shift();
+        if (f3) return Promise.resolve(f3);
         if (this.#done) return Promise.resolve(null);
         return new Promise((r) => this.#waiters.push(r));
       }
@@ -14221,7 +14339,7 @@ function answering(socket, ms = 1e3) {
     s.once("error", () => done(false));
   });
 }
-var LinkError, APPROVAL_WAIT_S, PAIR_LINE, firstPairMs, Link;
+var LinkError, APPROVAL_WAIT_S, pairLine, PAIRING_ROOM_LINGER_MS, firstPairMs, Link;
 var init_link = __esm({
   "link/link.ts"() {
     "use strict";
@@ -14251,7 +14369,8 @@ var init_link = __esm({
       }
     };
     APPROVAL_WAIT_S = 300;
-    PAIR_LINE = "On your iPad: open Reflex, tap Pair with Mac, and type the code. The iPad needs to be on the same Wi-Fi as this Mac. Single use, 10 minutes.";
+    pairLine = (relay2) => `On your iPad: open Reflex, tap Pair with Mac, and type the code. ${relay2 ? "The iPad finds this Mac on the same Wi-Fi or nearby, or through the relay from anywhere." : "The iPad needs to be on the same Wi-Fi as this Mac."} Single use, 10 minutes.`;
+    PAIRING_ROOM_LINGER_MS = 3e4;
     firstPairMs = () => Number(process.env.REFLEX_FIRST_PAIR_S ?? 900) * 1e3;
     Link = class {
       dir;
@@ -14277,6 +14396,12 @@ var init_link = __esm({
       #faults = [];
       #log;
       #relayT = null;
+      /** The Relay's pairing room, while a typed code is live (link/pairing/cpace.ts), and since when no code is. */
+      #pairRoom = null;
+      #pairIdle = 0;
+      /** On the default Relay, when the person runs their own: points a new iPad to it. */
+      #pointer = null;
+      #pairTimer = null;
       /** A sign-in the person is approving in this terminal, step by step. */
       #reask;
       /** What this Link wrote into link.lock, while it holds it. */
@@ -14379,6 +14504,7 @@ Paired with ${d.name} (${d.device}).
           announce: (a) => this.#announce(a),
           code: (agent) => this.typedCode(agent),
           codeFor: (agent) => this.#offers.codeFor(agent)?.code,
+          relay: this.#relayT?.url,
           ipads: () => this.#catalog.devices().filter((d) => d.kind === "ipad" && d.person.id === this.#id.person.id).map((d) => d.name),
           remind: (a) => this.#coord.askAboutAgent({ id: a.id, name: a.name, color: a.color, requested_at: a.requested_at }),
           decision: (id2, ms, signal) => this.#waitDecision(id2, ms, signal),
@@ -14396,6 +14522,43 @@ Paired with ${d.name} (${d.device}).
           `${this.#id.name} (${this.#id.key.device}) for ${this.#id.person.name} \xB7 ${rec.spaces} pages with Sends, ${this.#inbox.all().length} Sends in the Inbox, ${devices.length} paired devices \xB7 ${this.#ports.lan !== void 0 ? `LAN :${this.#ports.lan}` : "no LAN"}${this.#ports.p2p ? ` \xB7 peer-to-peer :${this.#ports.p2p}` : ""}${this.#relayT ? ` \xB7 Relay ${this.#relayT.url}` : ""} \xB7 ${this.home.socket}`
         );
         if (this.#opts.prompt && process.stdin.isTTY) this.#terminal();
+        this.#pairTimer = setInterval(() => this.#syncPairingRoom(), 5e3);
+        this.#pairTimer.unref();
+      }
+      /**
+       * Waits in the Relay's pairing room while a typed code is live, so an iPad that isn't nearby can try it there.
+       * It goes in under a relay identity of its own, made for this, so the room never sees this Link's device ID.
+       * A Link on its own Relay also waits on the default one, only to tell a new iPad (which knows no other Relay)
+       * where to go: `{t:"moved", relay}`. The code is checked on the person's Relay, never there.
+       */
+      #syncPairingRoom() {
+        const url = this.#relayT?.url;
+        if (!url) return;
+        if (this.#offers.liveCode() !== void 0) {
+          this.#pairIdle = 0;
+          if (this.#pairRoom) return;
+          const room = new RelayTransport({ url, key: newDeviceKey().key, room: () => PAIRING_ROOM, watch: () => ["*"], log: this.#log, name: "relay-pairing" });
+          room.onReady = () => this.#log(`relay: waiting in the pairing room on ${url} while the code is live`);
+          this.#pairRoom = room;
+          void this.#coord.addTransport(room);
+          if (url !== DEFAULT_RELAY) {
+            const pointer = new RelayTransport({ url: DEFAULT_RELAY, key: newDeviceKey().key, room: () => PAIRING_ROOM, watch: () => ["*"], log: this.#log, name: "relay-pointer" });
+            pointer.onReady = () => this.#log(`relay: pointing new iPads from ${DEFAULT_RELAY} to ${url} while the code is live`);
+            this.#pointer = pointer;
+            void pointer.listen((p) => {
+              void p.send(Buffer.from(JSON.stringify({ t: "moved", relay: url })), "control").catch(() => {
+              }).finally(() => setTimeout(() => p.close("pointed to the person's Relay"), 1e3).unref());
+            });
+          }
+          return;
+        }
+        if (!this.#pairRoom) return;
+        this.#pairIdle ||= Date.now();
+        if (Date.now() - this.#pairIdle < PAIRING_ROOM_LINGER_MS) return;
+        void this.#coord.removeTransport(this.#pairRoom);
+        void this.#pointer?.close();
+        this.#pairRoom = this.#pointer = null;
+        this.#log(`relay: left the pairing room (no code is live)`);
       }
       /** Wraps the transports (LAN, peer-to-peer Wi-Fi where it runs, Relay) in fault injection when the Link was started with --fault. */
       #faulty(list) {
@@ -14418,25 +14581,27 @@ Paired with ${d.name} (${d.device}).
             this.#decide(a.id, /^y/i.test(line.trim()) ? "approved" : "denied", "terminal");
             return this.#ask();
           }
-          if (this.#ports.lan === void 0) return void process.stdout.write("Pairing needs the LAN; this Link was started without it.\n");
+          if (this.#ports.lan === void 0 && !this.#relayT) return void process.stdout.write("Pairing needs the LAN or a Relay; this Link was started without either.\n");
           void this.showPairingCode();
         });
-        if (this.#ports.lan !== void 0) void this.showPairingCode();
+        if (this.#ports.lan !== void 0 || this.#relayT) void this.showPairingCode();
       }
       async showPairingCode() {
         const { code } = this.typedCode();
         process.stdout.write(`
 Pairing code: ${code.slice(0, 3)} ${code.slice(3)}
-${PAIR_LINE}
+${pairLine(this.#relayT !== null)}
 Press Enter for a new code.
 `);
       }
       /** The live 6-digit code (a new one if none is live), with `agent` among the Agents typing it approves. */
       typedCode(agent) {
-        if (this.#ports.lan === void 0) throw new LinkError("no_lan", "Pairing an iPad needs the local network, and this Link was started with --no-lan.", "Restart it without --no-lan.");
+        if (this.#ports.lan === void 0 && !this.#relayT)
+          throw new LinkError("no_lan", "Pairing an iPad needs the local network or a Relay, and this Link was started with --no-lan and no Relay.", "Restart it without --no-lan, or with a Relay.");
         const before = this.#offers.liveCode();
         const c = this.#offers.code(agent);
-        if (c.code !== before) this.#log("made a pairing code (6 digits, single use, 10 minutes)");
+        if (c.code !== before) this.#log(`made a pairing code (6 digits, single use, 10 minutes)${this.#relayT ? `; it also works through the relay at ${this.#relayT.url}` : ""}`);
+        this.#syncPairingRoom();
         return { code: c.code, expires: c.expires };
       }
       #approvers() {
@@ -14564,6 +14729,8 @@ Press Enter for a new code.
       }
       async stop() {
         this.#rl?.close();
+        if (this.#pairTimer) clearInterval(this.#pairTimer);
+        await this.#pointer?.close();
         this.#push?.dispatcher.stop();
         await new Promise((r) => this.#agentServer ? this.#agentServer.close(() => r()) : r());
         await this.#coord.stop();
@@ -14703,7 +14870,7 @@ Press Enter for a new code.
           }
           case "pair.offer": {
             const { code, expires } = this.typedCode();
-            return { code, offer: code, expires, line: PAIR_LINE };
+            return { code, offer: code, expires, line: pairLine(this.#relayT !== null) };
           }
           case "pair.check": {
             const last = this.#offers.lastCode;
@@ -14913,18 +15080,24 @@ async function admin(method, params = {}) {
 }
 function relayUrl() {
   const file = join8(dir, "relay.json");
+  const check = (url, from) => {
+    if (!/^wss?:\/\/[^/]+/.test(url)) throw new LinkError("usage", `${from} '${url}' is not a ws:// or wss:// URL.`, `For example: wss://relay.example.com (the default is ${DEFAULT_RELAY})`);
+    return url.replace(/\/+$/, "");
+  };
   if (flags.relay === "off") {
     mkdirSync6(dir, { recursive: true, mode: 448 });
     writeFileSync5(file, "{}\n");
     return void 0;
   }
   if (flags.relay) {
-    if (!/^wss?:\/\/[^/]+/.test(flags.relay)) throw new LinkError("usage", `'${flags.relay}' is not a ws:// or wss:// URL.`, "For example: --relay wss://reflex.eilmer.si");
+    const url = check(flags.relay, "--relay");
     mkdirSync6(dir, { recursive: true, mode: 448 });
-    writeFileSync5(file, JSON.stringify({ url: flags.relay }) + "\n");
-    return flags.relay;
+    writeFileSync5(file, JSON.stringify({ url }) + "\n");
+    return url;
   }
-  return existsSync8(file) ? JSON.parse(readFileSync7(file, "utf8")).url ?? void 0 : process.env.REFLEX_RELAY || DEFAULT_RELAY;
+  const env = process.env.REFLEX_RELAY?.trim();
+  if (env) return env === "off" ? void 0 : check(env, "REFLEX_RELAY");
+  return existsSync8(file) ? JSON.parse(readFileSync7(file, "utf8")).url ?? void 0 : DEFAULT_RELAY;
 }
 async function start() {
   const link2 = new Link({
@@ -14937,16 +15110,16 @@ async function start() {
     p2p: !flags["no-p2p"],
     fault: flags.fault,
     everyPath: flags["every-path"],
-    onShutdown: () => void stop("`reflex link stop`")
+    onShutdown: () => void stop2("`reflex link stop`")
   });
-  const stop = async (sig) => {
+  const stop2 = async (sig) => {
     console.log(`link: ${sig}, stopping`);
     await link2.stop();
     process.exit(0);
   };
   await link2.start();
-  process.on("SIGINT", () => void stop("SIGINT"));
-  process.on("SIGTERM", () => void stop("SIGTERM"));
+  process.on("SIGINT", () => void stop2("SIGINT"));
+  process.on("SIGTERM", () => void stop2("SIGTERM"));
 }
 function showStatus(s) {
   const lines = [`${s.name} (${s.device}) \xB7 ${s.person.name} \xB7 ${s.lan_port === void 0 ? "no LAN" : `LAN :${s.lan_port}`}${s.p2p_port ? ` \xB7 peer-to-peer :${s.p2p_port}` : ""}`, ""];
@@ -15027,26 +15200,27 @@ async function main() {
     }
     case "fault": {
       if (args[1] === void 0) throw new LinkError("usage", 'Which faults? reflex link fault "lan:drop=1" (or "" to clear)');
-      const f2 = await admin("fault", { spec: args[1] });
-      return out(Object.entries(f2).map(([t, v]) => `${t}: ${JSON.stringify(v)}`).join("\n"), f2);
+      const f3 = await admin("fault", { spec: args[1] });
+      return out(Object.entries(f3).map(([t, v]) => `${t}: ${JSON.stringify(v)}`).join("\n"), f3);
     }
     default:
       throw new LinkError("usage", `Unknown command '${cmd3}'.`, "Run reflex link --help.");
   }
 }
-var HELP, flags, args, dir, out, DEFAULT_RELAY;
+var HELP, flags, args, dir, out;
 var init_reflex_link = __esm({
   "link/bin/reflex-link.ts"() {
     "use strict";
     init_home();
     init_link();
+    init_relay();
     init_client();
     HELP = `Reflex Link \u2014 receive iPad Sends for local agents
 Usage: reflex link [status|stop|pair|forget <device>|agents|deny <agent>|revoke <agent>]
   --home <path>    Profile folder
   --name <name>    Mac name on first start
   --port <n>       LAN port (default 7420)
-  --relay <url>    Forward through a Relay; off disables it
+  --relay <url>    Use this Relay (remembered; off turns it off). Also: REFLEX_RELAY=<url>|off
   --no-lan        Use the Relay only
   --no-p2p        Disable peer-to-peer Wi-Fi
   --no-prompt     Run without terminal pairing/approval prompts
@@ -15070,7 +15244,6 @@ Usage: reflex link [status|stop|pair|forget <device>|agents|deny <agent>|revoke 
     }));
     dir = homeDir(flags.home);
     out = (human, data) => console.log(flags.json ? JSON.stringify(data, null, 2) : human);
-    DEFAULT_RELAY = "wss://reflex.eilmer.si";
     main().catch((e) => {
       const fix = e instanceof RpcError || e instanceof LinkError ? e.fix : void 0;
       console.error(`Error: ${e.message}${fix ? `
@@ -15080,8 +15253,4447 @@ ${fix}` : ""}`);
   }
 });
 
-// agent/src/host/start.ts
+// node_modules/ws/lib/constants.js
+var require_constants = __commonJS({
+  "node_modules/ws/lib/constants.js"(exports, module) {
+    "use strict";
+    var BINARY_TYPES = ["nodebuffer", "arraybuffer", "fragments"];
+    var hasBlob = typeof Blob !== "undefined";
+    if (hasBlob) BINARY_TYPES.push("blob");
+    module.exports = {
+      BINARY_TYPES,
+      CLOSE_TIMEOUT: 3e4,
+      EMPTY_BUFFER: Buffer.alloc(0),
+      GUID: "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+      hasBlob,
+      kForOnEventAttribute: /* @__PURE__ */ Symbol("kIsForOnEventAttribute"),
+      kListener: /* @__PURE__ */ Symbol("kListener"),
+      kStatusCode: /* @__PURE__ */ Symbol("status-code"),
+      kWebSocket: /* @__PURE__ */ Symbol("websocket"),
+      NOOP: () => {
+      }
+    };
+  }
+});
+
+// node_modules/ws/lib/buffer-util.js
+var require_buffer_util = __commonJS({
+  "node_modules/ws/lib/buffer-util.js"(exports, module) {
+    "use strict";
+    var { EMPTY_BUFFER } = require_constants();
+    var FastBuffer = Buffer[Symbol.species];
+    function concat(list, totalLength) {
+      if (list.length === 0) return EMPTY_BUFFER;
+      if (list.length === 1) return list[0];
+      const target = Buffer.allocUnsafe(totalLength);
+      let offset = 0;
+      for (let i = 0; i < list.length; i++) {
+        const buf = list[i];
+        target.set(buf, offset);
+        offset += buf.length;
+      }
+      if (offset < totalLength) {
+        return new FastBuffer(target.buffer, target.byteOffset, offset);
+      }
+      return target;
+    }
+    function _mask(source, mask, output, offset, length2) {
+      for (let i = 0; i < length2; i++) {
+        output[offset + i] = source[i] ^ mask[i & 3];
+      }
+    }
+    function _unmask(buffer, mask) {
+      for (let i = 0; i < buffer.length; i++) {
+        buffer[i] ^= mask[i & 3];
+      }
+    }
+    function toArrayBuffer(buf) {
+      if (buf.length === buf.buffer.byteLength) {
+        return buf.buffer;
+      }
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length);
+    }
+    function toBuffer(data) {
+      toBuffer.readOnly = true;
+      if (Buffer.isBuffer(data)) return data;
+      let buf;
+      if (data instanceof ArrayBuffer) {
+        buf = new FastBuffer(data);
+      } else if (ArrayBuffer.isView(data)) {
+        buf = new FastBuffer(data.buffer, data.byteOffset, data.byteLength);
+      } else {
+        buf = Buffer.from(data);
+        toBuffer.readOnly = false;
+      }
+      return buf;
+    }
+    module.exports = {
+      concat,
+      mask: _mask,
+      toArrayBuffer,
+      toBuffer,
+      unmask: _unmask
+    };
+    if (!process.env.WS_NO_BUFFER_UTIL) {
+      try {
+        const bufferUtil = __require("bufferutil");
+        module.exports.mask = function(source, mask, output, offset, length2) {
+          if (length2 < 48) _mask(source, mask, output, offset, length2);
+          else bufferUtil.mask(source, mask, output, offset, length2);
+        };
+        module.exports.unmask = function(buffer, mask) {
+          if (buffer.length < 32) _unmask(buffer, mask);
+          else bufferUtil.unmask(buffer, mask);
+        };
+      } catch (e) {
+      }
+    }
+  }
+});
+
+// node_modules/ws/lib/limiter.js
+var require_limiter = __commonJS({
+  "node_modules/ws/lib/limiter.js"(exports, module) {
+    "use strict";
+    var kDone = /* @__PURE__ */ Symbol("kDone");
+    var kRun = /* @__PURE__ */ Symbol("kRun");
+    var Limiter = class {
+      /**
+       * Creates a new `Limiter`.
+       *
+       * @param {Number} [concurrency=Infinity] The maximum number of jobs allowed
+       *     to run concurrently
+       */
+      constructor(concurrency) {
+        this[kDone] = () => {
+          this.pending--;
+          this[kRun]();
+        };
+        this.concurrency = concurrency || Infinity;
+        this.jobs = [];
+        this.pending = 0;
+      }
+      /**
+       * Adds a job to the queue.
+       *
+       * @param {Function} job The job to run
+       * @public
+       */
+      add(job) {
+        this.jobs.push(job);
+        this[kRun]();
+      }
+      /**
+       * Removes a job from the queue and runs it if possible.
+       *
+       * @private
+       */
+      [kRun]() {
+        if (this.pending === this.concurrency) return;
+        if (this.jobs.length) {
+          const job = this.jobs.shift();
+          this.pending++;
+          job(this[kDone]);
+        }
+      }
+    };
+    module.exports = Limiter;
+  }
+});
+
+// node_modules/ws/lib/permessage-deflate.js
+var require_permessage_deflate = __commonJS({
+  "node_modules/ws/lib/permessage-deflate.js"(exports, module) {
+    "use strict";
+    var zlib = __require("zlib");
+    var bufferUtil = require_buffer_util();
+    var Limiter = require_limiter();
+    var { kStatusCode } = require_constants();
+    var FastBuffer = Buffer[Symbol.species];
+    var TRAILER = Buffer.from([0, 0, 255, 255]);
+    var kPerMessageDeflate = /* @__PURE__ */ Symbol("permessage-deflate");
+    var kTotalLength = /* @__PURE__ */ Symbol("total-length");
+    var kCallback = /* @__PURE__ */ Symbol("callback");
+    var kBuffers = /* @__PURE__ */ Symbol("buffers");
+    var kError = /* @__PURE__ */ Symbol("error");
+    var zlibLimiter;
+    var PerMessageDeflate2 = class {
+      /**
+       * Creates a PerMessageDeflate instance.
+       *
+       * @param {Object} [options] Configuration options
+       * @param {(Boolean|Number)} [options.clientMaxWindowBits] Advertise support
+       *     for, or request, a custom client window size
+       * @param {Boolean} [options.clientNoContextTakeover=false] Advertise/
+       *     acknowledge disabling of client context takeover
+       * @param {Number} [options.concurrencyLimit=10] The number of concurrent
+       *     calls to zlib
+       * @param {Boolean} [options.isServer=false] Create the instance in either
+       *     server or client mode
+       * @param {Number} [options.maxPayload=0] The maximum allowed message length
+       * @param {(Boolean|Number)} [options.serverMaxWindowBits] Request/confirm the
+       *     use of a custom server window size
+       * @param {Boolean} [options.serverNoContextTakeover=false] Request/accept
+       *     disabling of server context takeover
+       * @param {Number} [options.threshold=1024] Size (in bytes) below which
+       *     messages should not be compressed if context takeover is disabled
+       * @param {Object} [options.zlibDeflateOptions] Options to pass to zlib on
+       *     deflate
+       * @param {Object} [options.zlibInflateOptions] Options to pass to zlib on
+       *     inflate
+       */
+      constructor(options) {
+        this._options = options || {};
+        this._threshold = this._options.threshold !== void 0 ? this._options.threshold : 1024;
+        this._maxPayload = this._options.maxPayload | 0;
+        this._isServer = !!this._options.isServer;
+        this._deflate = null;
+        this._inflate = null;
+        this.params = null;
+        if (!zlibLimiter) {
+          const concurrency = this._options.concurrencyLimit !== void 0 ? this._options.concurrencyLimit : 10;
+          zlibLimiter = new Limiter(concurrency);
+        }
+      }
+      /**
+       * @type {String}
+       */
+      static get extensionName() {
+        return "permessage-deflate";
+      }
+      /**
+       * Create an extension negotiation offer.
+       *
+       * @return {Object} Extension parameters
+       * @public
+       */
+      offer() {
+        const params = {};
+        if (this._options.serverNoContextTakeover) {
+          params.server_no_context_takeover = true;
+        }
+        if (this._options.clientNoContextTakeover) {
+          params.client_no_context_takeover = true;
+        }
+        if (this._options.serverMaxWindowBits) {
+          params.server_max_window_bits = this._options.serverMaxWindowBits;
+        }
+        if (this._options.clientMaxWindowBits) {
+          params.client_max_window_bits = this._options.clientMaxWindowBits;
+        } else if (this._options.clientMaxWindowBits == null) {
+          params.client_max_window_bits = true;
+        }
+        return params;
+      }
+      /**
+       * Accept an extension negotiation offer/response.
+       *
+       * @param {Array} configurations The extension negotiation offers/reponse
+       * @return {Object} Accepted configuration
+       * @public
+       */
+      accept(configurations) {
+        configurations = this.normalizeParams(configurations);
+        this.params = this._isServer ? this.acceptAsServer(configurations) : this.acceptAsClient(configurations);
+        return this.params;
+      }
+      /**
+       * Releases all resources used by the extension.
+       *
+       * @public
+       */
+      cleanup() {
+        if (this._inflate) {
+          this._inflate.close();
+          this._inflate = null;
+        }
+        if (this._deflate) {
+          const callback = this._deflate[kCallback];
+          this._deflate.close();
+          this._deflate = null;
+          if (callback) {
+            callback(
+              new Error(
+                "The deflate stream was closed while data was being processed"
+              )
+            );
+          }
+        }
+      }
+      /**
+       *  Accept an extension negotiation offer.
+       *
+       * @param {Array} offers The extension negotiation offers
+       * @return {Object} Accepted configuration
+       * @private
+       */
+      acceptAsServer(offers) {
+        const opts = this._options;
+        const accepted = offers.find((params) => {
+          if (opts.serverNoContextTakeover === false && params.server_no_context_takeover || params.server_max_window_bits && (opts.serverMaxWindowBits === false || typeof opts.serverMaxWindowBits === "number" && opts.serverMaxWindowBits > params.server_max_window_bits) || typeof opts.clientMaxWindowBits === "number" && !params.client_max_window_bits) {
+            return false;
+          }
+          return true;
+        });
+        if (!accepted) {
+          throw new Error("None of the extension offers can be accepted");
+        }
+        if (opts.serverNoContextTakeover) {
+          accepted.server_no_context_takeover = true;
+        }
+        if (opts.clientNoContextTakeover) {
+          accepted.client_no_context_takeover = true;
+        }
+        if (typeof opts.serverMaxWindowBits === "number") {
+          accepted.server_max_window_bits = opts.serverMaxWindowBits;
+        }
+        if (typeof opts.clientMaxWindowBits === "number") {
+          accepted.client_max_window_bits = opts.clientMaxWindowBits;
+        } else if (accepted.client_max_window_bits === true || opts.clientMaxWindowBits === false) {
+          delete accepted.client_max_window_bits;
+        }
+        return accepted;
+      }
+      /**
+       * Accept the extension negotiation response.
+       *
+       * @param {Array} response The extension negotiation response
+       * @return {Object} Accepted configuration
+       * @private
+       */
+      acceptAsClient(response) {
+        const params = response[0];
+        if (this._options.clientNoContextTakeover === false && params.client_no_context_takeover) {
+          throw new Error('Unexpected parameter "client_no_context_takeover"');
+        }
+        if (!params.client_max_window_bits) {
+          if (typeof this._options.clientMaxWindowBits === "number") {
+            params.client_max_window_bits = this._options.clientMaxWindowBits;
+          }
+        } else if (this._options.clientMaxWindowBits === false || typeof this._options.clientMaxWindowBits === "number" && params.client_max_window_bits > this._options.clientMaxWindowBits) {
+          throw new Error(
+            'Unexpected or invalid parameter "client_max_window_bits"'
+          );
+        }
+        return params;
+      }
+      /**
+       * Normalize parameters.
+       *
+       * @param {Array} configurations The extension negotiation offers/reponse
+       * @return {Array} The offers/response with normalized parameters
+       * @private
+       */
+      normalizeParams(configurations) {
+        configurations.forEach((params) => {
+          Object.keys(params).forEach((key) => {
+            let value = params[key];
+            if (value.length > 1) {
+              throw new Error(`Parameter "${key}" must have only a single value`);
+            }
+            value = value[0];
+            if (key === "client_max_window_bits") {
+              if (value !== true) {
+                const num = +value;
+                if (!Number.isInteger(num) || num < 8 || num > 15) {
+                  throw new TypeError(
+                    `Invalid value for parameter "${key}": ${value}`
+                  );
+                }
+                value = num;
+              } else if (!this._isServer) {
+                throw new TypeError(
+                  `Invalid value for parameter "${key}": ${value}`
+                );
+              }
+            } else if (key === "server_max_window_bits") {
+              const num = +value;
+              if (!Number.isInteger(num) || num < 8 || num > 15) {
+                throw new TypeError(
+                  `Invalid value for parameter "${key}": ${value}`
+                );
+              }
+              value = num;
+            } else if (key === "client_no_context_takeover" || key === "server_no_context_takeover") {
+              if (value !== true) {
+                throw new TypeError(
+                  `Invalid value for parameter "${key}": ${value}`
+                );
+              }
+            } else {
+              throw new Error(`Unknown parameter "${key}"`);
+            }
+            params[key] = value;
+          });
+        });
+        return configurations;
+      }
+      /**
+       * Decompress data. Concurrency limited.
+       *
+       * @param {Buffer} data Compressed data
+       * @param {Boolean} fin Specifies whether or not this is the last fragment
+       * @param {Function} callback Callback
+       * @public
+       */
+      decompress(data, fin, callback) {
+        zlibLimiter.add((done) => {
+          this._decompress(data, fin, (err, result) => {
+            done();
+            callback(err, result);
+          });
+        });
+      }
+      /**
+       * Compress data. Concurrency limited.
+       *
+       * @param {(Buffer|String)} data Data to compress
+       * @param {Boolean} fin Specifies whether or not this is the last fragment
+       * @param {Function} callback Callback
+       * @public
+       */
+      compress(data, fin, callback) {
+        zlibLimiter.add((done) => {
+          this._compress(data, fin, (err, result) => {
+            done();
+            callback(err, result);
+          });
+        });
+      }
+      /**
+       * Decompress data.
+       *
+       * @param {Buffer} data Compressed data
+       * @param {Boolean} fin Specifies whether or not this is the last fragment
+       * @param {Function} callback Callback
+       * @private
+       */
+      _decompress(data, fin, callback) {
+        const endpoint = this._isServer ? "client" : "server";
+        if (!this._inflate) {
+          const key = `${endpoint}_max_window_bits`;
+          const windowBits = typeof this.params[key] !== "number" ? zlib.Z_DEFAULT_WINDOWBITS : this.params[key];
+          this._inflate = zlib.createInflateRaw({
+            ...this._options.zlibInflateOptions,
+            windowBits
+          });
+          this._inflate[kPerMessageDeflate] = this;
+          this._inflate[kTotalLength] = 0;
+          this._inflate[kBuffers] = [];
+          this._inflate.on("error", inflateOnError);
+          this._inflate.on("data", inflateOnData);
+        }
+        this._inflate[kCallback] = callback;
+        this._inflate.write(data);
+        if (fin) this._inflate.write(TRAILER);
+        this._inflate.flush(() => {
+          const err = this._inflate[kError];
+          if (err) {
+            this._inflate.close();
+            this._inflate = null;
+            callback(err);
+            return;
+          }
+          const data2 = bufferUtil.concat(
+            this._inflate[kBuffers],
+            this._inflate[kTotalLength]
+          );
+          if (this._inflate._readableState.endEmitted) {
+            this._inflate.close();
+            this._inflate = null;
+          } else {
+            this._inflate[kTotalLength] = 0;
+            this._inflate[kBuffers] = [];
+            if (fin && this.params[`${endpoint}_no_context_takeover`]) {
+              this._inflate.reset();
+            }
+          }
+          callback(null, data2);
+        });
+      }
+      /**
+       * Compress data.
+       *
+       * @param {(Buffer|String)} data Data to compress
+       * @param {Boolean} fin Specifies whether or not this is the last fragment
+       * @param {Function} callback Callback
+       * @private
+       */
+      _compress(data, fin, callback) {
+        const endpoint = this._isServer ? "server" : "client";
+        if (!this._deflate) {
+          const key = `${endpoint}_max_window_bits`;
+          const windowBits = typeof this.params[key] !== "number" ? zlib.Z_DEFAULT_WINDOWBITS : this.params[key];
+          this._deflate = zlib.createDeflateRaw({
+            ...this._options.zlibDeflateOptions,
+            windowBits
+          });
+          this._deflate[kTotalLength] = 0;
+          this._deflate[kBuffers] = [];
+          this._deflate.on("data", deflateOnData);
+        }
+        this._deflate[kCallback] = callback;
+        this._deflate.write(data);
+        this._deflate.flush(zlib.Z_SYNC_FLUSH, () => {
+          if (!this._deflate) {
+            return;
+          }
+          let data2 = bufferUtil.concat(
+            this._deflate[kBuffers],
+            this._deflate[kTotalLength]
+          );
+          if (fin) {
+            data2 = new FastBuffer(data2.buffer, data2.byteOffset, data2.length - 4);
+          }
+          this._deflate[kCallback] = null;
+          this._deflate[kTotalLength] = 0;
+          this._deflate[kBuffers] = [];
+          if (fin && this.params[`${endpoint}_no_context_takeover`]) {
+            this._deflate.reset();
+          }
+          callback(null, data2);
+        });
+      }
+    };
+    module.exports = PerMessageDeflate2;
+    function deflateOnData(chunk) {
+      this[kBuffers].push(chunk);
+      this[kTotalLength] += chunk.length;
+    }
+    function inflateOnData(chunk) {
+      this[kTotalLength] += chunk.length;
+      if (this[kPerMessageDeflate]._maxPayload < 1 || this[kTotalLength] <= this[kPerMessageDeflate]._maxPayload) {
+        this[kBuffers].push(chunk);
+        return;
+      }
+      this[kError] = new RangeError("Max payload size exceeded");
+      this[kError].code = "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH";
+      this[kError][kStatusCode] = 1009;
+      this.removeListener("data", inflateOnData);
+      this.reset();
+    }
+    function inflateOnError(err) {
+      this[kPerMessageDeflate]._inflate = null;
+      if (this[kError]) {
+        this[kCallback](this[kError]);
+        return;
+      }
+      err[kStatusCode] = 1007;
+      this[kCallback](err);
+    }
+  }
+});
+
+// node_modules/ws/lib/validation.js
+var require_validation3 = __commonJS({
+  "node_modules/ws/lib/validation.js"(exports, module) {
+    "use strict";
+    var { isUtf8 } = __require("buffer");
+    var { hasBlob } = require_constants();
+    var tokenChars = [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      // 0 - 15
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      // 16 - 31
+      0,
+      1,
+      0,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      1,
+      1,
+      0,
+      1,
+      1,
+      0,
+      // 32 - 47
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      // 48 - 63
+      0,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      // 64 - 79
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0,
+      1,
+      1,
+      // 80 - 95
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      // 96 - 111
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0
+      // 112 - 127
+    ];
+    function isValidStatusCode(code) {
+      return code >= 1e3 && code <= 1014 && code !== 1004 && code !== 1005 && code !== 1006 || code >= 3e3 && code <= 4999;
+    }
+    function _isValidUTF8(buf) {
+      const len = buf.length;
+      let i = 0;
+      while (i < len) {
+        if ((buf[i] & 128) === 0) {
+          i++;
+        } else if ((buf[i] & 224) === 192) {
+          if (i + 1 === len || (buf[i + 1] & 192) !== 128 || (buf[i] & 254) === 192) {
+            return false;
+          }
+          i += 2;
+        } else if ((buf[i] & 240) === 224) {
+          if (i + 2 >= len || (buf[i + 1] & 192) !== 128 || (buf[i + 2] & 192) !== 128 || buf[i] === 224 && (buf[i + 1] & 224) === 128 || // Overlong
+          buf[i] === 237 && (buf[i + 1] & 224) === 160) {
+            return false;
+          }
+          i += 3;
+        } else if ((buf[i] & 248) === 240) {
+          if (i + 3 >= len || (buf[i + 1] & 192) !== 128 || (buf[i + 2] & 192) !== 128 || (buf[i + 3] & 192) !== 128 || buf[i] === 240 && (buf[i + 1] & 240) === 128 || // Overlong
+          buf[i] === 244 && buf[i + 1] > 143 || buf[i] > 244) {
+            return false;
+          }
+          i += 4;
+        } else {
+          return false;
+        }
+      }
+      return true;
+    }
+    function isBlob(value) {
+      return hasBlob && typeof value === "object" && typeof value.arrayBuffer === "function" && typeof value.type === "string" && typeof value.stream === "function" && (value[Symbol.toStringTag] === "Blob" || value[Symbol.toStringTag] === "File");
+    }
+    module.exports = {
+      isBlob,
+      isValidStatusCode,
+      isValidUTF8: _isValidUTF8,
+      tokenChars
+    };
+    if (isUtf8) {
+      module.exports.isValidUTF8 = function(buf) {
+        return buf.length < 24 ? _isValidUTF8(buf) : isUtf8(buf);
+      };
+    } else if (!process.env.WS_NO_UTF_8_VALIDATE) {
+      try {
+        const isValidUTF8 = __require("utf-8-validate");
+        module.exports.isValidUTF8 = function(buf) {
+          return buf.length < 32 ? _isValidUTF8(buf) : isValidUTF8(buf);
+        };
+      } catch (e) {
+      }
+    }
+  }
+});
+
+// node_modules/ws/lib/receiver.js
+var require_receiver = __commonJS({
+  "node_modules/ws/lib/receiver.js"(exports, module) {
+    "use strict";
+    var { Writable } = __require("stream");
+    var PerMessageDeflate2 = require_permessage_deflate();
+    var {
+      BINARY_TYPES,
+      EMPTY_BUFFER,
+      kStatusCode,
+      kWebSocket
+    } = require_constants();
+    var { concat, toArrayBuffer, unmask } = require_buffer_util();
+    var { isValidStatusCode, isValidUTF8 } = require_validation3();
+    var FastBuffer = Buffer[Symbol.species];
+    var GET_INFO = 0;
+    var GET_PAYLOAD_LENGTH_16 = 1;
+    var GET_PAYLOAD_LENGTH_64 = 2;
+    var GET_MASK = 3;
+    var GET_DATA = 4;
+    var INFLATING = 5;
+    var DEFER_EVENT = 6;
+    var Receiver2 = class extends Writable {
+      /**
+       * Creates a Receiver instance.
+       *
+       * @param {Object} [options] Options object
+       * @param {Boolean} [options.allowSynchronousEvents=true] Specifies whether
+       *     any of the `'message'`, `'ping'`, and `'pong'` events can be emitted
+       *     multiple times in the same tick
+       * @param {String} [options.binaryType=nodebuffer] The type for binary data
+       * @param {Object} [options.extensions] An object containing the negotiated
+       *     extensions
+       * @param {Boolean} [options.isServer=false] Specifies whether to operate in
+       *     client or server mode
+       * @param {Number} [options.maxBufferedChunks=0] The maximum number of
+       *     buffered data chunks
+       * @param {Number} [options.maxFragments=0] The maximum number of message
+       *     fragments
+       * @param {Number} [options.maxPayload=0] The maximum allowed message length
+       * @param {Boolean} [options.skipUTF8Validation=false] Specifies whether or
+       *     not to skip UTF-8 validation for text and close messages
+       */
+      constructor(options = {}) {
+        super();
+        this._allowSynchronousEvents = options.allowSynchronousEvents !== void 0 ? options.allowSynchronousEvents : true;
+        this._binaryType = options.binaryType || BINARY_TYPES[0];
+        this._extensions = options.extensions || {};
+        this._isServer = !!options.isServer;
+        this._maxBufferedChunks = options.maxBufferedChunks | 0;
+        this._maxFragments = options.maxFragments | 0;
+        this._maxPayload = options.maxPayload | 0;
+        this._skipUTF8Validation = !!options.skipUTF8Validation;
+        this[kWebSocket] = void 0;
+        this._bufferedBytes = 0;
+        this._buffers = [];
+        this._compressed = false;
+        this._payloadLength = 0;
+        this._mask = void 0;
+        this._fragmented = 0;
+        this._masked = false;
+        this._fin = false;
+        this._opcode = 0;
+        this._totalPayloadLength = 0;
+        this._messageLength = 0;
+        this._fragments = [];
+        this._errored = false;
+        this._loop = false;
+        this._state = GET_INFO;
+      }
+      /**
+       * Implements `Writable.prototype._write()`.
+       *
+       * @param {Buffer} chunk The chunk of data to write
+       * @param {String} encoding The character encoding of `chunk`
+       * @param {Function} cb Callback
+       * @private
+       */
+      _write(chunk, encoding, cb) {
+        if (this._opcode === 8 && this._state == GET_INFO) return cb();
+        if (this._maxBufferedChunks > 0 && this._buffers.length >= this._maxBufferedChunks) {
+          cb(
+            this.createError(
+              RangeError,
+              "Too many buffered chunks",
+              false,
+              1008,
+              "WS_ERR_TOO_MANY_BUFFERED_PARTS"
+            )
+          );
+          return;
+        }
+        this._bufferedBytes += chunk.length;
+        this._buffers.push(chunk);
+        this.startLoop(cb);
+      }
+      /**
+       * Consumes `n` bytes from the buffered data.
+       *
+       * @param {Number} n The number of bytes to consume
+       * @return {Buffer} The consumed bytes
+       * @private
+       */
+      consume(n) {
+        this._bufferedBytes -= n;
+        if (n === this._buffers[0].length) return this._buffers.shift();
+        if (n < this._buffers[0].length) {
+          const buf = this._buffers[0];
+          this._buffers[0] = new FastBuffer(
+            buf.buffer,
+            buf.byteOffset + n,
+            buf.length - n
+          );
+          return new FastBuffer(buf.buffer, buf.byteOffset, n);
+        }
+        const dst = Buffer.allocUnsafe(n);
+        do {
+          const buf = this._buffers[0];
+          const offset = dst.length - n;
+          if (n >= buf.length) {
+            dst.set(this._buffers.shift(), offset);
+          } else {
+            dst.set(new Uint8Array(buf.buffer, buf.byteOffset, n), offset);
+            this._buffers[0] = new FastBuffer(
+              buf.buffer,
+              buf.byteOffset + n,
+              buf.length - n
+            );
+          }
+          n -= buf.length;
+        } while (n > 0);
+        return dst;
+      }
+      /**
+       * Starts the parsing loop.
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
+      startLoop(cb) {
+        this._loop = true;
+        do {
+          switch (this._state) {
+            case GET_INFO:
+              this.getInfo(cb);
+              break;
+            case GET_PAYLOAD_LENGTH_16:
+              this.getPayloadLength16(cb);
+              break;
+            case GET_PAYLOAD_LENGTH_64:
+              this.getPayloadLength64(cb);
+              break;
+            case GET_MASK:
+              this.getMask();
+              break;
+            case GET_DATA:
+              this.getData(cb);
+              break;
+            case INFLATING:
+            case DEFER_EVENT:
+              this._loop = false;
+              return;
+          }
+        } while (this._loop);
+        if (!this._errored) cb();
+      }
+      /**
+       * Reads the first two bytes of a frame.
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
+      getInfo(cb) {
+        if (this._bufferedBytes < 2) {
+          this._loop = false;
+          return;
+        }
+        const buf = this.consume(2);
+        if ((buf[0] & 48) !== 0) {
+          const error2 = this.createError(
+            RangeError,
+            "RSV2 and RSV3 must be clear",
+            true,
+            1002,
+            "WS_ERR_UNEXPECTED_RSV_2_3"
+          );
+          cb(error2);
+          return;
+        }
+        const compressed = (buf[0] & 64) === 64;
+        if (compressed && !this._extensions[PerMessageDeflate2.extensionName]) {
+          const error2 = this.createError(
+            RangeError,
+            "RSV1 must be clear",
+            true,
+            1002,
+            "WS_ERR_UNEXPECTED_RSV_1"
+          );
+          cb(error2);
+          return;
+        }
+        this._fin = (buf[0] & 128) === 128;
+        this._opcode = buf[0] & 15;
+        this._payloadLength = buf[1] & 127;
+        if (this._opcode === 0) {
+          if (compressed) {
+            const error2 = this.createError(
+              RangeError,
+              "RSV1 must be clear",
+              true,
+              1002,
+              "WS_ERR_UNEXPECTED_RSV_1"
+            );
+            cb(error2);
+            return;
+          }
+          if (!this._fragmented) {
+            const error2 = this.createError(
+              RangeError,
+              "invalid opcode 0",
+              true,
+              1002,
+              "WS_ERR_INVALID_OPCODE"
+            );
+            cb(error2);
+            return;
+          }
+          this._opcode = this._fragmented;
+        } else if (this._opcode === 1 || this._opcode === 2) {
+          if (this._fragmented) {
+            const error2 = this.createError(
+              RangeError,
+              `invalid opcode ${this._opcode}`,
+              true,
+              1002,
+              "WS_ERR_INVALID_OPCODE"
+            );
+            cb(error2);
+            return;
+          }
+          this._compressed = compressed;
+        } else if (this._opcode > 7 && this._opcode < 11) {
+          if (!this._fin) {
+            const error2 = this.createError(
+              RangeError,
+              "FIN must be set",
+              true,
+              1002,
+              "WS_ERR_EXPECTED_FIN"
+            );
+            cb(error2);
+            return;
+          }
+          if (compressed) {
+            const error2 = this.createError(
+              RangeError,
+              "RSV1 must be clear",
+              true,
+              1002,
+              "WS_ERR_UNEXPECTED_RSV_1"
+            );
+            cb(error2);
+            return;
+          }
+          if (this._payloadLength > 125 || this._opcode === 8 && this._payloadLength === 1) {
+            const error2 = this.createError(
+              RangeError,
+              `invalid payload length ${this._payloadLength}`,
+              true,
+              1002,
+              "WS_ERR_INVALID_CONTROL_PAYLOAD_LENGTH"
+            );
+            cb(error2);
+            return;
+          }
+        } else {
+          const error2 = this.createError(
+            RangeError,
+            `invalid opcode ${this._opcode}`,
+            true,
+            1002,
+            "WS_ERR_INVALID_OPCODE"
+          );
+          cb(error2);
+          return;
+        }
+        if (!this._fin && !this._fragmented) this._fragmented = this._opcode;
+        this._masked = (buf[1] & 128) === 128;
+        if (this._isServer) {
+          if (!this._masked) {
+            const error2 = this.createError(
+              RangeError,
+              "MASK must be set",
+              true,
+              1002,
+              "WS_ERR_EXPECTED_MASK"
+            );
+            cb(error2);
+            return;
+          }
+        } else if (this._masked) {
+          const error2 = this.createError(
+            RangeError,
+            "MASK must be clear",
+            true,
+            1002,
+            "WS_ERR_UNEXPECTED_MASK"
+          );
+          cb(error2);
+          return;
+        }
+        if (this._payloadLength === 126) this._state = GET_PAYLOAD_LENGTH_16;
+        else if (this._payloadLength === 127) this._state = GET_PAYLOAD_LENGTH_64;
+        else this.haveLength(cb);
+      }
+      /**
+       * Gets extended payload length (7+16).
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
+      getPayloadLength16(cb) {
+        if (this._bufferedBytes < 2) {
+          this._loop = false;
+          return;
+        }
+        this._payloadLength = this.consume(2).readUInt16BE(0);
+        this.haveLength(cb);
+      }
+      /**
+       * Gets extended payload length (7+64).
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
+      getPayloadLength64(cb) {
+        if (this._bufferedBytes < 8) {
+          this._loop = false;
+          return;
+        }
+        const buf = this.consume(8);
+        const num = buf.readUInt32BE(0);
+        if (num > Math.pow(2, 53 - 32) - 1) {
+          const error2 = this.createError(
+            RangeError,
+            "Unsupported WebSocket frame: payload length > 2^53 - 1",
+            false,
+            1009,
+            "WS_ERR_UNSUPPORTED_DATA_PAYLOAD_LENGTH"
+          );
+          cb(error2);
+          return;
+        }
+        this._payloadLength = num * Math.pow(2, 32) + buf.readUInt32BE(4);
+        this.haveLength(cb);
+      }
+      /**
+       * Payload length has been read.
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
+      haveLength(cb) {
+        if (this._payloadLength && this._opcode < 8) {
+          this._totalPayloadLength += this._payloadLength;
+          if (this._totalPayloadLength > this._maxPayload && this._maxPayload > 0) {
+            const error2 = this.createError(
+              RangeError,
+              "Max payload size exceeded",
+              false,
+              1009,
+              "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH"
+            );
+            cb(error2);
+            return;
+          }
+        }
+        if (this._masked) this._state = GET_MASK;
+        else this._state = GET_DATA;
+      }
+      /**
+       * Reads mask bytes.
+       *
+       * @private
+       */
+      getMask() {
+        if (this._bufferedBytes < 4) {
+          this._loop = false;
+          return;
+        }
+        this._mask = this.consume(4);
+        this._state = GET_DATA;
+      }
+      /**
+       * Reads data bytes.
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
+      getData(cb) {
+        let data = EMPTY_BUFFER;
+        if (this._payloadLength) {
+          if (this._bufferedBytes < this._payloadLength) {
+            this._loop = false;
+            return;
+          }
+          data = this.consume(this._payloadLength);
+          if (this._masked && (this._mask[0] | this._mask[1] | this._mask[2] | this._mask[3]) !== 0) {
+            unmask(data, this._mask);
+          }
+        }
+        if (this._opcode > 7) {
+          this.controlMessage(data, cb);
+          return;
+        }
+        if (this._compressed) {
+          this._state = INFLATING;
+          this.decompress(data, cb);
+          return;
+        }
+        if (data.length) {
+          if (this._maxFragments > 0 && this._fragments.length >= this._maxFragments) {
+            const error2 = this.createError(
+              RangeError,
+              "Too many message fragments",
+              false,
+              1008,
+              "WS_ERR_TOO_MANY_BUFFERED_PARTS"
+            );
+            cb(error2);
+            return;
+          }
+          this._messageLength = this._totalPayloadLength;
+          this._fragments.push(data);
+        }
+        this.dataMessage(cb);
+      }
+      /**
+       * Decompresses data.
+       *
+       * @param {Buffer} data Compressed data
+       * @param {Function} cb Callback
+       * @private
+       */
+      decompress(data, cb) {
+        const perMessageDeflate = this._extensions[PerMessageDeflate2.extensionName];
+        perMessageDeflate.decompress(data, this._fin, (err, buf) => {
+          if (err) return cb(err);
+          if (buf.length) {
+            this._messageLength += buf.length;
+            if (this._messageLength > this._maxPayload && this._maxPayload > 0) {
+              const error2 = this.createError(
+                RangeError,
+                "Max payload size exceeded",
+                false,
+                1009,
+                "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH"
+              );
+              cb(error2);
+              return;
+            }
+            if (this._maxFragments > 0 && this._fragments.length >= this._maxFragments) {
+              const error2 = this.createError(
+                RangeError,
+                "Too many message fragments",
+                false,
+                1008,
+                "WS_ERR_TOO_MANY_BUFFERED_PARTS"
+              );
+              cb(error2);
+              return;
+            }
+            this._fragments.push(buf);
+          }
+          this.dataMessage(cb);
+          if (this._state === GET_INFO) this.startLoop(cb);
+        });
+      }
+      /**
+       * Handles a data message.
+       *
+       * @param {Function} cb Callback
+       * @private
+       */
+      dataMessage(cb) {
+        if (!this._fin) {
+          this._state = GET_INFO;
+          return;
+        }
+        const messageLength = this._messageLength;
+        const fragments = this._fragments;
+        this._totalPayloadLength = 0;
+        this._messageLength = 0;
+        this._fragmented = 0;
+        this._fragments = [];
+        if (this._opcode === 2) {
+          let data;
+          if (this._binaryType === "nodebuffer") {
+            data = concat(fragments, messageLength);
+          } else if (this._binaryType === "arraybuffer") {
+            data = toArrayBuffer(concat(fragments, messageLength));
+          } else if (this._binaryType === "blob") {
+            data = new Blob(fragments);
+          } else {
+            data = fragments;
+          }
+          if (this._allowSynchronousEvents) {
+            this.emit("message", data, true);
+            this._state = GET_INFO;
+          } else {
+            this._state = DEFER_EVENT;
+            setImmediate(() => {
+              this.emit("message", data, true);
+              this._state = GET_INFO;
+              this.startLoop(cb);
+            });
+          }
+        } else {
+          const buf = concat(fragments, messageLength);
+          if (!this._skipUTF8Validation && !isValidUTF8(buf)) {
+            const error2 = this.createError(
+              Error,
+              "invalid UTF-8 sequence",
+              true,
+              1007,
+              "WS_ERR_INVALID_UTF8"
+            );
+            cb(error2);
+            return;
+          }
+          if (this._state === INFLATING || this._allowSynchronousEvents) {
+            this.emit("message", buf, false);
+            this._state = GET_INFO;
+          } else {
+            this._state = DEFER_EVENT;
+            setImmediate(() => {
+              this.emit("message", buf, false);
+              this._state = GET_INFO;
+              this.startLoop(cb);
+            });
+          }
+        }
+      }
+      /**
+       * Handles a control message.
+       *
+       * @param {Buffer} data Data to handle
+       * @return {(Error|RangeError|undefined)} A possible error
+       * @private
+       */
+      controlMessage(data, cb) {
+        if (this._opcode === 8) {
+          if (data.length === 0) {
+            this._loop = false;
+            this.emit("conclude", 1005, EMPTY_BUFFER);
+            this.end();
+          } else {
+            const code = data.readUInt16BE(0);
+            if (!isValidStatusCode(code)) {
+              const error2 = this.createError(
+                RangeError,
+                `invalid status code ${code}`,
+                true,
+                1002,
+                "WS_ERR_INVALID_CLOSE_CODE"
+              );
+              cb(error2);
+              return;
+            }
+            const buf = new FastBuffer(
+              data.buffer,
+              data.byteOffset + 2,
+              data.length - 2
+            );
+            if (!this._skipUTF8Validation && !isValidUTF8(buf)) {
+              const error2 = this.createError(
+                Error,
+                "invalid UTF-8 sequence",
+                true,
+                1007,
+                "WS_ERR_INVALID_UTF8"
+              );
+              cb(error2);
+              return;
+            }
+            this._loop = false;
+            this.emit("conclude", code, buf);
+            this.end();
+          }
+          this._state = GET_INFO;
+          return;
+        }
+        if (this._allowSynchronousEvents) {
+          this.emit(this._opcode === 9 ? "ping" : "pong", data);
+          this._state = GET_INFO;
+        } else {
+          this._state = DEFER_EVENT;
+          setImmediate(() => {
+            this.emit(this._opcode === 9 ? "ping" : "pong", data);
+            this._state = GET_INFO;
+            this.startLoop(cb);
+          });
+        }
+      }
+      /**
+       * Builds an error object.
+       *
+       * @param {function(new:Error|RangeError)} ErrorCtor The error constructor
+       * @param {String} message The error message
+       * @param {Boolean} prefix Specifies whether or not to add a default prefix to
+       *     `message`
+       * @param {Number} statusCode The status code
+       * @param {String} errorCode The exposed error code
+       * @return {(Error|RangeError)} The error
+       * @private
+       */
+      createError(ErrorCtor, message2, prefix, statusCode, errorCode) {
+        this._loop = false;
+        this._errored = true;
+        const err = new ErrorCtor(
+          prefix ? `Invalid WebSocket frame: ${message2}` : message2
+        );
+        Error.captureStackTrace(err, this.createError);
+        err.code = errorCode;
+        err[kStatusCode] = statusCode;
+        return err;
+      }
+    };
+    module.exports = Receiver2;
+  }
+});
+
+// node_modules/ws/lib/sender.js
+var require_sender = __commonJS({
+  "node_modules/ws/lib/sender.js"(exports, module) {
+    "use strict";
+    var { Duplex } = __require("stream");
+    var { randomFillSync } = __require("crypto");
+    var {
+      types: { isUint8Array }
+    } = __require("util");
+    var PerMessageDeflate2 = require_permessage_deflate();
+    var { EMPTY_BUFFER, kWebSocket, NOOP } = require_constants();
+    var { isBlob, isValidStatusCode } = require_validation3();
+    var { mask: applyMask, toBuffer } = require_buffer_util();
+    var kByteLength = /* @__PURE__ */ Symbol("kByteLength");
+    var maskBuffer = Buffer.alloc(4);
+    var RANDOM_POOL_SIZE = 8 * 1024;
+    var randomPool;
+    var randomPoolPointer = RANDOM_POOL_SIZE;
+    var DEFAULT = 0;
+    var DEFLATING = 1;
+    var GET_BLOB_DATA = 2;
+    var Sender2 = class _Sender {
+      /**
+       * Creates a Sender instance.
+       *
+       * @param {Duplex} socket The connection socket
+       * @param {Object} [extensions] An object containing the negotiated extensions
+       * @param {Function} [generateMask] The function used to generate the masking
+       *     key
+       */
+      constructor(socket, extensions, generateMask) {
+        this._extensions = extensions || {};
+        if (generateMask) {
+          this._generateMask = generateMask;
+          this._maskBuffer = Buffer.alloc(4);
+        }
+        this._socket = socket;
+        this._firstFragment = true;
+        this._compress = false;
+        this._bufferedBytes = 0;
+        this._queue = [];
+        this._state = DEFAULT;
+        this.onerror = NOOP;
+        this[kWebSocket] = void 0;
+      }
+      /**
+       * Frames a piece of data according to the HyBi WebSocket protocol.
+       *
+       * @param {(Buffer|String)} data The data to frame
+       * @param {Object} options Options object
+       * @param {Boolean} [options.fin=false] Specifies whether or not to set the
+       *     FIN bit
+       * @param {Function} [options.generateMask] The function used to generate the
+       *     masking key
+       * @param {Boolean} [options.mask=false] Specifies whether or not to mask
+       *     `data`
+       * @param {Buffer} [options.maskBuffer] The buffer used to store the masking
+       *     key
+       * @param {Number} options.opcode The opcode
+       * @param {Boolean} [options.readOnly=false] Specifies whether `data` can be
+       *     modified
+       * @param {Boolean} [options.rsv1=false] Specifies whether or not to set the
+       *     RSV1 bit
+       * @return {(Buffer|String)[]} The framed data
+       * @public
+       */
+      static frame(data, options) {
+        let mask;
+        let merge2 = false;
+        let offset = 2;
+        let skipMasking = false;
+        if (options.mask) {
+          mask = options.maskBuffer || maskBuffer;
+          if (options.generateMask) {
+            options.generateMask(mask);
+          } else {
+            if (randomPoolPointer === RANDOM_POOL_SIZE) {
+              if (randomPool === void 0) {
+                randomPool = Buffer.alloc(RANDOM_POOL_SIZE);
+              }
+              randomFillSync(randomPool, 0, RANDOM_POOL_SIZE);
+              randomPoolPointer = 0;
+            }
+            mask[0] = randomPool[randomPoolPointer++];
+            mask[1] = randomPool[randomPoolPointer++];
+            mask[2] = randomPool[randomPoolPointer++];
+            mask[3] = randomPool[randomPoolPointer++];
+          }
+          skipMasking = (mask[0] | mask[1] | mask[2] | mask[3]) === 0;
+          offset = 6;
+        }
+        let dataLength;
+        if (typeof data === "string") {
+          if ((!options.mask || skipMasking) && options[kByteLength] !== void 0) {
+            dataLength = options[kByteLength];
+          } else {
+            data = Buffer.from(data);
+            dataLength = data.length;
+          }
+        } else {
+          dataLength = data.length;
+          merge2 = options.mask && options.readOnly && !skipMasking;
+        }
+        let payloadLength = dataLength;
+        if (dataLength >= 65536) {
+          offset += 8;
+          payloadLength = 127;
+        } else if (dataLength > 125) {
+          offset += 2;
+          payloadLength = 126;
+        }
+        const target = Buffer.allocUnsafe(merge2 ? dataLength + offset : offset);
+        target[0] = options.fin ? options.opcode | 128 : options.opcode;
+        if (options.rsv1) target[0] |= 64;
+        target[1] = payloadLength;
+        if (payloadLength === 126) {
+          target.writeUInt16BE(dataLength, 2);
+        } else if (payloadLength === 127) {
+          target[2] = target[3] = 0;
+          target.writeUIntBE(dataLength, 4, 6);
+        }
+        if (!options.mask) return [target, data];
+        target[1] |= 128;
+        target[offset - 4] = mask[0];
+        target[offset - 3] = mask[1];
+        target[offset - 2] = mask[2];
+        target[offset - 1] = mask[3];
+        if (skipMasking) return [target, data];
+        if (merge2) {
+          applyMask(data, mask, target, offset, dataLength);
+          return [target];
+        }
+        applyMask(data, mask, data, 0, dataLength);
+        return [target, data];
+      }
+      /**
+       * Sends a close message to the other peer.
+       *
+       * @param {Number} [code] The status code component of the body
+       * @param {(String|Buffer)} [data] The message component of the body
+       * @param {Boolean} [mask=false] Specifies whether or not to mask the message
+       * @param {Function} [cb] Callback
+       * @public
+       */
+      close(code, data, mask, cb) {
+        let buf;
+        if (code === void 0) {
+          buf = EMPTY_BUFFER;
+        } else if (typeof code !== "number" || !isValidStatusCode(code)) {
+          throw new TypeError("First argument must be a valid error code number");
+        } else if (data === void 0 || !data.length) {
+          buf = Buffer.allocUnsafe(2);
+          buf.writeUInt16BE(code, 0);
+        } else {
+          const length2 = Buffer.byteLength(data);
+          if (length2 > 123) {
+            throw new RangeError("The message must not be greater than 123 bytes");
+          }
+          buf = Buffer.allocUnsafe(2 + length2);
+          buf.writeUInt16BE(code, 0);
+          if (typeof data === "string") {
+            buf.write(data, 2);
+          } else if (isUint8Array(data)) {
+            buf.set(data, 2);
+          } else {
+            throw new TypeError("Second argument must be a string or a Uint8Array");
+          }
+        }
+        const options = {
+          [kByteLength]: buf.length,
+          fin: true,
+          generateMask: this._generateMask,
+          mask,
+          maskBuffer: this._maskBuffer,
+          opcode: 8,
+          readOnly: false,
+          rsv1: false
+        };
+        if (this._state !== DEFAULT) {
+          this.enqueue([this.dispatch, buf, false, options, cb]);
+        } else {
+          this.sendFrame(_Sender.frame(buf, options), cb);
+        }
+      }
+      /**
+       * Sends a ping message to the other peer.
+       *
+       * @param {*} data The message to send
+       * @param {Boolean} [mask=false] Specifies whether or not to mask `data`
+       * @param {Function} [cb] Callback
+       * @public
+       */
+      ping(data, mask, cb) {
+        let byteLength;
+        let readOnly;
+        if (typeof data === "string") {
+          byteLength = Buffer.byteLength(data);
+          readOnly = false;
+        } else if (isBlob(data)) {
+          byteLength = data.size;
+          readOnly = false;
+        } else {
+          data = toBuffer(data);
+          byteLength = data.length;
+          readOnly = toBuffer.readOnly;
+        }
+        if (byteLength > 125) {
+          throw new RangeError("The data size must not be greater than 125 bytes");
+        }
+        const options = {
+          [kByteLength]: byteLength,
+          fin: true,
+          generateMask: this._generateMask,
+          mask,
+          maskBuffer: this._maskBuffer,
+          opcode: 9,
+          readOnly,
+          rsv1: false
+        };
+        if (isBlob(data)) {
+          if (this._state !== DEFAULT) {
+            this.enqueue([this.getBlobData, data, false, options, cb]);
+          } else {
+            this.getBlobData(data, false, options, cb);
+          }
+        } else if (this._state !== DEFAULT) {
+          this.enqueue([this.dispatch, data, false, options, cb]);
+        } else {
+          this.sendFrame(_Sender.frame(data, options), cb);
+        }
+      }
+      /**
+       * Sends a pong message to the other peer.
+       *
+       * @param {*} data The message to send
+       * @param {Boolean} [mask=false] Specifies whether or not to mask `data`
+       * @param {Function} [cb] Callback
+       * @public
+       */
+      pong(data, mask, cb) {
+        let byteLength;
+        let readOnly;
+        if (typeof data === "string") {
+          byteLength = Buffer.byteLength(data);
+          readOnly = false;
+        } else if (isBlob(data)) {
+          byteLength = data.size;
+          readOnly = false;
+        } else {
+          data = toBuffer(data);
+          byteLength = data.length;
+          readOnly = toBuffer.readOnly;
+        }
+        if (byteLength > 125) {
+          throw new RangeError("The data size must not be greater than 125 bytes");
+        }
+        const options = {
+          [kByteLength]: byteLength,
+          fin: true,
+          generateMask: this._generateMask,
+          mask,
+          maskBuffer: this._maskBuffer,
+          opcode: 10,
+          readOnly,
+          rsv1: false
+        };
+        if (isBlob(data)) {
+          if (this._state !== DEFAULT) {
+            this.enqueue([this.getBlobData, data, false, options, cb]);
+          } else {
+            this.getBlobData(data, false, options, cb);
+          }
+        } else if (this._state !== DEFAULT) {
+          this.enqueue([this.dispatch, data, false, options, cb]);
+        } else {
+          this.sendFrame(_Sender.frame(data, options), cb);
+        }
+      }
+      /**
+       * Sends a data message to the other peer.
+       *
+       * @param {*} data The message to send
+       * @param {Object} options Options object
+       * @param {Boolean} [options.binary=false] Specifies whether `data` is binary
+       *     or text
+       * @param {Boolean} [options.compress=false] Specifies whether or not to
+       *     compress `data`
+       * @param {Boolean} [options.fin=false] Specifies whether the fragment is the
+       *     last one
+       * @param {Boolean} [options.mask=false] Specifies whether or not to mask
+       *     `data`
+       * @param {Function} [cb] Callback
+       * @public
+       */
+      send(data, options, cb) {
+        const perMessageDeflate = this._extensions[PerMessageDeflate2.extensionName];
+        let opcode = options.binary ? 2 : 1;
+        let rsv1 = options.compress;
+        let byteLength;
+        let readOnly;
+        if (typeof data === "string") {
+          byteLength = Buffer.byteLength(data);
+          readOnly = false;
+        } else if (isBlob(data)) {
+          byteLength = data.size;
+          readOnly = false;
+        } else {
+          data = toBuffer(data);
+          byteLength = data.length;
+          readOnly = toBuffer.readOnly;
+        }
+        if (this._firstFragment) {
+          this._firstFragment = false;
+          if (rsv1 && perMessageDeflate && perMessageDeflate.params[perMessageDeflate._isServer ? "server_no_context_takeover" : "client_no_context_takeover"]) {
+            rsv1 = byteLength >= perMessageDeflate._threshold;
+          }
+          this._compress = rsv1;
+        } else {
+          rsv1 = false;
+          opcode = 0;
+        }
+        if (options.fin) this._firstFragment = true;
+        const opts = {
+          [kByteLength]: byteLength,
+          fin: options.fin,
+          generateMask: this._generateMask,
+          mask: options.mask,
+          maskBuffer: this._maskBuffer,
+          opcode,
+          readOnly,
+          rsv1
+        };
+        if (isBlob(data)) {
+          if (this._state !== DEFAULT) {
+            this.enqueue([this.getBlobData, data, this._compress, opts, cb]);
+          } else {
+            this.getBlobData(data, this._compress, opts, cb);
+          }
+        } else if (this._state !== DEFAULT) {
+          this.enqueue([this.dispatch, data, this._compress, opts, cb]);
+        } else {
+          this.dispatch(data, this._compress, opts, cb);
+        }
+      }
+      /**
+       * Gets the contents of a blob as binary data.
+       *
+       * @param {Blob} blob The blob
+       * @param {Boolean} [compress=false] Specifies whether or not to compress
+       *     the data
+       * @param {Object} options Options object
+       * @param {Boolean} [options.fin=false] Specifies whether or not to set the
+       *     FIN bit
+       * @param {Function} [options.generateMask] The function used to generate the
+       *     masking key
+       * @param {Boolean} [options.mask=false] Specifies whether or not to mask
+       *     `data`
+       * @param {Buffer} [options.maskBuffer] The buffer used to store the masking
+       *     key
+       * @param {Number} options.opcode The opcode
+       * @param {Boolean} [options.readOnly=false] Specifies whether `data` can be
+       *     modified
+       * @param {Boolean} [options.rsv1=false] Specifies whether or not to set the
+       *     RSV1 bit
+       * @param {Function} [cb] Callback
+       * @private
+       */
+      getBlobData(blob, compress, options, cb) {
+        this._bufferedBytes += options[kByteLength];
+        this._state = GET_BLOB_DATA;
+        blob.arrayBuffer().then((arrayBuffer) => {
+          if (this._socket.destroyed) {
+            const err = new Error(
+              "The socket was closed while the blob was being read"
+            );
+            process.nextTick(callCallbacks, this, err, cb);
+            return;
+          }
+          this._bufferedBytes -= options[kByteLength];
+          const data = toBuffer(arrayBuffer);
+          if (!compress) {
+            this._state = DEFAULT;
+            this.sendFrame(_Sender.frame(data, options), cb);
+            this.dequeue();
+          } else {
+            this.dispatch(data, compress, options, cb);
+          }
+        }).catch((err) => {
+          process.nextTick(onError, this, err, cb);
+        });
+      }
+      /**
+       * Dispatches a message.
+       *
+       * @param {(Buffer|String)} data The message to send
+       * @param {Boolean} [compress=false] Specifies whether or not to compress
+       *     `data`
+       * @param {Object} options Options object
+       * @param {Boolean} [options.fin=false] Specifies whether or not to set the
+       *     FIN bit
+       * @param {Function} [options.generateMask] The function used to generate the
+       *     masking key
+       * @param {Boolean} [options.mask=false] Specifies whether or not to mask
+       *     `data`
+       * @param {Buffer} [options.maskBuffer] The buffer used to store the masking
+       *     key
+       * @param {Number} options.opcode The opcode
+       * @param {Boolean} [options.readOnly=false] Specifies whether `data` can be
+       *     modified
+       * @param {Boolean} [options.rsv1=false] Specifies whether or not to set the
+       *     RSV1 bit
+       * @param {Function} [cb] Callback
+       * @private
+       */
+      dispatch(data, compress, options, cb) {
+        if (!compress) {
+          this.sendFrame(_Sender.frame(data, options), cb);
+          return;
+        }
+        const perMessageDeflate = this._extensions[PerMessageDeflate2.extensionName];
+        this._bufferedBytes += options[kByteLength];
+        this._state = DEFLATING;
+        perMessageDeflate.compress(data, options.fin, (_, buf) => {
+          if (this._socket.destroyed) {
+            const err = new Error(
+              "The socket was closed while data was being compressed"
+            );
+            callCallbacks(this, err, cb);
+            return;
+          }
+          this._bufferedBytes -= options[kByteLength];
+          this._state = DEFAULT;
+          options.readOnly = false;
+          this.sendFrame(_Sender.frame(buf, options), cb);
+          this.dequeue();
+        });
+      }
+      /**
+       * Executes queued send operations.
+       *
+       * @private
+       */
+      dequeue() {
+        while (this._state === DEFAULT && this._queue.length) {
+          const params = this._queue.shift();
+          this._bufferedBytes -= params[3][kByteLength];
+          Reflect.apply(params[0], this, params.slice(1));
+        }
+      }
+      /**
+       * Enqueues a send operation.
+       *
+       * @param {Array} params Send operation parameters.
+       * @private
+       */
+      enqueue(params) {
+        this._bufferedBytes += params[3][kByteLength];
+        this._queue.push(params);
+      }
+      /**
+       * Sends a frame.
+       *
+       * @param {(Buffer | String)[]} list The frame to send
+       * @param {Function} [cb] Callback
+       * @private
+       */
+      sendFrame(list, cb) {
+        if (list.length === 2) {
+          this._socket.cork();
+          this._socket.write(list[0]);
+          this._socket.write(list[1], cb);
+          this._socket.uncork();
+        } else {
+          this._socket.write(list[0], cb);
+        }
+      }
+    };
+    module.exports = Sender2;
+    function callCallbacks(sender, err, cb) {
+      if (typeof cb === "function") cb(err);
+      for (let i = 0; i < sender._queue.length; i++) {
+        const params = sender._queue[i];
+        const callback = params[params.length - 1];
+        if (typeof callback === "function") callback(err);
+      }
+    }
+    function onError(sender, err, cb) {
+      callCallbacks(sender, err, cb);
+      sender.onerror(err);
+    }
+  }
+});
+
+// node_modules/ws/lib/event-target.js
+var require_event_target = __commonJS({
+  "node_modules/ws/lib/event-target.js"(exports, module) {
+    "use strict";
+    var { kForOnEventAttribute, kListener } = require_constants();
+    var kCode = /* @__PURE__ */ Symbol("kCode");
+    var kData = /* @__PURE__ */ Symbol("kData");
+    var kError = /* @__PURE__ */ Symbol("kError");
+    var kMessage = /* @__PURE__ */ Symbol("kMessage");
+    var kReason = /* @__PURE__ */ Symbol("kReason");
+    var kTarget = /* @__PURE__ */ Symbol("kTarget");
+    var kType = /* @__PURE__ */ Symbol("kType");
+    var kWasClean = /* @__PURE__ */ Symbol("kWasClean");
+    var Event = class {
+      /**
+       * Create a new `Event`.
+       *
+       * @param {String} type The name of the event
+       * @throws {TypeError} If the `type` argument is not specified
+       */
+      constructor(type) {
+        this[kTarget] = null;
+        this[kType] = type;
+      }
+      /**
+       * @type {*}
+       */
+      get target() {
+        return this[kTarget];
+      }
+      /**
+       * @type {String}
+       */
+      get type() {
+        return this[kType];
+      }
+    };
+    Object.defineProperty(Event.prototype, "target", { enumerable: true });
+    Object.defineProperty(Event.prototype, "type", { enumerable: true });
+    var CloseEvent = class extends Event {
+      /**
+       * Create a new `CloseEvent`.
+       *
+       * @param {String} type The name of the event
+       * @param {Object} [options] A dictionary object that allows for setting
+       *     attributes via object members of the same name
+       * @param {Number} [options.code=0] The status code explaining why the
+       *     connection was closed
+       * @param {String} [options.reason=''] A human-readable string explaining why
+       *     the connection was closed
+       * @param {Boolean} [options.wasClean=false] Indicates whether or not the
+       *     connection was cleanly closed
+       */
+      constructor(type, options = {}) {
+        super(type);
+        this[kCode] = options.code === void 0 ? 0 : options.code;
+        this[kReason] = options.reason === void 0 ? "" : options.reason;
+        this[kWasClean] = options.wasClean === void 0 ? false : options.wasClean;
+      }
+      /**
+       * @type {Number}
+       */
+      get code() {
+        return this[kCode];
+      }
+      /**
+       * @type {String}
+       */
+      get reason() {
+        return this[kReason];
+      }
+      /**
+       * @type {Boolean}
+       */
+      get wasClean() {
+        return this[kWasClean];
+      }
+    };
+    Object.defineProperty(CloseEvent.prototype, "code", { enumerable: true });
+    Object.defineProperty(CloseEvent.prototype, "reason", { enumerable: true });
+    Object.defineProperty(CloseEvent.prototype, "wasClean", { enumerable: true });
+    var ErrorEvent = class extends Event {
+      /**
+       * Create a new `ErrorEvent`.
+       *
+       * @param {String} type The name of the event
+       * @param {Object} [options] A dictionary object that allows for setting
+       *     attributes via object members of the same name
+       * @param {*} [options.error=null] The error that generated this event
+       * @param {String} [options.message=''] The error message
+       */
+      constructor(type, options = {}) {
+        super(type);
+        this[kError] = options.error === void 0 ? null : options.error;
+        this[kMessage] = options.message === void 0 ? "" : options.message;
+      }
+      /**
+       * @type {*}
+       */
+      get error() {
+        return this[kError];
+      }
+      /**
+       * @type {String}
+       */
+      get message() {
+        return this[kMessage];
+      }
+    };
+    Object.defineProperty(ErrorEvent.prototype, "error", { enumerable: true });
+    Object.defineProperty(ErrorEvent.prototype, "message", { enumerable: true });
+    var MessageEvent = class extends Event {
+      /**
+       * Create a new `MessageEvent`.
+       *
+       * @param {String} type The name of the event
+       * @param {Object} [options] A dictionary object that allows for setting
+       *     attributes via object members of the same name
+       * @param {*} [options.data=null] The message content
+       */
+      constructor(type, options = {}) {
+        super(type);
+        this[kData] = options.data === void 0 ? null : options.data;
+      }
+      /**
+       * @type {*}
+       */
+      get data() {
+        return this[kData];
+      }
+    };
+    Object.defineProperty(MessageEvent.prototype, "data", { enumerable: true });
+    var EventTarget = {
+      /**
+       * Register an event listener.
+       *
+       * @param {String} type A string representing the event type to listen for
+       * @param {(Function|Object)} handler The listener to add
+       * @param {Object} [options] An options object specifies characteristics about
+       *     the event listener
+       * @param {Boolean} [options.once=false] A `Boolean` indicating that the
+       *     listener should be invoked at most once after being added. If `true`,
+       *     the listener would be automatically removed when invoked.
+       * @public
+       */
+      addEventListener(type, handler, options = {}) {
+        for (const listener of this.listeners(type)) {
+          if (!options[kForOnEventAttribute] && listener[kListener] === handler && !listener[kForOnEventAttribute]) {
+            return;
+          }
+        }
+        let wrapper;
+        if (type === "message") {
+          wrapper = function onMessage(data, isBinary) {
+            const event = new MessageEvent("message", {
+              data: isBinary ? data : data.toString()
+            });
+            event[kTarget] = this;
+            callListener(handler, this, event);
+          };
+        } else if (type === "close") {
+          wrapper = function onClose(code, message2) {
+            const event = new CloseEvent("close", {
+              code,
+              reason: message2.toString(),
+              wasClean: this._closeFrameReceived && this._closeFrameSent
+            });
+            event[kTarget] = this;
+            callListener(handler, this, event);
+          };
+        } else if (type === "error") {
+          wrapper = function onError(error2) {
+            const event = new ErrorEvent("error", {
+              error: error2,
+              message: error2.message
+            });
+            event[kTarget] = this;
+            callListener(handler, this, event);
+          };
+        } else if (type === "open") {
+          wrapper = function onOpen() {
+            const event = new Event("open");
+            event[kTarget] = this;
+            callListener(handler, this, event);
+          };
+        } else {
+          return;
+        }
+        wrapper[kForOnEventAttribute] = !!options[kForOnEventAttribute];
+        wrapper[kListener] = handler;
+        if (options.once) {
+          this.once(type, wrapper);
+        } else {
+          this.on(type, wrapper);
+        }
+      },
+      /**
+       * Remove an event listener.
+       *
+       * @param {String} type A string representing the event type to remove
+       * @param {(Function|Object)} handler The listener to remove
+       * @public
+       */
+      removeEventListener(type, handler) {
+        for (const listener of this.listeners(type)) {
+          if (listener[kListener] === handler && !listener[kForOnEventAttribute]) {
+            this.removeListener(type, listener);
+            break;
+          }
+        }
+      }
+    };
+    module.exports = {
+      CloseEvent,
+      ErrorEvent,
+      Event,
+      EventTarget,
+      MessageEvent
+    };
+    function callListener(listener, thisArg, event) {
+      if (typeof listener === "object" && listener.handleEvent) {
+        listener.handleEvent.call(listener, event);
+      } else {
+        listener.call(thisArg, event);
+      }
+    }
+  }
+});
+
+// node_modules/ws/lib/extension.js
+var require_extension = __commonJS({
+  "node_modules/ws/lib/extension.js"(exports, module) {
+    "use strict";
+    var { tokenChars } = require_validation3();
+    function push(dest, name, elem) {
+      if (dest[name] === void 0) dest[name] = [elem];
+      else dest[name].push(elem);
+    }
+    function parse4(header2) {
+      const offers = /* @__PURE__ */ Object.create(null);
+      let params = /* @__PURE__ */ Object.create(null);
+      let mustUnescape = false;
+      let isEscaping = false;
+      let inQuotes = false;
+      let extensionName;
+      let paramName;
+      let start2 = -1;
+      let code = -1;
+      let end = -1;
+      let i = 0;
+      for (; i < header2.length; i++) {
+        code = header2.charCodeAt(i);
+        if (extensionName === void 0) {
+          if (end === -1 && tokenChars[code] === 1) {
+            if (start2 === -1) start2 = i;
+          } else if (i !== 0 && (code === 32 || code === 9)) {
+            if (end === -1 && start2 !== -1) end = i;
+          } else if (code === 59 || code === 44) {
+            if (start2 === -1) {
+              throw new SyntaxError(`Unexpected character at index ${i}`);
+            }
+            if (end === -1) end = i;
+            const name = header2.slice(start2, end);
+            if (code === 44) {
+              push(offers, name, params);
+              params = /* @__PURE__ */ Object.create(null);
+            } else {
+              extensionName = name;
+            }
+            start2 = end = -1;
+          } else {
+            throw new SyntaxError(`Unexpected character at index ${i}`);
+          }
+        } else if (paramName === void 0) {
+          if (end === -1 && tokenChars[code] === 1) {
+            if (start2 === -1) start2 = i;
+          } else if (code === 32 || code === 9) {
+            if (end === -1 && start2 !== -1) end = i;
+          } else if (code === 59 || code === 44) {
+            if (start2 === -1) {
+              throw new SyntaxError(`Unexpected character at index ${i}`);
+            }
+            if (end === -1) end = i;
+            push(params, header2.slice(start2, end), true);
+            if (code === 44) {
+              push(offers, extensionName, params);
+              params = /* @__PURE__ */ Object.create(null);
+              extensionName = void 0;
+            }
+            start2 = end = -1;
+          } else if (code === 61 && start2 !== -1 && end === -1) {
+            paramName = header2.slice(start2, i);
+            start2 = end = -1;
+          } else {
+            throw new SyntaxError(`Unexpected character at index ${i}`);
+          }
+        } else {
+          if (isEscaping) {
+            if (tokenChars[code] !== 1) {
+              throw new SyntaxError(`Unexpected character at index ${i}`);
+            }
+            if (start2 === -1) start2 = i;
+            else if (!mustUnescape) mustUnescape = true;
+            isEscaping = false;
+          } else if (inQuotes) {
+            if (tokenChars[code] === 1) {
+              if (start2 === -1) start2 = i;
+            } else if (code === 34 && start2 !== -1) {
+              inQuotes = false;
+              end = i;
+            } else if (code === 92) {
+              isEscaping = true;
+            } else {
+              throw new SyntaxError(`Unexpected character at index ${i}`);
+            }
+          } else if (code === 34 && header2.charCodeAt(i - 1) === 61) {
+            inQuotes = true;
+          } else if (end === -1 && tokenChars[code] === 1) {
+            if (start2 === -1) start2 = i;
+          } else if (start2 !== -1 && (code === 32 || code === 9)) {
+            if (end === -1) end = i;
+          } else if (code === 59 || code === 44) {
+            if (start2 === -1) {
+              throw new SyntaxError(`Unexpected character at index ${i}`);
+            }
+            if (end === -1) end = i;
+            let value = header2.slice(start2, end);
+            if (mustUnescape) {
+              value = value.replace(/\\/g, "");
+              mustUnescape = false;
+            }
+            push(params, paramName, value);
+            if (code === 44) {
+              push(offers, extensionName, params);
+              params = /* @__PURE__ */ Object.create(null);
+              extensionName = void 0;
+            }
+            paramName = void 0;
+            start2 = end = -1;
+          } else {
+            throw new SyntaxError(`Unexpected character at index ${i}`);
+          }
+        }
+      }
+      if (start2 === -1 || inQuotes || code === 32 || code === 9) {
+        throw new SyntaxError("Unexpected end of input");
+      }
+      if (end === -1) end = i;
+      const token2 = header2.slice(start2, end);
+      if (extensionName === void 0) {
+        push(offers, token2, params);
+      } else {
+        if (paramName === void 0) {
+          push(params, token2, true);
+        } else if (mustUnescape) {
+          push(params, paramName, token2.replace(/\\/g, ""));
+        } else {
+          push(params, paramName, token2);
+        }
+        push(offers, extensionName, params);
+      }
+      return offers;
+    }
+    function format(extensions) {
+      return Object.keys(extensions).map((extension2) => {
+        let configurations = extensions[extension2];
+        if (!Array.isArray(configurations)) configurations = [configurations];
+        return configurations.map((params) => {
+          return [extension2].concat(
+            Object.keys(params).map((k) => {
+              let values = params[k];
+              if (!Array.isArray(values)) values = [values];
+              return values.map((v) => v === true ? k : `${k}=${v}`).join("; ");
+            })
+          ).join("; ");
+        }).join(", ");
+      }).join(", ");
+    }
+    module.exports = { format, parse: parse4 };
+  }
+});
+
+// node_modules/ws/lib/websocket.js
+var require_websocket = __commonJS({
+  "node_modules/ws/lib/websocket.js"(exports, module) {
+    "use strict";
+    var EventEmitter = __require("events");
+    var https = __require("https");
+    var http = __require("http");
+    var net = __require("net");
+    var tls = __require("tls");
+    var { randomBytes: randomBytes12, createHash: createHash5 } = __require("crypto");
+    var { Duplex, Readable } = __require("stream");
+    var { URL: URL2 } = __require("url");
+    var PerMessageDeflate2 = require_permessage_deflate();
+    var Receiver2 = require_receiver();
+    var Sender2 = require_sender();
+    var { isBlob } = require_validation3();
+    var {
+      BINARY_TYPES,
+      CLOSE_TIMEOUT,
+      EMPTY_BUFFER,
+      GUID,
+      kForOnEventAttribute,
+      kListener,
+      kStatusCode,
+      kWebSocket,
+      NOOP
+    } = require_constants();
+    var {
+      EventTarget: { addEventListener, removeEventListener }
+    } = require_event_target();
+    var { format, parse: parse4 } = require_extension();
+    var { toBuffer } = require_buffer_util();
+    var kAborted = /* @__PURE__ */ Symbol("kAborted");
+    var protocolVersions = [8, 13];
+    var readyStates = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
+    var subprotocolRegex = /^[!#$%&'*+\-.0-9A-Z^_`|a-z~]+$/;
+    var WebSocket3 = class _WebSocket extends EventEmitter {
+      /**
+       * Create a new `WebSocket`.
+       *
+       * @param {(String|URL)} address The URL to which to connect
+       * @param {(String|String[])} [protocols] The subprotocols
+       * @param {Object} [options] Connection options
+       */
+      constructor(address, protocols, options) {
+        super();
+        this._binaryType = BINARY_TYPES[0];
+        this._closeCode = 1006;
+        this._closeFrameReceived = false;
+        this._closeFrameSent = false;
+        this._closeMessage = EMPTY_BUFFER;
+        this._closeTimer = null;
+        this._errorEmitted = false;
+        this._extensions = {};
+        this._paused = false;
+        this._protocol = "";
+        this._readyState = _WebSocket.CONNECTING;
+        this._receiver = null;
+        this._sender = null;
+        this._socket = null;
+        if (address !== null) {
+          this._bufferedAmount = 0;
+          this._isServer = false;
+          this._redirects = 0;
+          if (protocols === void 0) {
+            protocols = [];
+          } else if (!Array.isArray(protocols)) {
+            if (typeof protocols === "object" && protocols !== null) {
+              options = protocols;
+              protocols = [];
+            } else {
+              protocols = [protocols];
+            }
+          }
+          initAsClient(this, address, protocols, options);
+        } else {
+          this._autoPong = options.autoPong;
+          this._closeTimeout = options.closeTimeout;
+          this._isServer = true;
+        }
+      }
+      /**
+       * For historical reasons, the custom "nodebuffer" type is used by the default
+       * instead of "blob".
+       *
+       * @type {String}
+       */
+      get binaryType() {
+        return this._binaryType;
+      }
+      set binaryType(type) {
+        if (!BINARY_TYPES.includes(type)) return;
+        this._binaryType = type;
+        if (this._receiver) this._receiver._binaryType = type;
+      }
+      /**
+       * @type {Number}
+       */
+      get bufferedAmount() {
+        if (!this._socket) return this._bufferedAmount;
+        return this._socket._writableState.length + this._sender._bufferedBytes;
+      }
+      /**
+       * @type {String}
+       */
+      get extensions() {
+        return Object.keys(this._extensions).join();
+      }
+      /**
+       * @type {Boolean}
+       */
+      get isPaused() {
+        return this._paused;
+      }
+      /**
+       * @type {Function}
+       */
+      /* istanbul ignore next */
+      get onclose() {
+        return null;
+      }
+      /**
+       * @type {Function}
+       */
+      /* istanbul ignore next */
+      get onerror() {
+        return null;
+      }
+      /**
+       * @type {Function}
+       */
+      /* istanbul ignore next */
+      get onopen() {
+        return null;
+      }
+      /**
+       * @type {Function}
+       */
+      /* istanbul ignore next */
+      get onmessage() {
+        return null;
+      }
+      /**
+       * @type {String}
+       */
+      get protocol() {
+        return this._protocol;
+      }
+      /**
+       * @type {Number}
+       */
+      get readyState() {
+        return this._readyState;
+      }
+      /**
+       * @type {String}
+       */
+      get url() {
+        return this._url;
+      }
+      /**
+       * Set up the socket and the internal resources.
+       *
+       * @param {Duplex} socket The network socket between the server and client
+       * @param {Buffer} head The first packet of the upgraded stream
+       * @param {Object} options Options object
+       * @param {Boolean} [options.allowSynchronousEvents=false] Specifies whether
+       *     any of the `'message'`, `'ping'`, and `'pong'` events can be emitted
+       *     multiple times in the same tick
+       * @param {Function} [options.generateMask] The function used to generate the
+       *     masking key
+       * @param {Number} [options.maxBufferedChunks=0] The maximum number of
+       *     buffered data chunks
+       * @param {Number} [options.maxFragments=0] The maximum number of message
+       *     fragments
+       * @param {Number} [options.maxPayload=0] The maximum allowed message size
+       * @param {Boolean} [options.skipUTF8Validation=false] Specifies whether or
+       *     not to skip UTF-8 validation for text and close messages
+       * @private
+       */
+      setSocket(socket, head, options) {
+        const receiver = new Receiver2({
+          allowSynchronousEvents: options.allowSynchronousEvents,
+          binaryType: this.binaryType,
+          extensions: this._extensions,
+          isServer: this._isServer,
+          maxBufferedChunks: options.maxBufferedChunks,
+          maxFragments: options.maxFragments,
+          maxPayload: options.maxPayload,
+          skipUTF8Validation: options.skipUTF8Validation
+        });
+        const sender = new Sender2(socket, this._extensions, options.generateMask);
+        this._receiver = receiver;
+        this._sender = sender;
+        this._socket = socket;
+        receiver[kWebSocket] = this;
+        sender[kWebSocket] = this;
+        socket[kWebSocket] = this;
+        receiver.on("conclude", receiverOnConclude);
+        receiver.on("drain", receiverOnDrain);
+        receiver.on("error", receiverOnError);
+        receiver.on("message", receiverOnMessage);
+        receiver.on("ping", receiverOnPing);
+        receiver.on("pong", receiverOnPong);
+        sender.onerror = senderOnError;
+        if (socket.setTimeout) socket.setTimeout(0);
+        if (socket.setNoDelay) socket.setNoDelay();
+        if (head.length > 0) socket.unshift(head);
+        socket.on("close", socketOnClose);
+        socket.on("data", socketOnData);
+        socket.on("end", socketOnEnd);
+        socket.on("error", socketOnError);
+        this._readyState = _WebSocket.OPEN;
+        this.emit("open");
+      }
+      /**
+       * Emit the `'close'` event.
+       *
+       * @private
+       */
+      emitClose() {
+        if (!this._socket) {
+          this._readyState = _WebSocket.CLOSED;
+          this.emit("close", this._closeCode, this._closeMessage);
+          return;
+        }
+        if (this._extensions[PerMessageDeflate2.extensionName]) {
+          this._extensions[PerMessageDeflate2.extensionName].cleanup();
+        }
+        this._receiver.removeAllListeners();
+        this._readyState = _WebSocket.CLOSED;
+        this.emit("close", this._closeCode, this._closeMessage);
+      }
+      /**
+       * Start a closing handshake.
+       *
+       *          +----------+   +-----------+   +----------+
+       *     - - -|ws.close()|-->|close frame|-->|ws.close()|- - -
+       *    |     +----------+   +-----------+   +----------+     |
+       *          +----------+   +-----------+         |
+       * CLOSING  |ws.close()|<--|close frame|<--+-----+       CLOSING
+       *          +----------+   +-----------+   |
+       *    |           |                        |   +---+        |
+       *                +------------------------+-->|fin| - - - -
+       *    |         +---+                      |   +---+
+       *     - - - - -|fin|<---------------------+
+       *              +---+
+       *
+       * @param {Number} [code] Status code explaining why the connection is closing
+       * @param {(String|Buffer)} [data] The reason why the connection is
+       *     closing
+       * @public
+       */
+      close(code, data) {
+        if (this.readyState === _WebSocket.CLOSED) return;
+        if (this.readyState === _WebSocket.CONNECTING) {
+          const msg = "WebSocket was closed before the connection was established";
+          abortHandshake(this, this._req, msg);
+          return;
+        }
+        if (this.readyState === _WebSocket.CLOSING) {
+          if (this._closeFrameSent && (this._closeFrameReceived || this._receiver._writableState.errorEmitted)) {
+            this._socket.end();
+          }
+          return;
+        }
+        this._readyState = _WebSocket.CLOSING;
+        this._sender.close(code, data, !this._isServer, (err) => {
+          if (err) return;
+          this._closeFrameSent = true;
+          if (this._closeFrameReceived || this._receiver._writableState.errorEmitted) {
+            this._socket.end();
+          }
+        });
+        setCloseTimer(this);
+      }
+      /**
+       * Pause the socket.
+       *
+       * @public
+       */
+      pause() {
+        if (this.readyState === _WebSocket.CONNECTING || this.readyState === _WebSocket.CLOSED) {
+          return;
+        }
+        this._paused = true;
+        this._socket.pause();
+      }
+      /**
+       * Send a ping.
+       *
+       * @param {*} [data] The data to send
+       * @param {Boolean} [mask] Indicates whether or not to mask `data`
+       * @param {Function} [cb] Callback which is executed when the ping is sent
+       * @public
+       */
+      ping(data, mask, cb) {
+        if (this.readyState === _WebSocket.CONNECTING) {
+          throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
+        }
+        if (typeof data === "function") {
+          cb = data;
+          data = mask = void 0;
+        } else if (typeof mask === "function") {
+          cb = mask;
+          mask = void 0;
+        }
+        if (typeof data === "number") data = data.toString();
+        if (this.readyState !== _WebSocket.OPEN) {
+          sendAfterClose(this, data, cb);
+          return;
+        }
+        if (mask === void 0) mask = !this._isServer;
+        this._sender.ping(data || EMPTY_BUFFER, mask, cb);
+      }
+      /**
+       * Send a pong.
+       *
+       * @param {*} [data] The data to send
+       * @param {Boolean} [mask] Indicates whether or not to mask `data`
+       * @param {Function} [cb] Callback which is executed when the pong is sent
+       * @public
+       */
+      pong(data, mask, cb) {
+        if (this.readyState === _WebSocket.CONNECTING) {
+          throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
+        }
+        if (typeof data === "function") {
+          cb = data;
+          data = mask = void 0;
+        } else if (typeof mask === "function") {
+          cb = mask;
+          mask = void 0;
+        }
+        if (typeof data === "number") data = data.toString();
+        if (this.readyState !== _WebSocket.OPEN) {
+          sendAfterClose(this, data, cb);
+          return;
+        }
+        if (mask === void 0) mask = !this._isServer;
+        this._sender.pong(data || EMPTY_BUFFER, mask, cb);
+      }
+      /**
+       * Resume the socket.
+       *
+       * @public
+       */
+      resume() {
+        if (this.readyState === _WebSocket.CONNECTING || this.readyState === _WebSocket.CLOSED) {
+          return;
+        }
+        this._paused = false;
+        if (!this._receiver._writableState.needDrain) this._socket.resume();
+      }
+      /**
+       * Send a data message.
+       *
+       * @param {*} data The message to send
+       * @param {Object} [options] Options object
+       * @param {Boolean} [options.binary] Specifies whether `data` is binary or
+       *     text
+       * @param {Boolean} [options.compress] Specifies whether or not to compress
+       *     `data`
+       * @param {Boolean} [options.fin=true] Specifies whether the fragment is the
+       *     last one
+       * @param {Boolean} [options.mask] Specifies whether or not to mask `data`
+       * @param {Function} [cb] Callback which is executed when data is written out
+       * @public
+       */
+      send(data, options, cb) {
+        if (this.readyState === _WebSocket.CONNECTING) {
+          throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
+        }
+        if (typeof options === "function") {
+          cb = options;
+          options = {};
+        }
+        if (typeof data === "number") data = data.toString();
+        if (this.readyState !== _WebSocket.OPEN) {
+          sendAfterClose(this, data, cb);
+          return;
+        }
+        const opts = {
+          binary: typeof data !== "string",
+          mask: !this._isServer,
+          compress: true,
+          fin: true,
+          ...options
+        };
+        if (!this._extensions[PerMessageDeflate2.extensionName]) {
+          opts.compress = false;
+        }
+        this._sender.send(data || EMPTY_BUFFER, opts, cb);
+      }
+      /**
+       * Forcibly close the connection.
+       *
+       * @public
+       */
+      terminate() {
+        if (this.readyState === _WebSocket.CLOSED) return;
+        if (this.readyState === _WebSocket.CONNECTING) {
+          const msg = "WebSocket was closed before the connection was established";
+          abortHandshake(this, this._req, msg);
+          return;
+        }
+        if (this._socket) {
+          this._readyState = _WebSocket.CLOSING;
+          this._socket.destroy();
+        }
+      }
+    };
+    Object.defineProperty(WebSocket3, "CONNECTING", {
+      enumerable: true,
+      value: readyStates.indexOf("CONNECTING")
+    });
+    Object.defineProperty(WebSocket3.prototype, "CONNECTING", {
+      enumerable: true,
+      value: readyStates.indexOf("CONNECTING")
+    });
+    Object.defineProperty(WebSocket3, "OPEN", {
+      enumerable: true,
+      value: readyStates.indexOf("OPEN")
+    });
+    Object.defineProperty(WebSocket3.prototype, "OPEN", {
+      enumerable: true,
+      value: readyStates.indexOf("OPEN")
+    });
+    Object.defineProperty(WebSocket3, "CLOSING", {
+      enumerable: true,
+      value: readyStates.indexOf("CLOSING")
+    });
+    Object.defineProperty(WebSocket3.prototype, "CLOSING", {
+      enumerable: true,
+      value: readyStates.indexOf("CLOSING")
+    });
+    Object.defineProperty(WebSocket3, "CLOSED", {
+      enumerable: true,
+      value: readyStates.indexOf("CLOSED")
+    });
+    Object.defineProperty(WebSocket3.prototype, "CLOSED", {
+      enumerable: true,
+      value: readyStates.indexOf("CLOSED")
+    });
+    [
+      "binaryType",
+      "bufferedAmount",
+      "extensions",
+      "isPaused",
+      "protocol",
+      "readyState",
+      "url"
+    ].forEach((property) => {
+      Object.defineProperty(WebSocket3.prototype, property, { enumerable: true });
+    });
+    ["open", "error", "close", "message"].forEach((method) => {
+      Object.defineProperty(WebSocket3.prototype, `on${method}`, {
+        enumerable: true,
+        get() {
+          for (const listener of this.listeners(method)) {
+            if (listener[kForOnEventAttribute]) return listener[kListener];
+          }
+          return null;
+        },
+        set(handler) {
+          for (const listener of this.listeners(method)) {
+            if (listener[kForOnEventAttribute]) {
+              this.removeListener(method, listener);
+              break;
+            }
+          }
+          if (typeof handler !== "function") return;
+          this.addEventListener(method, handler, {
+            [kForOnEventAttribute]: true
+          });
+        }
+      });
+    });
+    WebSocket3.prototype.addEventListener = addEventListener;
+    WebSocket3.prototype.removeEventListener = removeEventListener;
+    module.exports = WebSocket3;
+    function initAsClient(websocket, address, protocols, options) {
+      const opts = {
+        allowSynchronousEvents: true,
+        autoPong: true,
+        closeTimeout: CLOSE_TIMEOUT,
+        protocolVersion: protocolVersions[1],
+        maxBufferedChunks: 1024 * 1024,
+        maxFragments: 128 * 1024,
+        maxPayload: 100 * 1024 * 1024,
+        skipUTF8Validation: false,
+        perMessageDeflate: true,
+        followRedirects: false,
+        maxRedirects: 10,
+        ...options,
+        socketPath: void 0,
+        hostname: void 0,
+        protocol: void 0,
+        timeout: void 0,
+        method: "GET",
+        host: void 0,
+        path: void 0,
+        port: void 0
+      };
+      websocket._autoPong = opts.autoPong;
+      websocket._closeTimeout = opts.closeTimeout;
+      if (!protocolVersions.includes(opts.protocolVersion)) {
+        throw new RangeError(
+          `Unsupported protocol version: ${opts.protocolVersion} (supported versions: ${protocolVersions.join(", ")})`
+        );
+      }
+      let parsedUrl;
+      if (address instanceof URL2) {
+        parsedUrl = address;
+      } else {
+        try {
+          parsedUrl = new URL2(address);
+        } catch {
+          throw new SyntaxError(`Invalid URL: ${address}`);
+        }
+      }
+      if (parsedUrl.protocol === "http:") {
+        parsedUrl.protocol = "ws:";
+      } else if (parsedUrl.protocol === "https:") {
+        parsedUrl.protocol = "wss:";
+      }
+      websocket._url = parsedUrl.href;
+      const isSecure = parsedUrl.protocol === "wss:";
+      const isIpcUrl = parsedUrl.protocol === "ws+unix:";
+      let invalidUrlMessage;
+      if (parsedUrl.protocol !== "ws:" && !isSecure && !isIpcUrl) {
+        invalidUrlMessage = `The URL's protocol must be one of "ws:", "wss:", "http:", "https:", or "ws+unix:"`;
+      } else if (isIpcUrl && !parsedUrl.pathname) {
+        invalidUrlMessage = "The URL's pathname is empty";
+      } else if (parsedUrl.hash) {
+        invalidUrlMessage = "The URL contains a fragment identifier";
+      }
+      if (invalidUrlMessage) {
+        const err = new SyntaxError(invalidUrlMessage);
+        if (websocket._redirects === 0) {
+          throw err;
+        } else {
+          emitErrorAndClose(websocket, err);
+          return;
+        }
+      }
+      const defaultPort = isSecure ? 443 : 80;
+      const key = randomBytes12(16).toString("base64");
+      const request = isSecure ? https.request : http.request;
+      const protocolSet = /* @__PURE__ */ new Set();
+      let perMessageDeflate;
+      opts.createConnection = opts.createConnection || (isSecure ? tlsConnect : netConnect);
+      opts.defaultPort = opts.defaultPort || defaultPort;
+      opts.port = parsedUrl.port || defaultPort;
+      opts.host = parsedUrl.hostname.startsWith("[") ? parsedUrl.hostname.slice(1, -1) : parsedUrl.hostname;
+      opts.headers = {
+        ...opts.headers,
+        "Sec-WebSocket-Version": opts.protocolVersion,
+        "Sec-WebSocket-Key": key,
+        Connection: "Upgrade",
+        Upgrade: "websocket"
+      };
+      opts.path = parsedUrl.pathname + parsedUrl.search;
+      opts.timeout = opts.handshakeTimeout;
+      if (opts.perMessageDeflate) {
+        perMessageDeflate = new PerMessageDeflate2({
+          ...opts.perMessageDeflate,
+          isServer: false,
+          maxPayload: opts.maxPayload
+        });
+        opts.headers["Sec-WebSocket-Extensions"] = format({
+          [PerMessageDeflate2.extensionName]: perMessageDeflate.offer()
+        });
+      }
+      if (protocols.length) {
+        for (const protocol of protocols) {
+          if (typeof protocol !== "string" || !subprotocolRegex.test(protocol) || protocolSet.has(protocol)) {
+            throw new SyntaxError(
+              "An invalid or duplicated subprotocol was specified"
+            );
+          }
+          protocolSet.add(protocol);
+        }
+        opts.headers["Sec-WebSocket-Protocol"] = protocols.join(",");
+      }
+      if (opts.origin) {
+        if (opts.protocolVersion < 13) {
+          opts.headers["Sec-WebSocket-Origin"] = opts.origin;
+        } else {
+          opts.headers.Origin = opts.origin;
+        }
+      }
+      if (parsedUrl.username || parsedUrl.password) {
+        opts.auth = `${parsedUrl.username}:${parsedUrl.password}`;
+      }
+      if (isIpcUrl) {
+        const parts = opts.path.split(":");
+        opts.socketPath = parts[0];
+        opts.path = parts[1];
+      }
+      let req;
+      if (opts.followRedirects) {
+        if (websocket._redirects === 0) {
+          websocket._originalIpc = isIpcUrl;
+          websocket._originalSecure = isSecure;
+          websocket._originalHostOrSocketPath = isIpcUrl ? opts.socketPath : parsedUrl.host;
+          const headers = options && options.headers;
+          options = { ...options, headers: {} };
+          if (headers) {
+            for (const [key2, value] of Object.entries(headers)) {
+              options.headers[key2.toLowerCase()] = value;
+            }
+          }
+        } else if (websocket.listenerCount("redirect") === 0) {
+          const isSameHost = isIpcUrl ? websocket._originalIpc ? opts.socketPath === websocket._originalHostOrSocketPath : false : websocket._originalIpc ? false : parsedUrl.host === websocket._originalHostOrSocketPath;
+          if (!isSameHost || websocket._originalSecure && !isSecure) {
+            delete opts.headers.authorization;
+            delete opts.headers.cookie;
+            if (!isSameHost) delete opts.headers.host;
+            opts.auth = void 0;
+          }
+        }
+        if (opts.auth && !options.headers.authorization) {
+          options.headers.authorization = "Basic " + Buffer.from(opts.auth).toString("base64");
+        }
+        req = websocket._req = request(opts);
+        if (websocket._redirects) {
+          websocket.emit("redirect", websocket.url, req);
+        }
+      } else {
+        req = websocket._req = request(opts);
+      }
+      if (opts.timeout) {
+        req.on("timeout", () => {
+          abortHandshake(websocket, req, "Opening handshake has timed out");
+        });
+      }
+      req.on("error", (err) => {
+        if (req === null || req[kAborted]) return;
+        req = websocket._req = null;
+        emitErrorAndClose(websocket, err);
+      });
+      req.on("response", (res) => {
+        const location = res.headers.location;
+        const statusCode = res.statusCode;
+        if (location && opts.followRedirects && statusCode >= 300 && statusCode < 400) {
+          if (++websocket._redirects > opts.maxRedirects) {
+            abortHandshake(websocket, req, "Maximum redirects exceeded");
+            return;
+          }
+          req.abort();
+          let addr;
+          try {
+            addr = new URL2(location, address);
+          } catch (e) {
+            const err = new SyntaxError(`Invalid URL: ${location}`);
+            emitErrorAndClose(websocket, err);
+            return;
+          }
+          initAsClient(websocket, addr, protocols, options);
+        } else if (!websocket.emit("unexpected-response", req, res)) {
+          abortHandshake(
+            websocket,
+            req,
+            `Unexpected server response: ${res.statusCode}`
+          );
+        }
+      });
+      req.on("upgrade", (res, socket, head) => {
+        websocket.emit("upgrade", res);
+        if (websocket.readyState !== WebSocket3.CONNECTING) return;
+        req = websocket._req = null;
+        const upgrade = res.headers.upgrade;
+        if (upgrade === void 0 || upgrade.toLowerCase() !== "websocket") {
+          abortHandshake(websocket, socket, "Invalid Upgrade header");
+          return;
+        }
+        const digest = createHash5("sha1").update(key + GUID).digest("base64");
+        if (res.headers["sec-websocket-accept"] !== digest) {
+          abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
+          return;
+        }
+        const serverProt = res.headers["sec-websocket-protocol"];
+        let protError;
+        if (serverProt !== void 0) {
+          if (!protocolSet.size) {
+            protError = "Server sent a subprotocol but none was requested";
+          } else if (!protocolSet.has(serverProt)) {
+            protError = "Server sent an invalid subprotocol";
+          }
+        } else if (protocolSet.size) {
+          protError = "Server sent no subprotocol";
+        }
+        if (protError) {
+          abortHandshake(websocket, socket, protError);
+          return;
+        }
+        if (serverProt) websocket._protocol = serverProt;
+        const secWebSocketExtensions = res.headers["sec-websocket-extensions"];
+        if (secWebSocketExtensions !== void 0) {
+          if (!perMessageDeflate) {
+            const message2 = "Server sent a Sec-WebSocket-Extensions header but no extension was requested";
+            abortHandshake(websocket, socket, message2);
+            return;
+          }
+          let extensions;
+          try {
+            extensions = parse4(secWebSocketExtensions);
+          } catch (err) {
+            const message2 = "Invalid Sec-WebSocket-Extensions header";
+            abortHandshake(websocket, socket, message2);
+            return;
+          }
+          const extensionNames = Object.keys(extensions);
+          if (extensionNames.length !== 1 || extensionNames[0] !== PerMessageDeflate2.extensionName) {
+            const message2 = "Server indicated an extension that was not requested";
+            abortHandshake(websocket, socket, message2);
+            return;
+          }
+          try {
+            perMessageDeflate.accept(extensions[PerMessageDeflate2.extensionName]);
+          } catch (err) {
+            const message2 = "Invalid Sec-WebSocket-Extensions header";
+            abortHandshake(websocket, socket, message2);
+            return;
+          }
+          websocket._extensions[PerMessageDeflate2.extensionName] = perMessageDeflate;
+        }
+        websocket.setSocket(socket, head, {
+          allowSynchronousEvents: opts.allowSynchronousEvents,
+          generateMask: opts.generateMask,
+          maxBufferedChunks: opts.maxBufferedChunks,
+          maxFragments: opts.maxFragments,
+          maxPayload: opts.maxPayload,
+          skipUTF8Validation: opts.skipUTF8Validation
+        });
+      });
+      if (opts.finishRequest) {
+        opts.finishRequest(req, websocket);
+      } else {
+        req.end();
+      }
+    }
+    function emitErrorAndClose(websocket, err) {
+      websocket._readyState = WebSocket3.CLOSING;
+      websocket._errorEmitted = true;
+      websocket.emit("error", err);
+      websocket.emitClose();
+    }
+    function netConnect(options) {
+      options.path = options.socketPath;
+      return net.connect(options);
+    }
+    function tlsConnect(options) {
+      options.path = void 0;
+      if (!options.servername && options.servername !== "") {
+        options.servername = net.isIP(options.host) ? "" : options.host;
+      }
+      return tls.connect(options);
+    }
+    function abortHandshake(websocket, stream, message2) {
+      websocket._readyState = WebSocket3.CLOSING;
+      const err = new Error(message2);
+      Error.captureStackTrace(err, abortHandshake);
+      if (stream.setHeader) {
+        stream[kAborted] = true;
+        stream.abort();
+        if (stream.socket && !stream.socket.destroyed) {
+          stream.socket.destroy();
+        }
+        process.nextTick(emitErrorAndClose, websocket, err);
+      } else {
+        stream.destroy(err);
+        stream.once("error", websocket.emit.bind(websocket, "error"));
+        stream.once("close", websocket.emitClose.bind(websocket));
+      }
+    }
+    function sendAfterClose(websocket, data, cb) {
+      if (data) {
+        const length2 = isBlob(data) ? data.size : toBuffer(data).length;
+        if (websocket._socket) websocket._sender._bufferedBytes += length2;
+        else websocket._bufferedAmount += length2;
+      }
+      if (cb) {
+        const err = new Error(
+          `WebSocket is not open: readyState ${websocket.readyState} (${readyStates[websocket.readyState]})`
+        );
+        process.nextTick(cb, err);
+      }
+    }
+    function receiverOnConclude(code, reason) {
+      const websocket = this[kWebSocket];
+      websocket._closeFrameReceived = true;
+      websocket._closeMessage = reason;
+      websocket._closeCode = code;
+      if (websocket._socket[kWebSocket] === void 0) return;
+      websocket._socket.removeListener("data", socketOnData);
+      process.nextTick(resume, websocket._socket);
+      if (code === 1005) websocket.close();
+      else websocket.close(code, reason);
+    }
+    function receiverOnDrain() {
+      const websocket = this[kWebSocket];
+      if (!websocket.isPaused) websocket._socket.resume();
+    }
+    function receiverOnError(err) {
+      const websocket = this[kWebSocket];
+      if (websocket._socket[kWebSocket] !== void 0) {
+        websocket._socket.removeListener("data", socketOnData);
+        process.nextTick(resume, websocket._socket);
+        websocket.close(err[kStatusCode]);
+      }
+      if (!websocket._errorEmitted) {
+        websocket._errorEmitted = true;
+        websocket.emit("error", err);
+      }
+    }
+    function receiverOnFinish() {
+      this[kWebSocket].emitClose();
+    }
+    function receiverOnMessage(data, isBinary) {
+      this[kWebSocket].emit("message", data, isBinary);
+    }
+    function receiverOnPing(data) {
+      const websocket = this[kWebSocket];
+      if (websocket._autoPong) websocket.pong(data, !this._isServer, NOOP);
+      websocket.emit("ping", data);
+    }
+    function receiverOnPong(data) {
+      this[kWebSocket].emit("pong", data);
+    }
+    function resume(stream) {
+      stream.resume();
+    }
+    function senderOnError(err) {
+      const websocket = this[kWebSocket];
+      if (websocket.readyState === WebSocket3.CLOSED) return;
+      if (websocket.readyState === WebSocket3.OPEN) {
+        websocket._readyState = WebSocket3.CLOSING;
+        setCloseTimer(websocket);
+      }
+      this._socket.end();
+      if (!websocket._errorEmitted) {
+        websocket._errorEmitted = true;
+        websocket.emit("error", err);
+      }
+    }
+    function setCloseTimer(websocket) {
+      websocket._closeTimer = setTimeout(
+        websocket._socket.destroy.bind(websocket._socket),
+        websocket._closeTimeout
+      );
+    }
+    function socketOnClose() {
+      const websocket = this[kWebSocket];
+      this.removeListener("close", socketOnClose);
+      this.removeListener("data", socketOnData);
+      this.removeListener("end", socketOnEnd);
+      websocket._readyState = WebSocket3.CLOSING;
+      if (!this._readableState.endEmitted && !websocket._closeFrameReceived && !websocket._receiver._writableState.errorEmitted && this._readableState.length !== 0) {
+        const chunk = this.read(this._readableState.length);
+        websocket._receiver.write(chunk);
+      }
+      websocket._receiver.end();
+      this[kWebSocket] = void 0;
+      clearTimeout(websocket._closeTimer);
+      if (websocket._receiver._writableState.finished || websocket._receiver._writableState.errorEmitted) {
+        websocket.emitClose();
+      } else {
+        websocket._receiver.on("error", receiverOnFinish);
+        websocket._receiver.on("finish", receiverOnFinish);
+      }
+    }
+    function socketOnData(chunk) {
+      if (!this[kWebSocket]._receiver.write(chunk)) {
+        this.pause();
+      }
+    }
+    function socketOnEnd() {
+      const websocket = this[kWebSocket];
+      websocket._readyState = WebSocket3.CLOSING;
+      websocket._receiver.end();
+      this.end();
+    }
+    function socketOnError() {
+      const websocket = this[kWebSocket];
+      this.removeListener("error", socketOnError);
+      this.on("error", NOOP);
+      if (websocket) {
+        websocket._readyState = WebSocket3.CLOSING;
+        this.destroy();
+      }
+    }
+  }
+});
+
+// node_modules/ws/lib/stream.js
+var require_stream = __commonJS({
+  "node_modules/ws/lib/stream.js"(exports, module) {
+    "use strict";
+    var WebSocket3 = require_websocket();
+    var { Duplex } = __require("stream");
+    function emitClose(stream) {
+      stream.emit("close");
+    }
+    function duplexOnEnd() {
+      if (!this.destroyed && this._writableState.finished) {
+        this.destroy();
+      }
+    }
+    function duplexOnError(err) {
+      this.removeListener("error", duplexOnError);
+      this.destroy();
+      if (this.listenerCount("error") === 0) {
+        this.emit("error", err);
+      }
+    }
+    function createWebSocketStream2(ws, options) {
+      let terminateOnDestroy = true;
+      const duplex = new Duplex({
+        ...options,
+        autoDestroy: false,
+        emitClose: false,
+        objectMode: false,
+        writableObjectMode: false
+      });
+      ws.on("message", function message2(msg, isBinary) {
+        const data = !isBinary && duplex._readableState.objectMode ? msg.toString() : msg;
+        if (!duplex.push(data)) ws.pause();
+      });
+      ws.once("error", function error2(err) {
+        if (duplex.destroyed) return;
+        terminateOnDestroy = false;
+        duplex.destroy(err);
+      });
+      ws.once("close", function close() {
+        if (duplex.destroyed) return;
+        duplex.push(null);
+      });
+      duplex._destroy = function(err, callback) {
+        if (ws.readyState === ws.CLOSED) {
+          callback(err);
+          process.nextTick(emitClose, duplex);
+          return;
+        }
+        let called = false;
+        ws.once("error", function error2(err2) {
+          called = true;
+          callback(err2);
+        });
+        ws.once("close", function close() {
+          if (!called) callback(err);
+          process.nextTick(emitClose, duplex);
+        });
+        if (terminateOnDestroy) ws.terminate();
+      };
+      duplex._final = function(callback) {
+        if (ws.readyState === ws.CONNECTING) {
+          ws.once("open", function open2() {
+            duplex._final(callback);
+          });
+          return;
+        }
+        if (ws._socket === null) return;
+        if (ws._socket._writableState.finished) {
+          callback();
+          if (duplex._readableState.endEmitted) duplex.destroy();
+        } else {
+          ws._socket.once("finish", function finish() {
+            callback();
+          });
+          ws.close();
+        }
+      };
+      duplex._read = function() {
+        if (ws.isPaused) ws.resume();
+      };
+      duplex._write = function(chunk, encoding, callback) {
+        if (ws.readyState === ws.CONNECTING) {
+          ws.once("open", function open2() {
+            duplex._write(chunk, encoding, callback);
+          });
+          return;
+        }
+        ws.send(chunk, callback);
+      };
+      duplex.on("end", duplexOnEnd);
+      duplex.on("error", duplexOnError);
+      return duplex;
+    }
+    module.exports = createWebSocketStream2;
+  }
+});
+
+// node_modules/ws/lib/subprotocol.js
+var require_subprotocol = __commonJS({
+  "node_modules/ws/lib/subprotocol.js"(exports, module) {
+    "use strict";
+    var { tokenChars } = require_validation3();
+    function parse4(header2) {
+      const protocols = /* @__PURE__ */ new Set();
+      let start2 = -1;
+      let end = -1;
+      let i = 0;
+      for (i; i < header2.length; i++) {
+        const code = header2.charCodeAt(i);
+        if (end === -1 && tokenChars[code] === 1) {
+          if (start2 === -1) start2 = i;
+        } else if (i !== 0 && (code === 32 || code === 9)) {
+          if (end === -1 && start2 !== -1) end = i;
+        } else if (code === 44) {
+          if (start2 === -1) {
+            throw new SyntaxError(`Unexpected character at index ${i}`);
+          }
+          if (end === -1) end = i;
+          const protocol2 = header2.slice(start2, end);
+          if (protocols.has(protocol2)) {
+            throw new SyntaxError(`The "${protocol2}" subprotocol is duplicated`);
+          }
+          protocols.add(protocol2);
+          start2 = end = -1;
+        } else {
+          throw new SyntaxError(`Unexpected character at index ${i}`);
+        }
+      }
+      if (start2 === -1 || end !== -1) {
+        throw new SyntaxError("Unexpected end of input");
+      }
+      const protocol = header2.slice(start2, i);
+      if (protocols.has(protocol)) {
+        throw new SyntaxError(`The "${protocol}" subprotocol is duplicated`);
+      }
+      protocols.add(protocol);
+      return protocols;
+    }
+    module.exports = { parse: parse4 };
+  }
+});
+
+// node_modules/ws/lib/websocket-server.js
+var require_websocket_server = __commonJS({
+  "node_modules/ws/lib/websocket-server.js"(exports, module) {
+    "use strict";
+    var EventEmitter = __require("events");
+    var http = __require("http");
+    var { Duplex } = __require("stream");
+    var { createHash: createHash5 } = __require("crypto");
+    var extension2 = require_extension();
+    var PerMessageDeflate2 = require_permessage_deflate();
+    var subprotocol2 = require_subprotocol();
+    var WebSocket3 = require_websocket();
+    var { CLOSE_TIMEOUT, GUID, kWebSocket } = require_constants();
+    var keyRegex = /^[+/0-9A-Za-z]{22}==$/;
+    var RUNNING = 0;
+    var CLOSING = 1;
+    var CLOSED = 2;
+    var WebSocketServer2 = class extends EventEmitter {
+      /**
+       * Create a `WebSocketServer` instance.
+       *
+       * @param {Object} options Configuration options
+       * @param {Boolean} [options.allowSynchronousEvents=true] Specifies whether
+       *     any of the `'message'`, `'ping'`, and `'pong'` events can be emitted
+       *     multiple times in the same tick
+       * @param {Boolean} [options.autoPong=true] Specifies whether or not to
+       *     automatically send a pong in response to a ping
+       * @param {Number} [options.backlog=511] The maximum length of the queue of
+       *     pending connections
+       * @param {Boolean} [options.clientTracking=true] Specifies whether or not to
+       *     track clients
+       * @param {Number} [options.closeTimeout=30000] Duration in milliseconds to
+       *     wait for the closing handshake to finish after `websocket.close()` is
+       *     called
+       * @param {Function} [options.handleProtocols] A hook to handle protocols
+       * @param {String} [options.host] The hostname where to bind the server
+       * @param {Number} [options.maxBufferedChunks=1048576] The maximum number of
+       *     buffered data chunks
+       * @param {Number} [options.maxFragments=131072] The maximum number of message
+       *     fragments
+       * @param {Number} [options.maxPayload=104857600] The maximum allowed message
+       *     size
+       * @param {Boolean} [options.noServer=false] Enable no server mode
+       * @param {String} [options.path] Accept only connections matching this path
+       * @param {(Boolean|Object)} [options.perMessageDeflate=false] Enable/disable
+       *     permessage-deflate
+       * @param {Number} [options.port] The port where to bind the server
+       * @param {(http.Server|https.Server)} [options.server] A pre-created HTTP/S
+       *     server to use
+       * @param {Boolean} [options.skipUTF8Validation=false] Specifies whether or
+       *     not to skip UTF-8 validation for text and close messages
+       * @param {Function} [options.verifyClient] A hook to reject connections
+       * @param {Function} [options.WebSocket=WebSocket] Specifies the `WebSocket`
+       *     class to use. It must be the `WebSocket` class or class that extends it
+       * @param {Function} [callback] A listener for the `listening` event
+       */
+      constructor(options, callback) {
+        super();
+        options = {
+          allowSynchronousEvents: true,
+          autoPong: true,
+          maxBufferedChunks: 1024 * 1024,
+          maxFragments: 128 * 1024,
+          maxPayload: 100 * 1024 * 1024,
+          skipUTF8Validation: false,
+          perMessageDeflate: false,
+          handleProtocols: null,
+          clientTracking: true,
+          closeTimeout: CLOSE_TIMEOUT,
+          verifyClient: null,
+          noServer: false,
+          backlog: null,
+          // use default (511 as implemented in net.js)
+          server: null,
+          host: null,
+          path: null,
+          port: null,
+          WebSocket: WebSocket3,
+          ...options
+        };
+        if (options.port == null && !options.server && !options.noServer || options.port != null && (options.server || options.noServer) || options.server && options.noServer) {
+          throw new TypeError(
+            'One and only one of the "port", "server", or "noServer" options must be specified'
+          );
+        }
+        if (options.port != null) {
+          this._server = http.createServer((req, res) => {
+            const body = http.STATUS_CODES[426];
+            res.writeHead(426, {
+              "Content-Length": body.length,
+              "Content-Type": "text/plain"
+            });
+            res.end(body);
+          });
+          this._server.listen(
+            options.port,
+            options.host,
+            options.backlog,
+            callback
+          );
+        } else if (options.server) {
+          this._server = options.server;
+        }
+        if (this._server) {
+          const emitConnection = this.emit.bind(this, "connection");
+          this._removeListeners = addListeners(this._server, {
+            listening: this.emit.bind(this, "listening"),
+            error: this.emit.bind(this, "error"),
+            upgrade: (req, socket, head) => {
+              this.handleUpgrade(req, socket, head, emitConnection);
+            }
+          });
+        }
+        if (options.perMessageDeflate === true) options.perMessageDeflate = {};
+        if (options.clientTracking) {
+          this.clients = /* @__PURE__ */ new Set();
+          this._shouldEmitClose = false;
+        }
+        this.options = options;
+        this._state = RUNNING;
+      }
+      /**
+       * Returns the bound address, the address family name, and port of the server
+       * as reported by the operating system if listening on an IP socket.
+       * If the server is listening on a pipe or UNIX domain socket, the name is
+       * returned as a string.
+       *
+       * @return {(Object|String|null)} The address of the server
+       * @public
+       */
+      address() {
+        if (this.options.noServer) {
+          throw new Error('The server is operating in "noServer" mode');
+        }
+        if (!this._server) return null;
+        return this._server.address();
+      }
+      /**
+       * Stop the server from accepting new connections and emit the `'close'` event
+       * when all existing connections are closed.
+       *
+       * @param {Function} [cb] A one-time listener for the `'close'` event
+       * @public
+       */
+      close(cb) {
+        if (this._state === CLOSED) {
+          if (cb) {
+            this.once("close", () => {
+              cb(new Error("The server is not running"));
+            });
+          }
+          process.nextTick(emitClose, this);
+          return;
+        }
+        if (cb) this.once("close", cb);
+        if (this._state === CLOSING) return;
+        this._state = CLOSING;
+        if (this.options.noServer || this.options.server) {
+          if (this._server) {
+            this._removeListeners();
+            this._removeListeners = this._server = null;
+          }
+          if (this.clients) {
+            if (!this.clients.size) {
+              process.nextTick(emitClose, this);
+            } else {
+              this._shouldEmitClose = true;
+            }
+          } else {
+            process.nextTick(emitClose, this);
+          }
+        } else {
+          const server = this._server;
+          this._removeListeners();
+          this._removeListeners = this._server = null;
+          server.close(() => {
+            emitClose(this);
+          });
+        }
+      }
+      /**
+       * See if a given request should be handled by this server instance.
+       *
+       * @param {http.IncomingMessage} req Request object to inspect
+       * @return {Boolean} `true` if the request is valid, else `false`
+       * @public
+       */
+      shouldHandle(req) {
+        if (this.options.path) {
+          const index = req.url.indexOf("?");
+          const pathname = index !== -1 ? req.url.slice(0, index) : req.url;
+          if (pathname !== this.options.path) return false;
+        }
+        return true;
+      }
+      /**
+       * Handle a HTTP Upgrade request.
+       *
+       * @param {http.IncomingMessage} req The request object
+       * @param {Duplex} socket The network socket between the server and client
+       * @param {Buffer} head The first packet of the upgraded stream
+       * @param {Function} cb Callback
+       * @public
+       */
+      handleUpgrade(req, socket, head, cb) {
+        socket.on("error", socketOnError);
+        const key = req.headers["sec-websocket-key"];
+        const upgrade = req.headers.upgrade;
+        const version2 = +req.headers["sec-websocket-version"];
+        if (req.method !== "GET") {
+          const message2 = "Invalid HTTP method";
+          abortHandshakeOrEmitwsClientError(this, req, socket, 405, message2);
+          return;
+        }
+        if (upgrade === void 0 || upgrade.toLowerCase() !== "websocket") {
+          const message2 = "Invalid Upgrade header";
+          abortHandshakeOrEmitwsClientError(this, req, socket, 400, message2);
+          return;
+        }
+        if (key === void 0 || !keyRegex.test(key)) {
+          const message2 = "Missing or invalid Sec-WebSocket-Key header";
+          abortHandshakeOrEmitwsClientError(this, req, socket, 400, message2);
+          return;
+        }
+        if (version2 !== 13 && version2 !== 8) {
+          const message2 = "Missing or invalid Sec-WebSocket-Version header";
+          abortHandshakeOrEmitwsClientError(this, req, socket, 400, message2, {
+            "Sec-WebSocket-Version": "13, 8"
+          });
+          return;
+        }
+        if (!this.shouldHandle(req)) {
+          abortHandshake(socket, 400);
+          return;
+        }
+        const secWebSocketProtocol = req.headers["sec-websocket-protocol"];
+        let protocols = /* @__PURE__ */ new Set();
+        if (secWebSocketProtocol !== void 0) {
+          try {
+            protocols = subprotocol2.parse(secWebSocketProtocol);
+          } catch (err) {
+            const message2 = "Invalid Sec-WebSocket-Protocol header";
+            abortHandshakeOrEmitwsClientError(this, req, socket, 400, message2);
+            return;
+          }
+        }
+        const secWebSocketExtensions = req.headers["sec-websocket-extensions"];
+        const extensions = {};
+        if (this.options.perMessageDeflate && secWebSocketExtensions !== void 0) {
+          const perMessageDeflate = new PerMessageDeflate2({
+            ...this.options.perMessageDeflate,
+            isServer: true,
+            maxPayload: this.options.maxPayload
+          });
+          try {
+            const offers = extension2.parse(secWebSocketExtensions);
+            if (offers[PerMessageDeflate2.extensionName]) {
+              perMessageDeflate.accept(offers[PerMessageDeflate2.extensionName]);
+              extensions[PerMessageDeflate2.extensionName] = perMessageDeflate;
+            }
+          } catch (err) {
+            const message2 = "Invalid or unacceptable Sec-WebSocket-Extensions header";
+            abortHandshakeOrEmitwsClientError(this, req, socket, 400, message2);
+            return;
+          }
+        }
+        if (this.options.verifyClient) {
+          const info = {
+            origin: req.headers[`${version2 === 8 ? "sec-websocket-origin" : "origin"}`],
+            secure: !!(req.socket.authorized || req.socket.encrypted),
+            req
+          };
+          if (this.options.verifyClient.length === 2) {
+            this.options.verifyClient(info, (verified, code, message2, headers) => {
+              if (!verified) {
+                return abortHandshake(socket, code || 401, message2, headers);
+              }
+              this.completeUpgrade(
+                extensions,
+                key,
+                protocols,
+                req,
+                socket,
+                head,
+                cb
+              );
+            });
+            return;
+          }
+          if (!this.options.verifyClient(info)) return abortHandshake(socket, 401);
+        }
+        this.completeUpgrade(extensions, key, protocols, req, socket, head, cb);
+      }
+      /**
+       * Upgrade the connection to WebSocket.
+       *
+       * @param {Object} extensions The accepted extensions
+       * @param {String} key The value of the `Sec-WebSocket-Key` header
+       * @param {Set} protocols The subprotocols
+       * @param {http.IncomingMessage} req The request object
+       * @param {Duplex} socket The network socket between the server and client
+       * @param {Buffer} head The first packet of the upgraded stream
+       * @param {Function} cb Callback
+       * @throws {Error} If called more than once with the same socket
+       * @private
+       */
+      completeUpgrade(extensions, key, protocols, req, socket, head, cb) {
+        if (!socket.readable || !socket.writable) return socket.destroy();
+        if (socket[kWebSocket]) {
+          throw new Error(
+            "server.handleUpgrade() was called more than once with the same socket, possibly due to a misconfiguration"
+          );
+        }
+        if (this._state > RUNNING) return abortHandshake(socket, 503);
+        const digest = createHash5("sha1").update(key + GUID).digest("base64");
+        const headers = [
+          "HTTP/1.1 101 Switching Protocols",
+          "Upgrade: websocket",
+          "Connection: Upgrade",
+          `Sec-WebSocket-Accept: ${digest}`
+        ];
+        const ws = new this.options.WebSocket(null, void 0, this.options);
+        if (protocols.size) {
+          const protocol = this.options.handleProtocols ? this.options.handleProtocols(protocols, req) : protocols.values().next().value;
+          if (protocol) {
+            headers.push(`Sec-WebSocket-Protocol: ${protocol}`);
+            ws._protocol = protocol;
+          }
+        }
+        if (extensions[PerMessageDeflate2.extensionName]) {
+          const params = extensions[PerMessageDeflate2.extensionName].params;
+          const value = extension2.format({
+            [PerMessageDeflate2.extensionName]: [params]
+          });
+          headers.push(`Sec-WebSocket-Extensions: ${value}`);
+          ws._extensions = extensions;
+        }
+        this.emit("headers", headers, req);
+        socket.write(headers.concat("\r\n").join("\r\n"));
+        socket.removeListener("error", socketOnError);
+        ws.setSocket(socket, head, {
+          allowSynchronousEvents: this.options.allowSynchronousEvents,
+          maxBufferedChunks: this.options.maxBufferedChunks,
+          maxFragments: this.options.maxFragments,
+          maxPayload: this.options.maxPayload,
+          skipUTF8Validation: this.options.skipUTF8Validation
+        });
+        if (this.clients) {
+          this.clients.add(ws);
+          ws.on("close", () => {
+            this.clients.delete(ws);
+            if (this._shouldEmitClose && !this.clients.size) {
+              process.nextTick(emitClose, this);
+            }
+          });
+        }
+        cb(ws, req);
+      }
+    };
+    module.exports = WebSocketServer2;
+    function addListeners(server, map) {
+      for (const event of Object.keys(map)) server.on(event, map[event]);
+      return function removeListeners() {
+        for (const event of Object.keys(map)) {
+          server.removeListener(event, map[event]);
+        }
+      };
+    }
+    function emitClose(server) {
+      server._state = CLOSED;
+      server.emit("close");
+    }
+    function socketOnError() {
+      this.destroy();
+    }
+    function abortHandshake(socket, code, message2, headers) {
+      message2 = message2 || http.STATUS_CODES[code];
+      headers = {
+        Connection: "close",
+        "Content-Type": "text/html",
+        "Content-Length": Buffer.byteLength(message2),
+        ...headers
+      };
+      socket.once("finish", socket.destroy);
+      socket.end(
+        `HTTP/1.1 ${code} ${http.STATUS_CODES[code]}\r
+` + Object.keys(headers).map((h) => `${h}: ${headers[h]}`).join("\r\n") + "\r\n\r\n" + message2
+      );
+    }
+    function abortHandshakeOrEmitwsClientError(server, req, socket, code, message2, headers) {
+      if (server.listenerCount("wsClientError")) {
+        const err = new Error(message2);
+        Error.captureStackTrace(err, abortHandshakeOrEmitwsClientError);
+        server.emit("wsClientError", err, socket, req);
+      } else {
+        abortHandshake(socket, code, message2, headers);
+      }
+    }
+  }
+});
+
+// node_modules/ws/wrapper.mjs
+var import_stream, import_extension, import_permessage_deflate, import_receiver, import_sender, import_subprotocol, import_websocket, import_websocket_server;
+var init_wrapper = __esm({
+  "node_modules/ws/wrapper.mjs"() {
+    import_stream = __toESM(require_stream(), 1);
+    import_extension = __toESM(require_extension(), 1);
+    import_permessage_deflate = __toESM(require_permessage_deflate(), 1);
+    import_receiver = __toESM(require_receiver(), 1);
+    import_sender = __toESM(require_sender(), 1);
+    import_subprotocol = __toESM(require_subprotocol(), 1);
+    import_websocket = __toESM(require_websocket(), 1);
+    import_websocket_server = __toESM(require_websocket_server(), 1);
+  }
+});
+
+// node_modules/@noble/hashes/utils.js
+function isBytes(a) {
+  return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
+}
+function abytes(value, length2, title = "") {
+  const bytes = isBytes(value);
+  const len = value?.length;
+  const needsLen = length2 !== void 0;
+  if (!bytes || needsLen && len !== length2) {
+    const prefix = title && `"${title}" `;
+    const ofLen = needsLen ? ` of length ${length2}` : "";
+    const got = bytes ? `length=${len}` : `type=${typeof value}`;
+    throw new Error(prefix + "expected Uint8Array" + ofLen + ", got " + got);
+  }
+  return value;
+}
+function aexists(instance, checkFinished = true) {
+  if (instance.destroyed)
+    throw new Error("Hash instance has been destroyed");
+  if (checkFinished && instance.finished)
+    throw new Error("Hash#digest() has already been called");
+}
+function aoutput(out3, instance) {
+  abytes(out3, void 0, "digestInto() output");
+  const min = instance.outputLen;
+  if (out3.length < min) {
+    throw new Error('"digestInto() output" expected to be of length >=' + min);
+  }
+}
+function clean(...arrays) {
+  for (let i = 0; i < arrays.length; i++) {
+    arrays[i].fill(0);
+  }
+}
+function createView(arr) {
+  return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+function rotr(word, shift) {
+  return word << 32 - shift | word >>> shift;
+}
+function createHasher(hashCons, info = {}) {
+  const hashC = (msg, opts) => hashCons(opts).update(msg).digest();
+  const tmp = hashCons(void 0);
+  hashC.outputLen = tmp.outputLen;
+  hashC.blockLen = tmp.blockLen;
+  hashC.create = (opts) => hashCons(opts);
+  Object.assign(hashC, info);
+  return Object.freeze(hashC);
+}
+var oidNist;
+var init_utils = __esm({
+  "node_modules/@noble/hashes/utils.js"() {
+    oidNist = (suffix) => ({
+      oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
+    });
+  }
+});
+
+// node_modules/@noble/hashes/_md.js
+function Chi(a, b, c) {
+  return a & b ^ ~a & c;
+}
+function Maj(a, b, c) {
+  return a & b ^ a & c ^ b & c;
+}
+var HashMD, SHA256_IV;
+var init_md = __esm({
+  "node_modules/@noble/hashes/_md.js"() {
+    init_utils();
+    HashMD = class {
+      blockLen;
+      outputLen;
+      padOffset;
+      isLE;
+      // For partial updates less than block size
+      buffer;
+      view;
+      finished = false;
+      length = 0;
+      pos = 0;
+      destroyed = false;
+      constructor(blockLen, outputLen, padOffset, isLE) {
+        this.blockLen = blockLen;
+        this.outputLen = outputLen;
+        this.padOffset = padOffset;
+        this.isLE = isLE;
+        this.buffer = new Uint8Array(blockLen);
+        this.view = createView(this.buffer);
+      }
+      update(data) {
+        aexists(this);
+        abytes(data);
+        const { view, buffer, blockLen } = this;
+        const len = data.length;
+        for (let pos = 0; pos < len; ) {
+          const take = Math.min(blockLen - this.pos, len - pos);
+          if (take === blockLen) {
+            const dataView = createView(data);
+            for (; blockLen <= len - pos; pos += blockLen)
+              this.process(dataView, pos);
+            continue;
+          }
+          buffer.set(data.subarray(pos, pos + take), this.pos);
+          this.pos += take;
+          pos += take;
+          if (this.pos === blockLen) {
+            this.process(view, 0);
+            this.pos = 0;
+          }
+        }
+        this.length += data.length;
+        this.roundClean();
+        return this;
+      }
+      digestInto(out3) {
+        aexists(this);
+        aoutput(out3, this);
+        this.finished = true;
+        const { buffer, view, blockLen, isLE } = this;
+        let { pos } = this;
+        buffer[pos++] = 128;
+        clean(this.buffer.subarray(pos));
+        if (this.padOffset > blockLen - pos) {
+          this.process(view, 0);
+          pos = 0;
+        }
+        for (let i = pos; i < blockLen; i++)
+          buffer[i] = 0;
+        view.setBigUint64(blockLen - 8, BigInt(this.length * 8), isLE);
+        this.process(view, 0);
+        const oview = createView(out3);
+        const len = this.outputLen;
+        if (len % 4)
+          throw new Error("_sha2: outputLen must be aligned to 32bit");
+        const outLen = len / 4;
+        const state = this.get();
+        if (outLen > state.length)
+          throw new Error("_sha2: outputLen bigger than state");
+        for (let i = 0; i < outLen; i++)
+          oview.setUint32(4 * i, state[i], isLE);
+      }
+      digest() {
+        const { buffer, outputLen } = this;
+        this.digestInto(buffer);
+        const res = buffer.slice(0, outputLen);
+        this.destroy();
+        return res;
+      }
+      _cloneInto(to) {
+        to ||= new this.constructor();
+        to.set(...this.get());
+        const { blockLen, buffer, length: length2, finished, destroyed, pos } = this;
+        to.destroyed = destroyed;
+        to.finished = finished;
+        to.length = length2;
+        to.pos = pos;
+        if (length2 % blockLen)
+          to.buffer.set(buffer);
+        return to;
+      }
+      clone() {
+        return this._cloneInto();
+      }
+    };
+    SHA256_IV = /* @__PURE__ */ Uint32Array.from([
+      1779033703,
+      3144134277,
+      1013904242,
+      2773480762,
+      1359893119,
+      2600822924,
+      528734635,
+      1541459225
+    ]);
+  }
+});
+
+// node_modules/@noble/hashes/sha2.js
+var SHA256_K, SHA256_W, SHA2_32B, _SHA256, sha2562;
+var init_sha2 = __esm({
+  "node_modules/@noble/hashes/sha2.js"() {
+    init_md();
+    init_utils();
+    SHA256_K = /* @__PURE__ */ Uint32Array.from([
+      1116352408,
+      1899447441,
+      3049323471,
+      3921009573,
+      961987163,
+      1508970993,
+      2453635748,
+      2870763221,
+      3624381080,
+      310598401,
+      607225278,
+      1426881987,
+      1925078388,
+      2162078206,
+      2614888103,
+      3248222580,
+      3835390401,
+      4022224774,
+      264347078,
+      604807628,
+      770255983,
+      1249150122,
+      1555081692,
+      1996064986,
+      2554220882,
+      2821834349,
+      2952996808,
+      3210313671,
+      3336571891,
+      3584528711,
+      113926993,
+      338241895,
+      666307205,
+      773529912,
+      1294757372,
+      1396182291,
+      1695183700,
+      1986661051,
+      2177026350,
+      2456956037,
+      2730485921,
+      2820302411,
+      3259730800,
+      3345764771,
+      3516065817,
+      3600352804,
+      4094571909,
+      275423344,
+      430227734,
+      506948616,
+      659060556,
+      883997877,
+      958139571,
+      1322822218,
+      1537002063,
+      1747873779,
+      1955562222,
+      2024104815,
+      2227730452,
+      2361852424,
+      2428436474,
+      2756734187,
+      3204031479,
+      3329325298
+    ]);
+    SHA256_W = /* @__PURE__ */ new Uint32Array(64);
+    SHA2_32B = class extends HashMD {
+      constructor(outputLen) {
+        super(64, outputLen, 8, false);
+      }
+      get() {
+        const { A: A2, B, C, D, E, F, G, H } = this;
+        return [A2, B, C, D, E, F, G, H];
+      }
+      // prettier-ignore
+      set(A2, B, C, D, E, F, G, H) {
+        this.A = A2 | 0;
+        this.B = B | 0;
+        this.C = C | 0;
+        this.D = D | 0;
+        this.E = E | 0;
+        this.F = F | 0;
+        this.G = G | 0;
+        this.H = H | 0;
+      }
+      process(view, offset) {
+        for (let i = 0; i < 16; i++, offset += 4)
+          SHA256_W[i] = view.getUint32(offset, false);
+        for (let i = 16; i < 64; i++) {
+          const W15 = SHA256_W[i - 15];
+          const W2 = SHA256_W[i - 2];
+          const s0 = rotr(W15, 7) ^ rotr(W15, 18) ^ W15 >>> 3;
+          const s1 = rotr(W2, 17) ^ rotr(W2, 19) ^ W2 >>> 10;
+          SHA256_W[i] = s1 + SHA256_W[i - 7] + s0 + SHA256_W[i - 16] | 0;
+        }
+        let { A: A2, B, C, D, E, F, G, H } = this;
+        for (let i = 0; i < 64; i++) {
+          const sigma1 = rotr(E, 6) ^ rotr(E, 11) ^ rotr(E, 25);
+          const T1 = H + sigma1 + Chi(E, F, G) + SHA256_K[i] + SHA256_W[i] | 0;
+          const sigma0 = rotr(A2, 2) ^ rotr(A2, 13) ^ rotr(A2, 22);
+          const T2 = sigma0 + Maj(A2, B, C) | 0;
+          H = G;
+          G = F;
+          F = E;
+          E = D + T1 | 0;
+          D = C;
+          C = B;
+          B = A2;
+          A2 = T1 + T2 | 0;
+        }
+        A2 = A2 + this.A | 0;
+        B = B + this.B | 0;
+        C = C + this.C | 0;
+        D = D + this.D | 0;
+        E = E + this.E | 0;
+        F = F + this.F | 0;
+        G = G + this.G | 0;
+        H = H + this.H | 0;
+        this.set(A2, B, C, D, E, F, G, H);
+      }
+      roundClean() {
+        clean(SHA256_W);
+      }
+      destroy() {
+        this.set(0, 0, 0, 0, 0, 0, 0, 0);
+        clean(this.buffer);
+      }
+    };
+    _SHA256 = class extends SHA2_32B {
+      // We cannot use array here since array allows indexing by variable
+      // which means optimizer/compiler cannot use registers.
+      A = SHA256_IV[0] | 0;
+      B = SHA256_IV[1] | 0;
+      C = SHA256_IV[2] | 0;
+      D = SHA256_IV[3] | 0;
+      E = SHA256_IV[4] | 0;
+      F = SHA256_IV[5] | 0;
+      G = SHA256_IV[6] | 0;
+      H = SHA256_IV[7] | 0;
+      constructor() {
+        super(32);
+      }
+    };
+    sha2562 = /* @__PURE__ */ createHasher(
+      () => new _SHA256(),
+      /* @__PURE__ */ oidNist(1)
+    );
+  }
+});
+
+// relay/domain/seal.ts
+async function verifyEd25519(publicRaw, msg, sig) {
+  try {
+    const k = await crypto.subtle.importKey("raw", publicRaw, { name: "Ed25519" }, false, ["verify"]);
+    return await crypto.subtle.verify("Ed25519", k, sig, typeof msg === "string" ? te.encode(msg) : msg);
+  } catch {
+    return false;
+  }
+}
+function deviceIdFor2(publicRaw) {
+  return "dev-" + hex(sha2562(publicRaw)).slice(0, 16);
+}
+var te, hex, random, unb64url;
+var init_seal = __esm({
+  "relay/domain/seal.ts"() {
+    "use strict";
+    init_sha2();
+    te = new TextEncoder();
+    hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+    random = (n) => crypto.getRandomValues(new Uint8Array(n));
+    unb64url = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+  }
+});
+
+// relay/domain/wire.ts
+function helloText(room, nonce) {
+  return `${RELAY_PROTOCOL2} hello ${room} ${nonce}`;
+}
+function frame2(device, ch, payload) {
+  const id2 = new TextEncoder().encode(device);
+  const out3 = new Uint8Array(1 + id2.length + 4 + payload.length);
+  out3[0] = id2.length;
+  out3.set(id2, 1);
+  new DataView(out3.buffer).setUint32(1 + id2.length, ch >>> 0);
+  out3.set(payload, 5 + id2.length);
+  return out3;
+}
+function unframe2(b) {
+  if (b.length < 5) return null;
+  const n = b[0];
+  if (b.length < 1 + n + 4) return null;
+  const device = new TextDecoder().decode(b.subarray(1, 1 + n));
+  const ch = new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(1 + n);
+  return { device, ch, payload: b.subarray(5 + n) };
+}
+var RELAY_PROTOCOL2, MAX_FRAME4, ROOM_ID, DEVICE_ID, PAIRING_ROOM2;
+var init_wire = __esm({
+  "relay/domain/wire.ts"() {
+    "use strict";
+    init_sha2();
+    init_seal();
+    RELAY_PROTOCOL2 = "reflex-relay/v0";
+    MAX_FRAME4 = 4 * 1024 * 1024;
+    ROOM_ID = /^[0-9a-f]{32}$/;
+    DEVICE_ID = /^dev-[0-9a-f]{16}$/;
+    PAIRING_ROOM2 = hex(sha2562(new TextEncoder().encode(`${RELAY_PROTOCOL2} pairing room`))).slice(0, 32);
+  }
+});
+
+// relay/domain/room.ts
+var HELLO_MS, LIMITS, OPENER2, watchList, watches, Room;
+var init_room = __esm({
+  "relay/domain/room.ts"() {
+    "use strict";
+    init_seal();
+    init_wire();
+    HELLO_MS = 1e4;
+    LIMITS = {
+      room: { sockets: 64, perAddress: 16 },
+      pairing: { sockets: 1024, perAddress: 8 },
+      /** New channels a minute in the pairing room: per socket, and summed over one address's sockets. */
+      pairingOpens: { perSocket: 6, perAddress: 12 },
+      /** Control messages a socket may send per minute (watch, close, ping). */
+      controls: 120
+    };
+    OPENER2 = 2147483648;
+    watchList = (list, device) => device !== void 0 && (list.includes(device) || list.includes("*"));
+    watches = (s, device) => watchList(s.state.watch, device);
+    Room = class {
+      id;
+      pairing;
+      #sockets;
+      #log;
+      #now;
+      constructor(id2, sockets, log = () => {
+      }, now = Date.now) {
+        this.id = id2;
+        this.pairing = id2 === PAIRING_ROOM2;
+        this.#sockets = sockets;
+        this.#log = log;
+        this.#now = now;
+      }
+      #limits() {
+        return this.pairing ? LIMITS.pairing : LIMITS.room;
+      }
+      /** A new WebSocket: challenge it, unless the room or its address is full. `address`: where it came from. */
+      open(s, address = "") {
+        const now = this.#now();
+        this.sweep(now);
+        const others = this.#sockets().filter((o) => o !== s);
+        const lim = this.#limits();
+        s.state = { nonce: hex(random(16)), watch: [], address, at: now };
+        if (others.length >= lim.sockets) return s.close(4429, "this room is full");
+        if (address && others.filter((o) => o.state?.address === address).length >= lim.perAddress) return s.close(4429, "too many connections from your address in this room");
+        s.send(JSON.stringify({ t: "challenge", nonce: s.state.nonce, room: this.id }));
+      }
+      /** Closes sockets that never said hello in time. Node calls it on a timer; a Durable Object on each event. */
+      sweep(now = this.#now()) {
+        for (const o of this.#sockets()) if (!o.state?.device && o.state?.at !== void 0 && now - o.state.at > HELLO_MS) o.close(4408, "no hello in time");
+      }
+      #authed() {
+        return this.#sockets().filter((s) => s.state?.device);
+      }
+      #byDevice(device) {
+        return this.#authed().find((s) => s.state.device === device);
+      }
+      async message(s, data) {
+        const st = s.state;
+        if (typeof data !== "string") {
+          if (!st?.device) return s.close(4401, "say hello first");
+          return this.#forward(s, data);
+        }
+        if (data.length > 64 * 1024) return s.close(4400, "control message too long");
+        let m;
+        try {
+          m = JSON.parse(data);
+        } catch {
+          return s.close(4400, "not JSON");
+        }
+        if (!st?.device) {
+          if (m.t !== "hello") return s.close(4401, "say hello first");
+          this.sweep();
+          return this.#hello(s, m);
+        }
+        if (!this.#spend(s, "controls", LIMITS.controls)) return s.close(4429, "too many messages");
+        try {
+          await this.#control(s, m);
+        } catch (e) {
+          if (m.req !== void 0) s.send(JSON.stringify({ t: "result", req: m.req, ok: false, error: e.message }));
+        }
+      }
+      /** Takes one from a socket's per-minute budget; false when it is spent. */
+      #spend(s, what, per) {
+        const now = this.#now();
+        const recent = (s.state[what] ?? []).filter((t) => now - t < 6e4);
+        if (recent.length >= per) return false;
+        s.state = { ...s.state, [what]: [...recent, now] };
+        return true;
+      }
+      async #hello(s, m) {
+        const st = s.state;
+        const key = typeof m.key === "string" ? unb64url(m.key) : new Uint8Array();
+        const device = String(m.device ?? "");
+        const ok2 = key.length === 32 && deviceIdFor2(key) === device && typeof m.sig === "string" && await verifyEd25519(key, helloText(this.id, st.nonce), unb64url(m.sig));
+        if (!ok2) return s.close(4403, "the hello's signature or device ID does not check out");
+        for (const old of this.#authed()) if (old.state.device === device && old !== s) old.close(4409, "replaced by a newer connection");
+        s.state = { ...st, device, watch: [] };
+        s.send(JSON.stringify({ t: "welcome", device }));
+        this.#log(`${device} joined room ${this.pairing ? "(pairing)" : this.id}`);
+      }
+      closed(s) {
+        const device = s.state?.device;
+        if (!device) return;
+        if (this.#authed().some((o) => o !== s && o.state.device === device)) return;
+        const msg = JSON.stringify({ t: "presence", device, online: false });
+        for (const o of this.#authed()) if (o !== s && watches(o, device) && watches(s, o.state.device)) o.send(msg);
+      }
+      #forward(s, data) {
+        const f3 = unframe2(data);
+        if (!f3 || data.length > MAX_FRAME4 + 64) return s.close(4400, "malformed frame");
+        const me = s.state.device;
+        const to = this.#byDevice(f3.device);
+        if (!to || !watches(to, me)) {
+          s.send(JSON.stringify({ t: "undeliverable", device: f3.device, ch: f3.ch }));
+          return;
+        }
+        if (this.pairing && f3.ch & OPENER2) {
+          const key = `${f3.device}/${f3.ch}`;
+          if (!(s.state.chans ?? []).includes(key)) {
+            const now = this.#now();
+            const fromAddress = this.#authed().filter((o) => s.state.address && o.state.address === s.state.address).reduce((n, o) => n + (o.state.opens ?? []).filter((t) => now - t < 6e4).length, 0);
+            if (fromAddress >= LIMITS.pairingOpens.perAddress || !this.#spend(s, "opens", LIMITS.pairingOpens.perSocket)) {
+              s.send(JSON.stringify({ t: "undeliverable", device: f3.device, ch: f3.ch, reason: "rate limited: too many pairing tries" }));
+              return;
+            }
+            s.state = { ...s.state, chans: [...s.state.chans ?? [], key].slice(-32) };
+          }
+        }
+        to.send(frame2(me, f3.ch, f3.payload));
+      }
+      async #control(s, m) {
+        const st = s.state;
+        const reply = (body) => s.send(JSON.stringify({ t: "result", req: m.req, ok: true, ...body }));
+        switch (m.t) {
+          case "watch": {
+            const devices = (Array.isArray(m.devices) ? m.devices : []).map(String).filter((d) => DEVICE_ID.test(d) || d === "*").slice(0, 256);
+            const before = st.watch;
+            const first = !st.announced;
+            s.state = { ...st, watch: devices, announced: true };
+            const me = st.device;
+            const here = new Set(this.#authed().filter((o) => o !== s && watches(o, me)).map((o) => o.state.device));
+            for (const d of devices) if (d !== "*" && !here.has(d) && !before.includes(d)) s.send(JSON.stringify({ t: "presence", device: d, online: false }));
+            for (const o of this.#authed()) {
+              if (o === s) continue;
+              const d = o.state.device;
+              const mutual = watchList(devices, d) && watches(o, me);
+              if (watchList(devices, d) && !watchList(before, d) && watches(o, me)) s.send(JSON.stringify({ t: "presence", device: d, online: true }));
+              const was = watchList(before, d) && watches(o, me) && !first;
+              if (mutual && !was) o.send(JSON.stringify({ t: "presence", device: me, online: true, joined: true }));
+              else if (!mutual && was) o.send(JSON.stringify({ t: "presence", device: me, online: false }));
+            }
+            return;
+          }
+          case "close": {
+            const to = this.#byDevice(String(m.device ?? ""));
+            if (to && watches(to, st.device)) to.send(JSON.stringify({ t: "close", device: st.device, ch: Number(m.ch) }));
+            return;
+          }
+          case "ping":
+            return reply({ at: m.at });
+          default:
+            if (m.req !== void 0) throw new Error(`no request '${String(m.t)}'`);
+        }
+      }
+    };
+  }
+});
+
+// relay/node/server.ts
+import { createServer as createServer4 } from "node:http";
+function addressOf(req) {
+  const remote = req.socket.remoteAddress ?? "";
+  const loopback = remote === "::1" || remote.startsWith("127.") || remote === "::ffff:127.0.0.1";
+  if (!loopback) return remote;
+  const h = (name) => {
+    const v = req.headers[name];
+    return (Array.isArray(v) ? v[0] : v)?.split(",")[0].trim();
+  };
+  return h("cf-connecting-ip") || h("x-forwarded-for") || h("x-real-ip") || remote;
+}
+async function startRelay(o) {
+  const log = o.log ?? ((m) => console.log(`relay: ${m}`));
+  const rooms = /* @__PURE__ */ new Map();
+  const roomOf = (id2) => {
+    let r = rooms.get(id2);
+    if (!r) {
+      const socks = /* @__PURE__ */ new Set();
+      r = { room: new Room(id2, () => [...socks], log), socks };
+      rooms.set(id2, r);
+    }
+    return r;
+  };
+  const recent = /* @__PURE__ */ new Map();
+  const open2 = /* @__PURE__ */ new Map();
+  const server = createServer4((req, res) => {
+    if (req.url === "/" || req.url === "/health") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      return res.end(`Reflex relay (${RELAY_PROTOCOL2}). It forwards end-to-end encrypted frames between paired devices and keeps nothing.
+`);
+    }
+    res.writeHead(404);
+    res.end("Not found");
+  });
+  const originOf = (req) => o.origin ?? `http://${req.headers.host ?? `localhost:${o.port}`}`;
+  const wss = new import_websocket_server.default({ noServer: true, maxPayload: 8 * 1024 * 1024 });
+  server.on("upgrade", (req, socket, head) => {
+    const url = new URL(req.url ?? "/", originOf(req));
+    const id2 = url.searchParams.get("room") ?? "";
+    if (url.pathname !== "/v0/connect" || !ROOM_ID.test(id2)) return socket.destroy();
+    const address = addressOf(req);
+    const now = Date.now();
+    const times = (recent.get(address) ?? []).filter((t) => now - t < 6e4);
+    if (times.length >= PER_ADDRESS.perMinute || (open2.get(address) ?? 0) >= PER_ADDRESS.open) {
+      socket.end("HTTP/1.1 429 Too Many Requests\r\ncontent-length: 0\r\n\r\n");
+      return;
+    }
+    recent.set(address, [...times, now]);
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      const r = roomOf(id2);
+      open2.set(address, (open2.get(address) ?? 0) + 1);
+      let state = { nonce: "", watch: [] };
+      const sock = {
+        send: (d) => ws.readyState === ws.OPEN && ws.send(d),
+        close: (code, reason) => ws.close(code, reason),
+        get state() {
+          return state;
+        },
+        set state(s) {
+          state = s;
+        }
+      };
+      r.socks.add(sock);
+      ws.on("message", (data, binary) => void r.room.message(sock, binary ? new Uint8Array(data) : data.toString("utf8")));
+      ws.on("close", () => {
+        r.socks.delete(sock);
+        r.room.closed(sock);
+        if (r.socks.size === 0) rooms.delete(id2);
+        const n = (open2.get(address) ?? 1) - 1;
+        if (n > 0) open2.set(address, n);
+        else open2.delete(address);
+      });
+      ws.on("error", () => {
+      });
+      r.room.open(sock, address);
+    });
+  });
+  const sweep = setInterval(() => {
+    for (const r of rooms.values()) r.room.sweep();
+    const now = Date.now();
+    for (const [a, t] of recent) if (!t.some((x) => now - x < 6e4)) recent.delete(a);
+  }, 2e3);
+  sweep.unref();
+  await new Promise((resolve5) => server.listen(o.port, o.host ?? "0.0.0.0", resolve5));
+  const addr = server.address();
+  const port = typeof addr === "object" && addr ? addr.port : o.port;
+  log(`listening on :${port} (ws://<this machine>:${port}; give devices wss:// through a TLS proxy to reach it from anywhere)`);
+  return {
+    port,
+    close: async () => {
+      clearInterval(sweep);
+      for (const c of wss.clients) c.terminate();
+      await new Promise((r) => server.close(() => r()));
+    }
+  };
+}
+var PER_ADDRESS;
+var init_server2 = __esm({
+  "relay/node/server.ts"() {
+    "use strict";
+    init_wrapper();
+    init_room();
+    init_wire();
+    PER_ADDRESS = { perMinute: 60, open: 64 };
+  }
+});
+
+// relay/node/bin/reflex-relay.ts
+var reflex_relay_exports = {};
 import { spawn as spawn2 } from "node:child_process";
+import { parseArgs as parseArgs2 } from "node:util";
+var HELP2, f, relay, say, tunnel, stop;
+var init_reflex_relay = __esm({
+  async "relay/node/bin/reflex-relay.ts"() {
+    "use strict";
+    init_server2();
+    HELP2 = `Run a Reflex Relay of your own: it forwards end-to-end encrypted frames between your devices and keeps nothing.
+
+Usage
+  reflex relay [--port 8787] [--host 0.0.0.0] [--tunnel]
+
+Options
+  --port <n>       Port to listen on (default 8787, or $PORT)
+  --host <addr>    Address to bind (default 0.0.0.0)
+  --tunnel         Also open a Cloudflare quick tunnel (needs cloudflared; free, no account) and print the
+                   wss:// address to give your Mac. It changes each time; for a fixed one, put the Relay
+                   behind HTTPS on your own domain (e.g. caddy reverse-proxy --from relay.example.com --to :8787)
+  --origin <url>   The public URL, when behind a TLS proxy
+  -h, --help       Show this help
+
+Then, on the Mac, set REFLEX_RELAY=wss://<this relay> (for example in your agent's MCP config, see the README).
+`;
+    ({ values: f } = parseArgs2({
+      options: {
+        port: { type: "string" },
+        host: { type: "string" },
+        dir: { type: "string" },
+        // accepted for older scripts; nothing is stored
+        origin: { type: "string" },
+        tunnel: { type: "boolean", default: false },
+        help: { type: "boolean", short: "h", default: false }
+      }
+    }));
+    if (f.help) {
+      process.stdout.write(HELP2);
+      process.exit(0);
+    }
+    relay = await startRelay({ port: Number(f.port ?? process.env.PORT ?? 8787), host: f.host, origin: f.origin });
+    say = (url) => console.log(`relay: reachable from anywhere at ${url}
+relay: on your Mac, set REFLEX_RELAY=${url} (see the README's "Run your own relay")`);
+    tunnel = null;
+    if (f.tunnel) {
+      tunnel = spawn2("cloudflared", ["tunnel", "--no-autoupdate", "--url", `http://localhost:${relay.port}`], { stdio: ["ignore", "pipe", "pipe"] });
+      tunnel.on("error", () => {
+        console.error("relay: --tunnel needs cloudflared (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/, or `brew install cloudflared`).");
+        process.exit(1);
+      });
+      let told = false;
+      const read = (b) => {
+        const m = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(b.toString());
+        if (m && !told) {
+          told = true;
+          say(m[0].replace("https://", "wss://"));
+        }
+      };
+      tunnel.stdout.on("data", read);
+      tunnel.stderr.on("data", read);
+      tunnel.on("exit", (code) => {
+        console.error(`relay: the tunnel stopped (${code})`);
+        process.exit(1);
+      });
+    }
+    stop = async () => {
+      tunnel?.kill();
+      await relay.close();
+      process.exit(0);
+    };
+    process.on("SIGINT", () => void stop());
+    process.on("SIGTERM", () => void stop());
+  }
+});
+
+// agent/src/host/start.ts
+import { spawn as spawn3 } from "node:child_process";
 import { closeSync as closeSync2, existsSync as existsSync9, mkdirSync as mkdirSync7, openSync as openSync2, readFileSync as readFileSync8 } from "node:fs";
 import { connect as connect2 } from "node:net";
 import { join as join9 } from "node:path";
@@ -15103,7 +19715,7 @@ async function ensureLink(o = {}) {
   if (process.env.REFLEX_AUTOSTART === "0") throw new Error(`The Reflex Link is not running (profile ${dir3}). Start it with \`reflex link\`, or run \`reflex setup\`.`);
   mkdirSync7(dir3, { recursive: true, mode: 448 });
   const out3 = openSync2(log, "a", 384);
-  const child = spawn2(process.execPath, [BIN, "link", "--no-prompt"], {
+  const child = spawn3(process.execPath, [BIN, "link", "--no-prompt"], {
     detached: true,
     // its own session: closing this terminal or harness doesn't stop it
     stdio: ["ignore", out3, out3],
@@ -15290,7 +19902,7 @@ import { chmodSync as chmodSync2, existsSync as existsSync10, mkdirSync as mkdir
 import { homedir as homedir3 } from "node:os";
 import { delimiter, dirname as dirname3, join as join10, resolve as resolve3 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-import { parseArgs as parseArgs2 } from "node:util";
+import { parseArgs as parseArgs3 } from "node:util";
 function which(name) {
   for (const d of (process.env.PATH ?? "").split(delimiter)) {
     const p = join10(d, name);
@@ -15303,7 +19915,7 @@ function which(name) {
   return null;
 }
 function shim() {
-  const binDir = resolve3(f.bin ?? join10(homedir3(), ".local", "bin"));
+  const binDir = resolve3(f2.bin ?? join10(homedir3(), ".local", "bin"));
   const file = join10(binDir, "reflex");
   const body = `#!/bin/sh
 ${MARK}: runs the Reflex CLI from ${REPO}.
@@ -15319,7 +19931,7 @@ exec "${NODE}" "${BIN2}" "$@"
   chmodSync2(file, 493);
   const onPath = (process.env.PATH ?? "").split(delimiter).some((d) => resolve3(d) === binDir);
   if (onPath) return ok(`reflex is on your PATH (${file})`);
-  if (f.bin) return note(`${file} is ready; ${binDir} isn't on your PATH, so call it by its full path`);
+  if (f2.bin) return note(`${file} is ready; ${binDir} isn't on your PATH, so call it by its full path`);
   const shell = (process.env.SHELL ?? "").endsWith("bash") ? ".bash_profile" : ".zprofile";
   const profile = join10(homedir3(), shell);
   const line = `export PATH="$HOME/.local/bin:$PATH" ${MARK}`;
@@ -15341,9 +19953,9 @@ function claudeEntryNow(scope) {
   return scope === "user" ? cfg.mcpServers?.reflex : cfg.projects?.[process.cwd()]?.mcpServers?.reflex;
 }
 function claude() {
-  if (f["no-claude"]) return;
+  if (f2["no-claude"]) return;
   if (!which("claude")) return note("Claude Code isn't installed (no `claude` on the PATH); skipped");
-  const scope = f.scope ?? "user";
+  const scope = f2.scope ?? "user";
   if (!["user", "local", "project"].includes(scope)) throw new Error(`--scope is user, local or project, not '${scope}'.`);
   if (!register("Claude Code")) return;
   const run = (args2) => execFileSync2("claude", args2, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 3e4 });
@@ -15361,7 +19973,7 @@ function claude() {
   ok(old ? `updated Reflex in Claude Code (${scope} scope; your other settings for it kept)` : `added Reflex to Claude Code (${scope} scope)`);
 }
 function codex() {
-  if (f["no-codex"]) return;
+  if (f2["no-codex"]) return;
   const codexHome = process.env.CODEX_HOME ?? join10(homedir3(), ".codex");
   if (!which("codex") && !existsSync10(codexHome)) return note("Codex isn't installed; skipped");
   if (!register("Codex")) return;
@@ -15395,43 +20007,43 @@ async function pair() {
   const c = await LinkClient.connect(dir2, "admin");
   try {
     const o = await c.call("pair.offer");
-    if (f.json) return say(JSON.stringify(o));
-    say("");
-    say(`  Pairing code: ${o.code.slice(0, 3)} ${o.code.slice(3)}`);
-    say("");
-    say(o.line);
-    if (f["no-wait"] || !process.stdout.isTTY) return;
-    say("Waiting for your iPad\u2026 (Ctrl-C stops waiting; the Link keeps running.)");
+    if (f2.json) return say2(JSON.stringify(o));
+    say2("");
+    say2(`  Pairing code: ${o.code.slice(0, 3)} ${o.code.slice(3)}`);
+    say2("");
+    say2(o.line);
+    if (f2["no-wait"] || !process.stdout.isTTY) return;
+    say2("Waiting for your iPad\u2026 (Ctrl-C stops waiting; the Link keeps running.)");
     while (Date.now() < o.expires) {
       await new Promise((r) => setTimeout(r, 1e3));
       const u = await c.call("pair.check", { offer: o.offer });
       if (!u.used) continue;
-      say(`
+      say2(`
 Paired with ${u.name ?? "your iPad"}. Done: start Claude Code (\`claude\`) or Codex and say "connect my iPad".`);
       return;
     }
-    say("The code expired. Run `reflex pair` for a new one.");
+    say2("The code expired. Run `reflex pair` for a new one.");
   } finally {
     c.close();
   }
 }
 async function main2() {
-  if (f.help) return void process.stdout.write(HELP2);
+  if (f2.help) return void process.stdout.write(HELP3);
   if (cmd === "pair") {
     await link();
     return pair();
   }
   if (cmd !== "setup") throw new Error(`Unknown command '${cmd}'. Run reflex setup --help.`);
-  say("Setting up Reflex");
+  say2("Setting up Reflex");
   shim();
   claude();
   codex();
   await link();
-  if (which("claude") && !f["no-claude"] && (!customHome || f.register))
+  if (which("claude") && !f2["no-claude"] && (!customHome || f2.register))
     note("optional: to have Sends pushed into Claude Code as new turns, start it with: claude --dangerously-load-development-channels server:reflex");
   await pair();
 }
-var REPO, BIN2, NODE, MARK, HELP2, f, positionals, cmd, dir2, customHome, say, ok, note, want, register;
+var REPO, BIN2, NODE, MARK, HELP3, f2, positionals, cmd, dir2, customHome, say2, ok, note, want, register;
 var init_setup = __esm({
   "link/bin/setup.ts"() {
     "use strict";
@@ -15443,7 +20055,7 @@ var init_setup = __esm({
     BIN2 = join10(REPO, "agent/bin/reflex.mjs");
     NODE = process.execPath;
     MARK = "# Made by `reflex setup`";
-    HELP2 = `reflex setup: set up Reflex on this computer, then pair your iPad.
+    HELP3 = `reflex setup: set up Reflex on this computer, then pair your iPad.
 
 Usage
   reflex setup            Put reflex on your PATH, add Reflex to Claude Code and Codex, start the Link,
@@ -15460,7 +20072,7 @@ Options
   --no-wait               Don't wait for the iPad to pair
   -h, --help
 `;
-    ({ values: f, positionals } = parseArgs2({
+    ({ values: f2, positionals } = parseArgs3({
       allowPositionals: true,
       options: {
         home: { type: "string" },
@@ -15475,19 +20087,19 @@ Options
       }
     }));
     cmd = positionals[0] ?? "setup";
-    dir2 = homeDir(f.home);
+    dir2 = homeDir(f2.home);
     customHome = dir2 !== resolve3(homedir3(), ".reflex", "link");
     process.env.REFLEX_HOME = dir2;
-    say = (s = "") => void process.stdout.write(s + "\n");
-    ok = (s) => say(`  \u2713 ${s}`);
-    note = (s) => say(`  \xB7 ${s}`);
+    say2 = (s = "") => void process.stdout.write(s + "\n");
+    ok = (s) => say2(`  \u2713 ${s}`);
+    note = (s) => say2(`  \xB7 ${s}`);
     {
       const onPath = which("node");
       if (onPath) NODE = onPath;
     }
     want = (channel) => ({ command: NODE, args: [BIN2, "mcp", ...channel ? ["--channel"] : []], home: customHome ? dir2 : null });
     register = (who2) => {
-      if (!customHome || f.register) return true;
+      if (!customHome || f2.register) return true;
       note(`left ${who2} alone: --home ${dir2} isn't your default profile (pass --register to point ${who2} at it)`);
       return false;
     };
@@ -15529,22 +20141,22 @@ var init_client2 = __esm({
           ready = r;
           sock.once("close", () => reject(new NoLink("The Link refused this connection: its credential did not match.")));
         });
-        sock.on("data", frames((f2) => {
-          if (f2.t === "ready") return ready();
-          if (f2.t === "push") {
-            const on = this.#onPush.get(f2.id);
-            const answer = (r) => this.#send({ t: "pushed", push: f2.push, ...r });
+        sock.on("data", frames((f3) => {
+          if (f3.t === "ready") return ready();
+          if (f3.t === "push") {
+            const on = this.#onPush.get(f3.id);
+            const answer = (r) => this.#send({ t: "pushed", push: f3.push, ...r });
             if (!on) return answer({ ok: false, reason: "not listening" });
-            if (Date.now() > f2.deadline) return answer({ ok: false, reason: "arrived after its deadline" });
-            void on(f2).then(answer, (e) => answer({ ok: false, reason: String(e.message) }));
+            if (Date.now() > f3.deadline) return answer({ ok: false, reason: "arrived after its deadline" });
+            void on(f3).then(answer, (e) => answer({ ok: false, reason: String(e.message) }));
             return;
           }
-          const w = this.#waiting.get(f2.id);
+          const w = this.#waiting.get(f3.id);
           if (!w) return;
-          if (f2.t === "progress") return w.progress?.(f2);
-          this.#waiting.delete(f2.id);
-          if (f2.t === "failed") w.reject(new Error(f2.message));
-          else w.resolve(f2);
+          if (f3.t === "progress") return w.progress?.(f3);
+          this.#waiting.delete(f3.id);
+          if (f3.t === "failed") w.reject(new Error(f3.message));
+          else w.resolve(f3);
         }));
         sock.on("close", () => {
           for (const w of this.#waiting.values()) w.reject(new Error("The Reflex Link closed the connection."));
@@ -15573,15 +20185,15 @@ var init_client2 = __esm({
         await c.#ready;
         return c;
       }
-      #send(f2) {
-        this.#sock.write(JSON.stringify(f2) + "\n");
+      #send(f3) {
+        this.#sock.write(JSON.stringify(f3) + "\n");
       }
-      #request(frame2, o = {}) {
+      #request(frame3, o = {}) {
         const id2 = this.#next++;
         return new Promise((resolve5, reject) => {
           this.#waiting.set(id2, { resolve: resolve5, reject, progress: o.progress });
           o.signal?.addEventListener("abort", () => this.#send({ t: "cancel", id: id2 }), { once: true });
-          this.#send(frame2(id2));
+          this.#send(frame3(id2));
         });
       }
       call(tool, args2, who2, o = {}) {
@@ -16252,8 +20864,8 @@ function base64urlToUint8Array(base64url2) {
 function uint8ArrayToBase64url(bytes) {
   return uint8ArrayToBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
-function hexToUint8Array(hex) {
-  const cleanHex = hex.replace(/^0x/, "");
+function hexToUint8Array(hex2) {
+  const cleanHex = hex2.replace(/^0x/, "");
   if (cleanHex.length % 2 !== 0) {
     throw new Error("Invalid hex string length");
   }
@@ -17707,7 +22319,7 @@ function handleIntersectionResults(result, left, right) {
     if (!collect(iss, "r"))
       result.issues.push(iss);
   }
-  const bothKeys = [...unrecKeys].filter(([, f2]) => f2.l && f2.r).map(([k]) => k);
+  const bothKeys = [...unrecKeys].filter(([, f3]) => f3.l && f3.r).map(([k]) => k);
   if (bothKeys.length) {
     const aggregated = unrecIssue ? bothKeys.filter((k) => unrecIssue.keys.includes(k)) : [];
     if (aggregated.length)
@@ -19471,8 +24083,8 @@ var init_registries = __esm({
         if (p) {
           const pm = { ...this.get(p) ?? {} };
           delete pm.id;
-          const f2 = { ...pm, ...this._map.get(schema) };
-          return Object.keys(f2).length ? f2 : void 0;
+          const f3 = { ...pm, ...this._map.get(schema) };
+          return Object.keys(f3).length ? f3 : void 0;
         }
         return this._map.get(schema);
       }
@@ -25811,17 +30423,17 @@ var require_dist2 = __commonJS({
     };
     formatsPlugin.get = (name, mode = "full") => {
       const formats = mode === "fast" ? formats_1.fastFormats : formats_1.fullFormats;
-      const f2 = formats[name];
-      if (!f2)
+      const f3 = formats[name];
+      if (!f3)
         throw new Error(`Unknown format "${name}"`);
-      return f2;
+      return f3;
     };
     function addFormats(ajv, list, fs, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
-      for (const f2 of list)
-        ajv.addFormat(f2, fs[f2]);
+      for (const f3 of list)
+        ajv.addFormat(f3, fs[f3]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -25904,7 +30516,7 @@ var init_ajv_provider = __esm({
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.js
 var ExperimentalServerTasks;
-var init_server2 = __esm({
+var init_server3 = __esm({
   "node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.js"() {
     init_types();
     ExperimentalServerTasks = class {
@@ -26162,13 +30774,13 @@ var init_helpers = __esm({
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js
 var Server;
-var init_server3 = __esm({
+var init_server4 = __esm({
   "node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js"() {
     init_protocol2();
     init_types();
     init_ajv_provider();
     init_zod_compat();
-    init_server2();
+    init_server3();
     init_helpers();
     Server = class extends Protocol {
       /**
@@ -26751,9 +31363,9 @@ async function runMcp(o = {}) {
       log("call_end", { tool, request: extra.requestId, s: (Date.now() - callStarted) / 1e3, isError: r.isError, progressSent, status: r.json.status ?? r.json.kind ?? (r.json.ok === false ? r.json.reason : "ok") });
       const content = [{ type: "text", text: JSON.stringify(r.json) }];
       for (const data of r.images) content.push({ type: "image", data, mimeType: "image/png" });
-      for (const f2 of r.files ?? []) {
-        const entry = (r.json.files ?? []).find((x) => x.id === f2.id);
-        if (entry?.text === void 0) content.push({ type: "resource", resource: { uri: `reflex://${r.json.space}/files/${f2.id}`, mimeType: f2.mime, blob: f2.data } });
+      for (const f3 of r.files ?? []) {
+        const entry = (r.json.files ?? []).find((x) => x.id === f3.id);
+        if (entry?.text === void 0) content.push({ type: "resource", resource: { uri: `reflex://${r.json.space}/files/${f3.id}`, mimeType: f3.mime, blob: f3.data } });
       }
       const pending = r.json.pending_sends ?? r.json.pending_after;
       if (pending > 0 && tool !== "wait_for_user") content.push({ type: "text", text: `\u{1F4E5} ${pending} pending Send${pending === 1 ? "" : "s"}. Read with wait_for_user(timeout_s: 0).` });
@@ -26836,7 +31448,7 @@ var KNOWN, MAX_WAIT_S, CHANNEL, CHANNEL_HARNESSES, CHANNEL_INSTRUCTIONS;
 var init_mcp = __esm({
   "agent/src/surfaces/mcp.ts"() {
     "use strict";
-    init_server3();
+    init_server4();
     init_stdio2();
     init_types();
     init_protocol();
@@ -26860,8 +31472,8 @@ __export(cli_exports, {
 import { mkdirSync as mkdirSync10, writeFileSync as writeFileSync8 } from "node:fs";
 import { tmpdir as tmpdir4 } from "node:os";
 import { basename as basename2, join as join12 } from "node:path";
-function agentName(f2) {
-  if (typeof f2.agent === "string") return f2.agent;
+function agentName(f3) {
+  if (typeof f3.agent === "string") return f3.agent;
   if (process.env.REFLEX_AGENT_NAME) return process.env.REFLEX_AGENT_NAME;
   const project = basename2(process.cwd());
   if (process.env.CODEX_THREAD_ID) return `Codex CLI \xB7 ${project}`;
@@ -26879,8 +31491,8 @@ function imageDir() {
   mkdirSync10(dir3, { recursive: true });
   return dir3;
 }
-async function call(tool, args2, f2, human, o = {}) {
-  const r = await (await host()).call(tool, args2, who(f2), { signal: o.signal });
+async function call(tool, args2, f3, human, o = {}) {
+  const r = await (await host()).call(tool, args2, who(f3), { signal: o.signal });
   if (r.isError) {
     process.stderr.write(JSON.stringify(r.json) + "\n");
     return 1;
@@ -26893,17 +31505,17 @@ async function call(tool, args2, f2, human, o = {}) {
     const entry = (r.json.files ?? []).find((x) => x.id === fb.id);
     if (entry) entry.file = path;
   }
-  if (f2.json) out2(JSON.stringify(r.json));
+  if (f3.json) out2(JSON.stringify(r.json));
   else for (const line of human(r, files)) out2(line);
   return 0;
 }
-async function adapters(action, args2, f2, human) {
-  const r = await (await host()).adapters(who(f2), action, args2);
+async function adapters(action, args2, f3, human) {
+  const r = await (await host()).adapters(who(f3), action, args2);
   if (r.isError) {
     process.stderr.write(JSON.stringify(r.json) + "\n");
     return 1;
   }
-  if (f2.json) out2(JSON.stringify(r.json));
+  if (f3.json) out2(JSON.stringify(r.json));
   else for (const line of human(r.json)) out2(line);
   return 0;
 }
@@ -26912,19 +31524,19 @@ function help() {
 }
 function parse3(argv) {
   const pos = [];
-  const f2 = {};
+  const f3 = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "-h") f2.help = true;
+    if (a === "-h") f3.help = true;
     else if (a.startsWith("--")) {
       const [k, v] = a.slice(2).split(/=(.*)/s, 2);
-      if (v !== void 0) f2[k] = v;
-      else if (["json", "help", "create", "look", "version", "no-open", "channel"].includes(k)) f2[k] = true;
-      else if (i + 1 < argv.length) f2[k] = argv[++i];
-      else f2[k] = true;
+      if (v !== void 0) f3[k] = v;
+      else if (["json", "help", "create", "look", "version", "no-open", "channel"].includes(k)) f3[k] = true;
+      else if (i + 1 < argv.length) f3[k] = argv[++i];
+      else f3[k] = true;
     } else pos.push(a);
   }
-  return { pos, f: f2 };
+  return { pos, f: f3 };
 }
 function closest(word, options) {
   const d = (a, b) => {
@@ -26936,18 +31548,18 @@ function closest(word, options) {
   return options.map((o) => [d(word, o), o]).sort((a, b) => a[0] - b[0])[0];
 }
 async function main3(argv) {
-  const { pos, f: f2 } = parse3(argv);
-  if (f2.version) return out2(VERSION), 0;
+  const { pos, f: f3 } = parse3(argv);
+  if (f3.version) return out2(VERSION), 0;
   const two = pos.slice(0, 2).join(" ");
   const key = COMMANDS[two] ? two : COMMANDS[pos[0] ?? ""] ? pos[0] : void 0;
   if (!key) {
-    if (!pos.length || f2.help) return out2(help()), pos.length ? 0 : f2.help ? 0 : 2;
+    if (!pos.length || f3.help) return out2(help()), pos.length ? 0 : f3.help ? 0 : 2;
     const [dist, near] = closest(two || pos[0], Object.keys(COMMANDS));
     errLine("invalid_input", `Unknown command 'reflex ${pos.join(" ")}'.`, dist <= 4 ? `Did you mean 'reflex ${near}'?` : "Run reflex --help for the commands.", dist <= 4 ? [`reflex ${near} --help`] : ["reflex --help"]);
     return 2;
   }
   const cmd3 = COMMANDS[key];
-  if (f2.help) {
+  if (f3.help) {
     const tool = /\((\w+)/.exec(cmd3.summary)?.[1];
     const guide = tool && TOOLS.includes(tool) ? `
 
@@ -26960,10 +31572,10 @@ Also: --json, --agent <name>${guide}`);
     return 0;
   }
   const known = /* @__PURE__ */ new Set([...cmd3.flags ?? [], "json", "agent", "help"]);
-  const unknown2 = Object.keys(f2).filter((k) => !known.has(k));
+  const unknown2 = Object.keys(f3).filter((k) => !known.has(k));
   try {
     if (unknown2.length) throw new Usage(`Unknown flag --${unknown2[0]} for 'reflex ${key}'. Usage: ${cmd3.usage}`, [`reflex ${key} --help`]);
-    return await cmd3.run(pos.slice(key.split(" ").length), f2);
+    return await cmd3.run(pos.slice(key.split(" ").length), f3);
   } catch (e) {
     if (e instanceof Usage) {
       errLine("invalid_input", e.message, `See: reflex ${key} --help`, e.next.length ? e.next : [`reflex ${key} --help`]);
@@ -26993,8 +31605,8 @@ var init_cli = __esm({
         this.next = next;
       }
     };
-    who = (f2) => {
-      const name = agentName(f2);
+    who = (f3) => {
+      const name = agentName(f3);
       return { name, credential: credential(name) };
     };
     need = (pos, i, what, usage) => {
@@ -27007,7 +31619,7 @@ var init_cli = __esm({
         usage: "reflex connect",
         summary: "Get a 6-digit code to type in Reflex on your iPad (connect): it pairs the iPad and lets this Agent in",
         flags: [],
-        run: (_p, f2) => call("connect", {}, f2, (r) => {
+        run: (_p, f3) => call("connect", {}, f3, (r) => {
           const j = r.json;
           if (j.connected) return [`Connected to ${j.ipads.join(", ")}.`, j.next];
           return [`Code: ${j.code}`, j.tell_the_person];
@@ -27017,15 +31629,15 @@ var init_cli = __esm({
         usage: "reflex wait [--timeout <seconds>] [--after <send>] [--space <space>]",
         summary: "Wait for the person's next Send (wait_for_user). --timeout 0 reads the Inbox",
         flags: ["timeout", "after", "space"],
-        run: async (_p, f2) => {
-          const args2 = { timeout_s: int2(f2.timeout, "timeout") ?? 300 };
-          for (const k of ["after", "space"]) if (typeof f2[k] === "string") args2[k] = f2[k];
+        run: async (_p, f3) => {
+          const args2 = { timeout_s: int2(f3.timeout, "timeout") ?? 300 };
+          for (const k of ["after", "space"]) if (typeof f3[k] === "string") args2[k] = f3[k];
           const ac = new AbortController();
           process.once("SIGINT", () => ac.abort());
           const code = await call(
             "wait_for_user",
             args2,
-            f2,
+            f3,
             (r, files) => {
               const j = r.json;
               if (j.status === "still_waiting") return ["still_waiting: nothing yet. Run the same command again."];
@@ -27056,12 +31668,12 @@ var init_cli = __esm({
         usage: "reflex adapters add webhook --url <url>",
         summary: "Have your Sends POSTed to a URL as they arrive (a webhook push target), signed with a secret shown once",
         flags: ["url"],
-        run: async (p, f2) => {
+        run: async (p, f3) => {
           const usage = "reflex adapters add webhook --url <url>";
           const adapter = need(p, 0, "adapter", usage);
           if (adapter !== "webhook") throw new Usage(`Only a webhook can be added by hand, not '${adapter}'. Usage: ${usage}`);
-          if (typeof f2.url !== "string") throw new Usage(`Missing --url. Usage: ${usage}`);
-          return adapters("add", { adapter, config: { url: f2.url } }, f2, (j) => [
+          if (typeof f3.url !== "string") throw new Usage(`Missing --url. Usage: ${usage}`);
+          return adapters("add", { adapter, config: { url: f3.url } }, f3, (j) => [
             `Added ${j.target}: Sends for you are POSTed to ${j.config.url}.`,
             `Secret: ${j.secret}`,
             j.next
@@ -27071,25 +31683,25 @@ var init_cli = __esm({
       "adapters list": {
         usage: "reflex adapters list",
         summary: "List your push targets: webhooks, Claude Code channels and MCP App views",
-        run: (_p, f2) => adapters(
+        run: (_p, f3) => adapters(
           "list",
           {},
-          f2,
+          f3,
           (j) => j.targets.length ? j.targets.map((t) => `${t.target}  ${t.adapter.padEnd(15)} ${t.live ? "live   " : "offline"}  ${t.config.url ?? t.config.harness ?? t.config.host ?? ""}`) : ["No push targets. Add a webhook: reflex adapters add webhook --url <url>"]
         )
       },
       "adapters remove": {
         usage: "reflex adapters remove <target>",
         summary: "Remove one of your push targets and its secret",
-        run: (p, f2) => adapters("remove", { target: need(p, 0, "target", "reflex adapters remove <target>") }, f2, (j) => [`Removed ${j.removed}.`])
+        run: (p, f3) => adapters("remove", { target: need(p, 0, "target", "reflex adapters remove <target>") }, f3, (j) => [`Removed ${j.removed}.`])
       },
       mcp: {
         usage: "reflex mcp [--channel]",
         summary: "Run the MCP server on stdio, for a harness's MCP config. --channel also pushes Sends into a Claude Code session as new turns (a Claude Code channel; start claude with --dangerously-load-development-channels server:<this server's name>)",
         flags: ["channel"],
-        run: async (_p, f2) => {
+        run: async (_p, f3) => {
           const { runMcp: runMcp2 } = await Promise.resolve().then(() => (init_mcp(), mcp_exports));
-          await runMcp2({ channel: Boolean(f2.channel) || process.env.REFLEX_CHANNEL === "1" });
+          await runMcp2({ channel: Boolean(f3.channel) || process.env.REFLEX_CHANNEL === "1" });
           return -1;
         }
       }
@@ -27102,6 +31714,9 @@ var [cmd2, ...rest] = process.argv.slice(2);
 if (cmd2 === "link") {
   process.argv = [process.argv[0], "reflex link", ...rest];
   await Promise.resolve().then(() => (init_reflex_link(), reflex_link_exports));
+} else if (cmd2 === "relay") {
+  process.argv = [process.argv[0], "reflex relay", ...rest];
+  await init_reflex_relay().then(() => reflex_relay_exports);
 } else if (cmd2 === "setup" || cmd2 === "pair") {
   if (cmd2 === "setup" && !process.env.REFLEX_BIN) await prepare();
   process.argv = [process.argv[0], `reflex ${cmd2}`, cmd2, ...rest];

@@ -7,6 +7,7 @@ import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { homeDir } from "../home.ts";
 import { Link, LinkError } from "../link.ts";
+import { DEFAULT_RELAY } from "../transports/relay.ts";
 import { LinkClient, RpcError } from "../rpc/client.ts";
 
 const HELP = `Reflex Link — receive iPad Sends for local agents
@@ -14,7 +15,7 @@ Usage: reflex link [status|stop|pair|forget <device>|agents|deny <agent>|revoke 
   --home <path>    Profile folder
   --name <name>    Mac name on first start
   --port <n>       LAN port (default 7420)
-  --relay <url>    Forward through a Relay; off disables it
+  --relay <url>    Use this Relay (remembered; off turns it off). Also: REFLEX_RELAY=<url>|off
   --no-lan        Use the Relay only
   --no-p2p        Disable peer-to-peer Wi-Fi
   --no-prompt     Run without terminal pairing/approval prompts
@@ -50,24 +51,31 @@ async function admin<T>(method: string, params: Record<string, unknown> = {}): P
   }
 }
 
-/** The official Relay; a profile that never chose one uses it. */
-const DEFAULT_RELAY = "wss://reflex.eilmer.si";
-
-/** The Relay this profile uses: --relay sets it and it is remembered, --relay off turns it off (also remembered). */
+/**
+ * The Relay this profile uses: --relay sets it and it is remembered, --relay off turns it off (also remembered);
+ * REFLEX_RELAY (a URL, or off) wins over what was remembered, so one setting in the agent's MCP config is enough;
+ * a profile that never chose one uses the default, public Relay.
+ */
 function relayUrl(): string | undefined {
   const file = join(dir, "relay.json");
+  const check = (url: string, from: string): string => {
+    if (!/^wss?:\/\/[^/]+/.test(url)) throw new LinkError("usage", `${from} '${url}' is not a ws:// or wss:// URL.`, `For example: wss://relay.example.com (the default is ${DEFAULT_RELAY})`);
+    return url.replace(/\/+$/, "");
+  };
   if (flags.relay === "off") {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileSync(file, "{}\n");
     return undefined;
   }
   if (flags.relay) {
-    if (!/^wss?:\/\/[^/]+/.test(flags.relay)) throw new LinkError("usage", `'${flags.relay}' is not a ws:// or wss:// URL.`, "For example: --relay wss://reflex.eilmer.si");
+    const url = check(flags.relay, "--relay");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    writeFileSync(file, JSON.stringify({ url: flags.relay }) + "\n");
-    return flags.relay;
+    writeFileSync(file, JSON.stringify({ url }) + "\n");
+    return url;
   }
-  return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")).url ?? undefined) : (process.env.REFLEX_RELAY || DEFAULT_RELAY);
+  const env = process.env.REFLEX_RELAY?.trim();
+  if (env) return env === "off" ? undefined : check(env, "REFLEX_RELAY");
+  return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")).url ?? undefined) : DEFAULT_RELAY;
 }
 
 async function start(): Promise<void> {

@@ -414,14 +414,23 @@ public final class LinkSync {
         throw LinkError.unreachable("Could not reach the Link. \(errors.joined(separator: "; "))")
     }
 
-    /// A typed code: finds every Link on this network (and nearby, over peer-to-peer Wi-Fi) and tries the code on each.
+    /// The Relay a Link uses when the person set none (`DEFAULT_RELAY` in link/transports/relay.ts).
+    static let defaultRelay = "wss://reflex.eilmer.si"
+
+    /// A typed code: finds every Link on this network (and nearby, over peer-to-peer Wi-Fi) and tries the code on
+    /// each. Only if none is nearby does it go through a Relay's pairing room: nearby comes first.
     private func pair(typed code: String) async throws {
         let before = state
         state = .connecting
         let found = await findLinks()
         guard !found.isEmpty else {
-            state = paired == nil ? .unpaired : before
-            throw LinkError.unreachable("No Mac with Reflex found. Make sure this iPad is on the same Wi-Fi as your Mac, and that Reflex is allowed to find devices on your local network (Settings › Privacy & Security › Local Network).")
+            do {
+                try await pairThroughRelay(code)
+            } catch {
+                state = paired == nil ? .unpaired : before
+                throw error
+            }
+            return
         }
         var errors: [String] = []
         for f in found {
@@ -444,8 +453,68 @@ public final class LinkSync {
                 }
             }
         }
-        state = paired == nil ? .unpaired : before
-        throw LinkError.unreachable("Could not pair. \(errors.joined(separator: "; "))")
+        // Macs nearby, but none had this code (and none learned a digit of it): the person's Mac may be far away.
+        do {
+            try await pairThroughRelay(code)
+        } catch LinkError.unreachable(let far) {
+            state = paired == nil ? .unpaired : before
+            throw LinkError.unreachable("Could not pair. \(errors.joined(separator: "; ")); \(far)")
+        } catch {
+            state = paired == nil ? .unpaired : before
+            throw error
+        }
+    }
+
+    /// Tries the code in the pairing room of the Relay this iPad knows, then the default one (a Link on the
+    /// person's own Relay waits there too, only to say where it is: `moved`). Every Link in the room is tried:
+    /// CPace makes each try one guess for a Link with another code, and tells it nothing (Cpace.swift).
+    private func pairThroughRelay(_ code: String) async throws {
+        var relays: [String] = []
+        for r in [relay?.url, Self.defaultRelay].compactMap({ $0 }) where !relays.contains(r) { relays.append(r) }
+        var visited: [String] = []
+        var wrong = 0, seen = 0
+        var errors: [String] = []
+        while !relays.isEmpty, visited.count < 3 {
+            let url = relays.removeFirst()
+            guard !visited.contains(url) else { continue }
+            visited.append(url)
+            let lobby: RelayLobby
+            do {
+                lobby = try RelayLobby(url: url)
+                try await lobby.start()
+            } catch {
+                errors.append("\(url): \(error.localizedDescription)")
+                continue
+            }
+            let links = await lobby.devices(after: 2)
+            seen += links.count
+            linkLog.info("Pairing room on \(url, privacy: .public): \(links.count) Link(s) waiting")
+            for d in links.shuffled().prefix(8) {
+                let ch = lobby.channel(to: d)
+                do {
+                    let s = try await handshake(ch, me: identity, pairedKey: nil, offer: nil, relayCode: code)
+                    lobby.release()
+                    linkLog.info("Proved the code to \(s.peer.name, privacy: .public) through the relay at \(url, privacy: .public)")
+                    adopt(s, name: s.peer.name, person: s.peer.person, hosts: [], port: 0)
+                    return
+                } catch let m as RelayMoved {
+                    ch.close()
+                    if m.relay.hasPrefix("wss://") || m.relay.hasPrefix("ws://"), !visited.contains(m.relay), !relays.contains(m.relay) { relays.insert(m.relay, at: 0) }
+                } catch LinkError.refused(let why) where why.hasSuffix("wrong pairing code") {
+                    ch.close()
+                    wrong += 1
+                } catch {
+                    ch.close()
+                    errors.append(error.localizedDescription)
+                }
+            }
+            lobby.close()
+        }
+        if wrong > 0 { throw LinkError.badCode("That code didn't work. Check the digits, or ask your agent for a new code and type that.") }
+        if seen == 0 && errors.isEmpty {
+            throw LinkError.unreachable("No Mac with Reflex found, nearby or through the relay. Ask your agent for a new code, and check your Mac is online. On the same Wi-Fi, check Reflex may find devices on your local network (Settings › Privacy & Security › Local Network).")
+        }
+        throw LinkError.unreachable("Could not pair through the relay. \(errors.joined(separator: "; "))")
     }
 
     struct FoundLink: Sendable {
@@ -513,41 +582,48 @@ public final class LinkSync {
         identity.person = offer.person
         do {
             let s = try await handshake(conn, me: identity, pairedKey: nil, offer: offer, exposure: exposure)
-            // Spaces made under another person (an earlier Link) aren't this person's to sync: the new Link
-            // would refuse every change in them. They stay here, offered to no Link.
-            if let old = person, old.id != offer.person.id {
-                beforeChangingPerson?()
-                // Moved to their own folder and key: the new Link's Library ("library") and any Space of its with
-                // the same ID get fresh replicas, and these are never offered to it.
-                var shown = 0
-                for id in spaces.filter({ localOnly[$0] == nil }) {
-                    let key = Self.keep(id)
-                    localOnly[key] = old.name.isEmpty ? old.id : old.name
-                    shown += 1
-                }
-                saveLocalOnly()
-                loadPages()
-                if shown > 0 { localOnlyNotice = (shown, old.name.isEmpty ? "an earlier pairing" : old.name) }
-                decisions = [:]
-                saveDecisions()
-            }
-            changedHosts = []
-            paired = Paired(device: s.peer.device, key: s.peer.key, name: offer.name, person: offer.person, hosts: hosts, port: port)
-            Self.writeSecret(paired!, to: Self.linkDir.appending(path: "paired.json"))
-            person = offer.person
-            Self.writeSecret(Saved(key: B64.encode(identity.key.rawRepresentation), actor: actor, name: identity.name, person: offer.person), to: Self.linkDir.appending(path: "identity.json"))
-            linkLog.info("Paired with \(offer.name, privacy: .public) at \(conn.remote, privacy: .public)")
-            // The peer-to-peer browser looks for one Link by its device ID: a new Link needs a new one.
-            p2p?.stop()
-            p2p = nil
-            discovered = nil
-            browse()
-            for old in paths.all where old.peer.device != s.peer.device { old.close() }
-            bind(s)
+            adopt(s, name: offer.name, person: offer.person, hosts: hosts, port: port)
         } catch {
             identity.person = wasPerson
             throw error
         }
+    }
+
+    /// Takes the Link a handshake just paired with as this iPad's, and stays connected to it.
+    private func adopt(_ s: Session, name: String, person newPerson: Person, hosts: [String], port: UInt16) {
+        identity.person = newPerson
+        let offer = (name: name, person: newPerson)
+        // Spaces made under another person (an earlier Link) aren't this person's to sync: the new Link
+        // would refuse every change in them. They stay here, offered to no Link.
+        if let old = person, old.id != offer.person.id {
+            beforeChangingPerson?()
+            // Moved to their own folder and key: the new Link's Library ("library") and any Space of its with
+            // the same ID get fresh replicas, and these are never offered to it.
+            var shown = 0
+            for id in spaces.filter({ localOnly[$0] == nil }) {
+                let key = Self.keep(id)
+                localOnly[key] = old.name.isEmpty ? old.id : old.name
+                shown += 1
+            }
+            saveLocalOnly()
+            loadPages()
+            if shown > 0 { localOnlyNotice = (shown, old.name.isEmpty ? "an earlier pairing" : old.name) }
+            decisions = [:]
+            saveDecisions()
+        }
+        changedHosts = []
+        paired = Paired(device: s.peer.device, key: s.peer.key, name: offer.name, person: offer.person, hosts: hosts, port: port)
+        Self.writeSecret(paired!, to: Self.linkDir.appending(path: "paired.json"))
+        person = offer.person
+        Self.writeSecret(Saved(key: B64.encode(identity.key.rawRepresentation), actor: actor, name: identity.name, person: offer.person), to: Self.linkDir.appending(path: "identity.json"))
+        linkLog.info("Paired with \(offer.name, privacy: .public) at \(s.conn.remote, privacy: .public)")
+        // The peer-to-peer browser looks for one Link by its device ID: a new Link needs a new one.
+        p2p?.stop()
+        p2p = nil
+        discovered = nil
+        browse()
+        for old in paths.all where old.peer.device != s.peer.device { old.close() }
+        bind(s)
     }
 
     /// Finds the paired Link again over Bonjour; discovery is never authentication.
@@ -731,6 +807,8 @@ public final class LinkSync {
 
     /// A new authenticated path to the paired Link.
     private func bind(_ s: Session) {
+        // Over a Relay the Link's hello names no one: it is the paired Link, by key.
+        if s.peer.name.isEmpty, let paired { s.peer.name = paired.name }
         if let old = paths.on(s.transport) {
             old.close()
             _ = paths.remove(old)
