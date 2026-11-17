@@ -274,6 +274,13 @@ public final class LinkSync {
         return send
     }
 
+    /// The Send is still in the outbox: the Link hasn't acknowledged it.
+    public func isPending(_ send: String) -> Bool {
+        Self.safeID(send)
+            && FileManager.default.fileExists(
+                atPath: Self.outboxDir.appending(path: send + ".json").path(percentEncoded: false))
+    }
+
     private static func safeID(_ id: String) -> Bool {
         !id.isEmpty && id.count <= 200
             && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }

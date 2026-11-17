@@ -11,6 +11,7 @@ struct BoardScreen: View {
     let session: BoardSession
     let link: LinkSync
     let voice: VoiceCapture
+    let recordings: RecordingStore
     let library: BoardLibrary
     let onBack: () -> Void
     let onStatus: () -> Void
@@ -30,6 +31,8 @@ struct BoardScreen: View {
     @State private var showFiles = false
     @State private var showCamera = false
     @State private var showScenes = false
+    @State private var showRecordings = false
+    @State private var player = RecordingPlayer()
     @State private var renaming = false
     @State private var draftTitle = ""
     @State private var exportURL: URL?
@@ -552,16 +555,68 @@ struct BoardScreen: View {
     // MARK: Bottom right: mic and Send
 
     private var bottomRight: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
+            if !voice.holding && voice.state == .idle {
+                RecordingsButton(store: recordings) { showRecordings.toggle() }
+                    .popover(isPresented: $showRecordings, arrowEdge: .bottom) {
+                        RecordingsPanel(
+                            store: recordings, player: player, canSend: link.destinationKey != nil,
+                            send: sendAgain, done: { showRecordings = false }
+                        )
+                        .onAppear { recordings.refresh(stillPending: link.isPending) }
+                    }
+                    .transition(.scale.combined(with: .opacity))
+            }
             VoiceSendDock(
                 voice: voice, pending: link.pendingSends, lastSend: session.lastSendOK,
                 preparing: session.preparingSends > 0,
-                paired: link.destinationKey != nil, onFail: { session.say($0) }
-            ) { said, words in
-                session.send(trigger: "voice", said: said, words: words)
+                paired: link.destinationKey != nil, onFail: { session.say($0) },
+                recordTo: {
+                    showRecordings = false
+                    player.stop()
+                    return recordings.begin()
+                }
+            ) { take, cutOff in
+                released(take, cutOff: cutOff)
             } send: {
                 session.send(trigger: "button")
             }
+        }
+        .animation(.spring(duration: 0.35, bounce: 0.25), value: voice.holding || voice.state != .idle)
+        .onChange(of: link.pendingSends, initial: true) { _, _ in recordings.refresh(stillPending: link.isPending) }
+    }
+
+    /// A hold ended. Its recording is saved first; then, if it was released and words were heard, it goes out
+    /// in a Send with the board, as voice always has.
+    private func released(_ take: VoiceCapture.Take, cutOff: Bool) {
+        // A tap, not a hold: nothing to keep.
+        if !cutOff, take.duration < 0.6, take.said.isEmpty {
+            recordings.discard(take)
+            session.say("Didn't catch that. Hold the mic and talk, then let go.")
+            return
+        }
+        let r = recordings.finish(take, cutOff: cutOff)
+        if cutOff {
+            recordings.noteUnsent()
+            session.say("Recording cut off. It's saved in Recordings.")
+        } else if r.heardNothing {
+            recordings.noteUnsent()
+            session.say("Didn't catch any words. The audio is saved in Recordings.")
+        } else {
+            send(r)
+            if link.destinationKey == nil { recordings.noteUnsent() }
+        }
+    }
+
+    private func sendAgain(_ r: Recording) {
+        showRecordings = false
+        send(r)
+    }
+
+    private func send(_ r: Recording) {
+        let agents = link.agents.values.filter { $0.status == "approved" }.map(\.name).sorted()
+        session.send(trigger: "voice", said: r.said, words: r.sendWords) { send in
+            recordings.queued(r.id, send: send, to: agents)
         }
     }
 

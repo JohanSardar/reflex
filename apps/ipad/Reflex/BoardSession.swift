@@ -1061,7 +1061,10 @@ final class BoardSession {
 
     // MARK: Send
 
-    func send(trigger: String, said: String? = nil, words: [[String: Any]] = []) {
+    /// `queued` hears the Send's ID once it's saved in the outbox.
+    func send(
+        trigger: String, said: String? = nil, words: [[String: Any]] = [], queued: ((String) -> Void)? = nil
+    ) {
         // Not paired yet: nothing to send to. Say so, with a way to pair.
         guard link.destinationKey != nil else {
             say("Pair with your Mac to send.", pair: true)
@@ -1141,6 +1144,7 @@ final class BoardSession {
             do {
                 _ = try link.enqueueSend(id, raw: raw, destination: destination)
                 ink.claim(ids)
+                if let send = raw["send"] as? String { queued?(send) }
                 if case .connected = link.state {
                     say("Sent")
                 } else {
