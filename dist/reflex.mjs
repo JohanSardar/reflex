@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Built by agent/build.mjs from https://github.com/jujdontbudge/reflex. Don't edit: run `npm run build`.
+// Built by agent/build.mjs from https://github.com/JohanSardar/reflex. Don't edit: run `npm run build`.
 import { createRequire as __reflexRequire } from "node:module";
 import { fileURLToPath as __reflexPath } from "node:url";
 const require = __reflexRequire(import.meta.url);

@@ -1,6 +1,6 @@
 # Keeps the `npx` branch in step with main: dist/reflex.mjs, and the peer-to-peer Wi-Fi helper built for both Mac
 # architectures (dist/reflex-p2p, so an npx install can pair with an iPad nearby, not only on the same Wi-Fi). That
-# branch holds only those and package.json, so `npx -y github:jujdontbudge/reflex#npx mcp` downloads about 1 MB
+# branch holds only those and package.json, so `npx -y github:JohanSardar/reflex#npx mcp` downloads about 1 MB
 # instead of the whole repository, and starts well inside a harness's wait for a new MCP server. Runs on GitHub's
 # runners.
 name: npx branch
