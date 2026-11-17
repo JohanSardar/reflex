@@ -1,99 +1,87 @@
-# Reflex
+<p align="center">
+  <img src="assets/icon.png" width="96" alt="Reflex’s hand-drawn four-way arrow">
+</p>
+<h1 align="center">Reflex</h1>
+<p align="center"><strong>Draw, write and speak on your iPad. Send it to Claude Code or Codex on your Mac.</strong></p>
+<p align="center">
+  <a href="https://testflight.apple.com/join/R81n88Re"><img src="docs/images/testflight.svg" width="224" height="52" alt="Get the iPad beta on TestFlight"></a>
+</p>
+<p align="center">
+  <a href="#connect">Quick start</a> · <a href="docs/README.md">Documentation</a> · <a href="CONTRIBUTING.md">Contribute</a> · <a href="LICENSE">MIT license</a>
+</p>
 
-Send your marks, words and screen from an iPad to Claude Code or Codex on your Mac. The agent answers in its own session; it cannot draw or edit the canvas.
+Sketch an idea, circle the part you mean, or hold the mic to explain it. Press **Send** and your agent receives the marks, words and board images together. Read its answer in your agent session.
+
+> **iPad beta:** requires iPadOS 26 or later. The TestFlight build was submitted for Apple’s beta review on November 16, 2026; the public link currently says “This beta isn’t accepting any new testers right now.”
+
+<p align="center">
+  <img src="docs/evidence/t25/restored-native-page.png" width="520" alt="Real Reflex iPad Simulator capture: native drawing canvas, drawing tools, connected Mac, microphone and Send button">
+</p>
+<p align="center"><sub>Earlier iPad Simulator capture from <a href="docs/evidence/t25/verification.md">native canvas and Send verification</a>. Simple test strokes, with no artwork added.</sub></p>
 
 ## Connect
 
-Add Reflex to your agent with one line (Node 22 or newer):
+You need the [iPad beta](https://testflight.apple.com/join/R81n88Re), a Mac with [Node.js 22 or later](https://nodejs.org/en/download), Git, and a working Claude Code or Codex installation. No Reflex account or server setup is needed.
+
+### Claude Code
+
+Paste this in your Mac’s terminal, in the folder where you use Claude Code:
 
 ```sh
 claude mcp add reflex -- npx -y "github:JohanSardar/reflex#npx" mcp
 ```
 
-Other MCP harnesses (Codex, Cursor, …) take the same server command: `npx -y github:JohanSardar/reflex#npx mcp`. In Codex, set `tool_timeout_sec = 300`.
+Start a new `claude` session in that folder so it loads the server. Say **“connect my iPad”** and allow Reflex’s tools if Claude Code asks. Your agent gives you a six-digit code.
 
-Then tell your agent "connect my iPad" (in Codex, "connect my iPad to Reflex"). It gives you a 6-digit code. Open Reflex on the iPad, tap **Pair with Mac**, and type it. The iPad looks for the Mac on the same Wi-Fi and nearby first. If the Mac isn't there, it looks through the relay, so the Mac can be anywhere. Typing the code also lets that agent in. Codes work once, for 10 minutes, and stop working after 5 wrong tries.
+### Codex
 
-Sends then reach the agent through `wait_for_user`, in a plain `claude` session with no flags. The agent keeps waiting for the next Send by itself.
+Add this block to `~/.codex/config.toml` (replace an existing Reflex block rather than adding a duplicate):
 
-### Pushed Sends (optional, local)
-
-Claude Code can also have each Send pushed in as a new turn, through a channel. Claude Code only loads channels from Anthropic's allowlist without a flag, so this needs a local setup:
-
-```sh
-node agent/bin/reflex.mjs setup          # from a checkout: PATH, Claude Code and Codex config, the Link
-claude --dangerously-load-development-channels server:reflex
+```toml
+[mcp_servers.reflex]
+command = "npx"
+args = ["-y", "github:JohanSardar/reflex#npx", "mcp"]
+tool_timeout_sec = 300
 ```
 
-## The relay: pairing from anywhere
+Start a new Codex session and say **“connect my iPad to Reflex”**. Your agent gives you a six-digit code.
 
-When the iPad and the Mac aren't on the same network, they meet through a relay. The free default is `wss://reflex.eilmer.si` and needs no setup.
+### On your iPad
 
-**How it works.**
-1. While a code is live, your Mac waits in the relay's pairing room. That room is shared by everyone and its name says nothing about any code.
-2. The iPad joins the room and tries the code you typed with each Mac waiting there.
-3. Each try runs CPace, a password check made for this: both sides prove they know the code without sending it or anything that reveals it. A Mac with a different code counts it as one wrong try, and after 5 its code stops working.
-4. Once the code checks out, the devices swap their keys and move to your own room on the relay. Your boards and Sends then go back and forth there.
+1. Open Reflex, tap **Pair with Mac**, and enter the code from your agent. Allow Local Network access when iPadOS asks.
+2. Draw or write on the board, then tap **Send**. You can also hold the mic to speak; releasing it sends your words.
+3. Read the answer in Claude Code or Codex. Your agent waits for the next Send through `wait_for_user`.
 
-**Why the relay can't read anything.**
-- **Content.** Everything between the iPad and the Mac is sealed with keys only those two devices have. The relay passes on bytes it can't open. If it changed one, the device would refuse the frame.
-- **The code.** It never crosses the relay. Only CPace values do, and they show nothing about it.
-- **Names.** Device and person names never cross the relay in the open. The relay does see device public keys, which are not secret: the key exchange needs them.
-- **Impostors.** Nobody can pose as your Mac or iPad. Every connection must sign a fresh challenge with its device key, and your devices accept only each other's keys.
-- **Strangers in your room.** Someone who joins your room hears nothing about who is there and can't reach anyone. Devices hear only from devices they chose to hear from.
+Pairing tries the same Wi-Fi and nearby connections first, then the relay if needed. The code also approves the agent that gave it to you. It works once, expires after ten minutes, and closes after five failed attempts. Keep it private.
 
-What a relay does see: when devices connect, from which address, and how many bytes they send.
+If the agent doesn’t see Reflex, or pairing stalls, see [troubleshooting](docs/troubleshooting.md).
 
-### Run your own relay
+## How it works
 
-On any machine that's always on (your Mac works too), run one command (Node 22 or newer, and [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) for the free tunnel, `brew install cloudflared`):
+**iPad → Mac Link → your agent.** The iPad keeps your board locally. A Send packages your new marks, their context, spoken words and board images. The Mac Link stores it and delivers it to approved agents through MCP. The agent answers in its own session; it cannot draw on your canvas.
 
-```sh
-npx -y "github:JohanSardar/reflex#npx" relay --tunnel
-```
+Drawing stays local until you Send. Speech recognition runs on the iPad. Paired device traffic is encrypted end to end, including when it passes through the relay. The relay can see connection addresses, timing and traffic volume, but cannot read your content. The agent and its AI provider receive what you send and apply their own data policies. This is a beta, not an independently audited security product.
 
-It prints the relay's address, like `wss://some-words.trycloudflare.com`. Give that address to the Mac with one setting in your agent's MCP config:
+Read [privacy and security](docs/privacy.md) for the trust boundaries, [the relay guide](docs/relay.md) to self-host or turn the relay off, and [SECURITY.md](SECURITY.md) to report a vulnerability privately.
 
-```sh
-claude mcp add reflex -e REFLEX_RELAY=wss://some-words.trycloudflare.com -- npx -y "github:JohanSardar/reflex#npx" mcp
-```
+## Inside the repo
 
-In Codex, add `env = { REFLEX_RELAY = "wss://some-words.trycloudflare.com" }` under `[mcp_servers.reflex]` in `~/.codex/config.toml`. If a Link is already running, stop it once so the agent restarts it with the setting: `npx -y "github:JohanSardar/reflex#npx" link stop`.
+| Part | What it does |
+| --- | --- |
+| [apps/ipad/](apps/ipad/) | Native iPad app: PencilKit canvas, voice and Send |
+| [agent/](agent/) | MCP server and CLI for Claude Code, Codex and other receivers |
+| [link/](link/) | Mac background service: pairing, approvals and durable Send delivery |
+| [relay/](relay/) | Forwards encrypted connections when devices are apart |
+| [dist/](dist/) | Small prebuilt CLI bundle used by the `npx` install |
+| [docs/](docs/) | User guides, architecture, specification and research |
 
-Nothing changes on the iPad. You still type just the code. Your Mac also waits on the default relay, but only to tell the iPad where your relay is.
+The [npx workflow](.github/workflows/npx-branch.yml) copies changed builds and the nearby Wi-Fi helper to a small `npx` branch. Installing Reflex doesn’t download the iPad source or build the app.
 
-A quick tunnel's address changes every time it starts. For a fixed address, run the relay without `--tunnel` behind HTTPS on your own domain, for example `caddy reverse-proxy --from relay.example.com --to :8787`, and use `REFLEX_RELAY=wss://relay.example.com`. The iPad needs `wss://`. `REFLEX_RELAY=off` turns the relay off, and then pairing and Sends work only nearby.
+## Go deeper
 
-How Reflex compares with croc and Happy: [docs/research/relay-croc-happy.md](docs/research/relay-croc-happy.md).
+- [Documentation](docs/README.md): troubleshooting, privacy, relay and developer references.
+- [Contributing](CONTRIBUTING.md): build locally and show a change working.
+- [Project standards research](docs/research/github-front-pages.md): Happy, Immich and LocalSend compared with Reflex.
+- [Report a bug](https://github.com/JohanSardar/reflex/issues/new/choose) or [report a security issue privately](https://github.com/JohanSardar/reflex/security/advisories/new).
 
-## Receive a Send
-
-```sh
-reflex connect
-reflex wait --timeout 0 --json
-reflex mcp [--channel]
-reflex link status
-reflex pair                              # the live pairing code, from a terminal
-```
-
-`connect` gives the pairing code and `wait_for_user` receives Sends. An approved receiver can register a signed webhook with `reflex adapters add webhook --url <url>`. Acknowledge a Send with `wait_for_user(after: '<send>', timeout_s: 0)` and answer in your session.
-
-`dist/reflex.mjs` is the whole CLI in one file, so `npx` can run it from GitHub with nothing to install. Rebuild it with `npm run build` after changing `agent/` or `link/`, and commit it. After a merge to `main`, a GitHub Action copies it to the `npx` branch, which holds only that file and `package.json` so the one-line install downloads about 1 MB.
-
-## Repository
-
-- `apps/ipad/`: iPad app, owned by T25 during the cut-down.
-- `agent/`: MCP/CLI receivers and local RPC client.
-- `link/`: pairing, approval, Mac connection, durable Inbox and delivery.
-- `relay/`: authenticated forwarding of live encrypted device connections.
-
-No agent writing API, shared Spaces/invites, web viewer, author kit, protocol package, conformance suite, encrypted cloud log or cloud agent session remains. The full earlier product is preserved on branch `archive/canvas-v0`.
-
-## Checks
-
-```sh
-npm install --no-audit --no-fund
-npm run typecheck
-```
-
-There is no lint script. See [architecture](docs/ARCHITECTURE.md), [spec](docs/SPEC.md) and package READMEs. Relay changes are source-only: deploying reflex.eilmer.si requires the person's approval. Never change relay.eilmer.si DNS.
+Reflex is open source under the [MIT license](LICENSE).
