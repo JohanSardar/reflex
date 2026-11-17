@@ -12,12 +12,14 @@
 
 Sketch an idea, circle the part you mean, or hold the mic to explain it. Press **Send** and your agent receives the marks, words and board images together. Read its answer in your agent session.
 
-> **iPad beta:** requires iPadOS 26 or later. The TestFlight build was submitted for Apple’s beta review on November 16, 2026; the public link currently says “This beta isn’t accepting any new testers right now.”
+> **iPad beta:** Reflex is a public TestFlight beta for iPadOS 26 or later.
 
 <p align="center">
-  <img src="docs/evidence/t25/restored-native-page.png" width="520" alt="Real Reflex iPad Simulator capture: native drawing canvas, drawing tools, connected Mac, microphone and Send button">
+  <img src="docs/images/ipad-board.png" width="400" alt="A Reflex board on iPad with a sticky note and typed text, the Mac connected, and the Send button">
+  &nbsp;
+  <img src="docs/images/ipad-connect.png" width="400" alt="Reflex's Connection sheet on iPad: the Mac connected over Wi-Fi, Claude Code allowed, and a pairing code being typed">
 </p>
-<p align="center"><sub>Earlier iPad Simulator capture from <a href="docs/evidence/t25/verification.md">native canvas and Send verification</a>. Simple test strokes, with no artwork added.</sub></p>
+<p align="center"><sub>Left: a board ready to Send. Right: pairing with the 6-digit code from your agent.</sub></p>
 
 ## Connect
 
