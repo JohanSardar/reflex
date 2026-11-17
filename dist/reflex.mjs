@@ -68,7 +68,7 @@ import {
   verify
 } from "node:crypto";
 function deviceIdFor(publicKey) {
-  return "dev-" + sha256(publicKey).subarray(0, 8).toString("hex");
+  return `dev-${sha256(publicKey).subarray(0, 8).toString("hex")}`;
 }
 function newDeviceKey() {
   const { privateKey } = generateKeyPairSync("ed25519");
@@ -179,7 +179,11 @@ function writeSecret(path, text) {
 function computerName() {
   if (process.platform === "darwin") {
     try {
-      const n = execFileSync("scutil", ["--get", "ComputerName"], { encoding: "utf8", timeout: 2e3, stdio: ["ignore", "pipe", "ignore"] }).trim();
+      const n = execFileSync("scutil", ["--get", "ComputerName"], {
+        encoding: "utf8",
+        timeout: 2e3,
+        stdio: ["ignore", "pipe", "ignore"]
+      }).trim();
       if (n) return n;
     } catch {
     }
@@ -196,7 +200,7 @@ function identity(dir3, opts = {}) {
     const body = {
       v: 0,
       key: pem,
-      person: { id: "p_" + randomBytes(6).toString("hex"), name: personName },
+      person: { id: `p_${randomBytes(6).toString("hex")}`, name: personName },
       name: opts.name ?? computerName(),
       actor: randomBytes(16).toString("hex"),
       created_at: Date.now()
@@ -205,7 +209,13 @@ function identity(dir3, opts = {}) {
   }
   const j = JSON.parse(readFileSync(path, "utf8"));
   const name = opts.name ?? (/^[\w-]+(\.[\w-]+)+$/.test(j.name) ? computerName() : j.name);
-  return { key: loadDeviceKey(j.key), person: j.person, name, actor: j.actor, ...j.created_at ? { created_at: j.created_at } : {} };
+  return {
+    key: loadDeviceKey(j.key),
+    person: j.person,
+    name,
+    actor: j.actor,
+    ...j.created_at ? { created_at: j.created_at } : {}
+  };
 }
 function localKey(dir3, file) {
   const path = join(dir3, file);
@@ -225,2255 +235,54 @@ var init_home = __esm({
   }
 });
 
-// link/pairing/catalog.ts
-import { randomBytes as randomBytes2 } from "node:crypto";
-function mayApprove(d, person) {
-  return d?.kind === "ipad" && d.person.id === person && (d.approves ?? (d.via === "offer" || d.via === "code"));
-}
-var COLORS, Catalog;
-var init_catalog = __esm({
-  "link/pairing/catalog.ts"() {
-    "use strict";
-    init_crypto();
-    COLORS = ["violet", "teal", "blue", "orange", "pink", "green"];
-    Catalog = class {
-      #db;
-      #key;
-      #rejected = 0;
-      constructor(db, key) {
-        this.#db = db;
-        this.#key = key;
-      }
-      #put(kind, id2, body) {
-        const text = JSON.stringify(body);
-        const sig = signWith(this.#key, `${kind}
-${id2}
-${text}`);
-        this.#db.prepare("INSERT INTO catalog (kind, id, body, sig) VALUES (?, ?, ?, ?) ON CONFLICT (kind, id) DO UPDATE SET body = excluded.body, sig = excluded.sig").run(kind, id2, text, sig);
-      }
-      #all(kind) {
-        const rows = this.#db.prepare("SELECT id, body, sig FROM catalog WHERE kind = ? ORDER BY id").all(kind);
-        const out3 = [];
-        for (const r of rows) {
-          if (verifyFrom(this.#key.publicRaw, `${kind}
-${r.id}
-${r.body}`, r.sig)) out3.push(JSON.parse(r.body));
-          else this.#rejected++;
-        }
-        return out3;
-      }
-      /** Records whose signature did not verify since start. */
-      get rejected() {
-        return this.#rejected;
-      }
-      // Other signed records (shared Spaces, link/sharing.ts)
-      records(kind) {
-        return this.#all(kind);
-      }
-      putRecord(kind, id2, body) {
-        this.#put(kind, id2, body);
-      }
-      forget(kind, id2) {
-        this.#db.prepare("DELETE FROM catalog WHERE kind = ? AND id = ?").run(kind, id2);
-      }
-      // Devices
-      devices() {
-        return this.#all("device");
-      }
-      device(id2) {
-        return this.devices().find((d) => d.device === id2);
-      }
-      pairDevice(d) {
-        this.#put("device", d.device, d);
-      }
-      seen(id2, host2, port) {
-        const d = this.device(id2);
-        if (d) this.#put("device", id2, { ...d, last_seen: { host: host2, port, at: Date.now() } });
-      }
-      // Agents
-      agents() {
-        return this.#all("agent");
-      }
-      agent(id2) {
-        return this.agents().find((a) => a.id === id2);
-      }
-      /** The Agent this credential belongs to, whatever its status. */
-      byCredential(credential2) {
-        const h = sha256(credential2).toString("hex");
-        return this.agents().find((a) => a.credential_hash === h);
-      }
-      /** A first connection: a pending approval record, with a fresh stable ID. */
-      request(name, credential2, now = Date.now()) {
-        const id2 = `a_${randomBytes2(5).toString("hex")}`;
-        const color = COLORS[this.agents().length % COLORS.length];
-        const rec = { id: id2, name, color, status: "pending", credential_hash: sha256(credential2).toString("hex"), requested_at: now, decided_at: null };
-        this.#put("agent", id2, rec);
-        return rec;
-      }
-      /** A denied or revoked Agent that connects again: pending, so the person is asked again. */
-      askAgain(id2, now = Date.now()) {
-        const a = this.agent(id2);
-        if (!a) throw new Error(`No Agent '${id2}'.`);
-        const rec = { ...a, status: "pending", requested_at: now, decided_at: null };
-        this.#put("agent", id2, rec);
-        return rec;
-      }
-      decide(id2, status, by, now = Date.now()) {
-        const a = this.agent(id2);
-        if (!a) throw new Error(`No Agent '${id2}'. Run \`reflex link agents\` to see them.`);
-        const rec = { ...a, status, decided_at: now, decided_by: by };
-        this.#put("agent", id2, rec);
-        return rec;
-      }
-    };
-  }
-});
-
-// link/pairing/offer.ts
-import { randomBytes as randomBytes3, randomInt } from "node:crypto";
-import { networkInterfaces } from "node:os";
-function lanAddresses() {
-  const rank = (ip) => {
-    const [a, b] = ip.split(".").map(Number);
-    if (a === 192 && b === 168) return 0;
-    if (a === 10 || a === 172 && b >= 16 && b <= 31) return 1;
-    if (a === 100 && b >= 64 && b <= 127) return 3;
-    return 2;
-  };
-  const out3 = [];
-  for (const list of Object.values(networkInterfaces()))
-    for (const a of list ?? []) if (!a.internal && a.family === "IPv4" && !a.address.startsWith("169.254.") && !out3.includes(a.address)) out3.push(a.address);
-  out3.sort((x, y) => rank(x) - rank(y));
-  return out3.length ? out3 : ["127.0.0.1"];
-}
-function parseOffer(uri) {
-  let u;
-  try {
-    u = new URL(uri.trim());
-  } catch {
-    throw new Error("That is not a pairing code. It starts with reflex://pair?");
-  }
-  if (u.protocol !== "reflex:" || u.host !== "pair") throw new Error("That is not a pairing code. It starts with reflex://pair?");
-  const g = (k) => {
-    const v = u.searchParams.get(k);
-    if (!v) throw new Error(`The pairing code is missing '${k}'. Copy the whole code.`);
-    return v;
-  };
-  if (g("v") !== "0") throw new Error(`Pairing code version ${g("v")} is not supported.`);
-  if (!/^p_[0-9a-f]{12}$/.test(g("pi")) || u.searchParams.get("pn") === null) throw new Error("The pairing code is cut short. Copy the whole code.");
-  return {
-    offer: g("o"),
-    device: g("d"),
-    key: g("k"),
-    secret: unb64(g("s")),
-    hosts: g("h").split(","),
-    port: Number(g("p")),
-    name: u.searchParams.get("n") ?? "",
-    person: { id: g("pi"), name: u.searchParams.get("pn") ?? "" }
-  };
-}
-var TTL_MS, CODE_TRIES, Offers;
-var init_offer = __esm({
-  "link/pairing/offer.ts"() {
-    "use strict";
-    init_crypto();
-    TTL_MS = 10 * 60 * 1e3;
-    CODE_TRIES = 5;
-    Offers = class {
-      #live = /* @__PURE__ */ new Map();
-      #code = null;
-      /** The device that used the last typed code, and which Agents it approved. */
-      lastCode = null;
-      /**
-       * The live typed code, with this Agent added to the ones it approves; a new one if none is live, or if this Agent
-       * (or, with no Agent, a terminal) asks again: after a failed typing the person is told to ask for a new code, and a
-       * new one makes any digit a look-alike Link learned useless. The Agents waiting on the old code carry over.
-       */
-      code(agent, now = Date.now()) {
-        const again = this.liveCode(now) !== void 0 && (agent ? this.#code.agents.has(agent) : true);
-        if (!this.liveCode(now) || again)
-          this.#code = { code: String(randomInt(0, 1e6)).padStart(6, "0"), expires: now + TTL_MS, agents: new Set(again ? this.#code.agents : []), fails: 0 };
-        if (agent) this.#code.agents.add(agent);
-        return this.#code;
-      }
-      liveCode(now = Date.now()) {
-        const c = this.#code;
-        if (!c) return void 0;
-        if (c.expires < now || c.fails >= CODE_TRIES) {
-          this.#code = null;
-          return void 0;
-        }
-        return c.code;
-      }
-      /** Whether this Agent waits on the live code. */
-      codeFor(agent) {
-        return this.liveCode() && this.#code.agents.has(agent) ? this.#code : void 0;
-      }
-      codeFailed() {
-        if (this.#code) this.#code.fails++;
-      }
-      /** Uses up the typed code if it is still the live one; returns the Agents it approves, or undefined. */
-      takeCode(code, device) {
-        if (this.liveCode() !== code) return void 0;
-        const c = this.#code;
-        this.#code = null;
-        this.lastCode = { code: c.code, device, agents: [...c.agents] };
-        return [...c.agents];
-      }
-      /** Codes used up, and by which device: `reflex pair` waits on this, so an iPad that was paired already and scans again counts. */
-      #used = /* @__PURE__ */ new Map();
-      create(me, port, source = "terminal", now = Date.now()) {
-        const offer = "o_" + randomBytes3(6).toString("hex");
-        const secret = randomBytes3(32);
-        const q2 = new URLSearchParams({
-          v: "0",
-          o: offer,
-          d: me.device,
-          k: me.key,
-          s: b64(secret),
-          h: lanAddresses().join(","),
-          p: String(port),
-          n: me.name,
-          pi: me.person.id,
-          pn: me.person.name
-        });
-        const o = { offer, secret, expires: now + TTL_MS, uri: `reflex://pair?${q2}`, source };
-        this.#live.set(offer, o);
-        return o;
-      }
-      /** The secret of a live offer. */
-      secret(offer, now = Date.now()) {
-        const o = this.#live.get(offer);
-        if (!o) return void 0;
-        if (o.expires < now) {
-          this.#live.delete(offer);
-          return void 0;
-        }
-        return o.secret;
-      }
-      /** Where a live (or just consumed) offer's code was shown. */
-      source(offer) {
-        return this.#live.get(offer)?.source;
-      }
-      /** An offer is used up once a device pairs with it. */
-      consume(offer, device) {
-        if (this.#live.delete(offer) && device) this.#used.set(offer, device);
-      }
-      /** The device that used this code, if one did. */
-      usedBy(offer) {
-        return this.#used.get(offer);
-      }
-      remaining(offer, now = Date.now()) {
-        return Math.max(0, (this.#live.get(offer)?.expires ?? now) - now);
-      }
-      live(offer) {
-        return this.secret(offer) !== void 0;
-      }
-    };
-  }
-});
-
-// link/storage/assets.ts
-import { closeSync, existsSync as existsSync2, fsyncSync, mkdirSync as mkdirSync2, openSync, readdirSync, readFileSync as readFileSync2, renameSync, writeSync } from "node:fs";
-import { dirname, join as join2 } from "node:path";
-import { randomBytes as randomBytes4 } from "node:crypto";
-function safeReaddir(p) {
-  try {
-    return readdirSync(p);
-  } catch {
-    return [];
-  }
-}
-var CHUNK, HASH, AssetStore;
-var init_assets = __esm({
-  "link/storage/assets.ts"() {
-    "use strict";
-    init_crypto();
-    CHUNK = 1024 * 1024;
-    HASH = /^[0-9a-f]{64}$/;
-    AssetStore = class {
-      #root;
-      constructor(root) {
-        this.#root = root;
-        mkdirSync2(join2(root, "chunks"), { recursive: true });
-        mkdirSync2(join2(root, "objects"), { recursive: true });
-      }
-      #path(kind, hash) {
-        return join2(this.#root, kind, hash.slice(0, 2), hash);
-      }
-      #writeDurable(path, bytes) {
-        mkdirSync2(dirname(path), { recursive: true });
-        const tmp = `${path}.${randomBytes4(4).toString("hex")}.tmp`;
-        const fd = openSync(tmp, "w", 384);
-        try {
-          writeSync(fd, bytes);
-          fsyncSync(fd);
-        } finally {
-          closeSync(fd);
-        }
-        renameSync(tmp, path);
-        const dir3 = openSync(dirname(path), "r");
-        try {
-          fsyncSync(dir3);
-        } finally {
-          closeSync(dir3);
-        }
-      }
-      /** Stores bytes and returns their hash. Storing the same bytes twice is a no-op. */
-      put(bytes) {
-        const hash = sha256(bytes).toString("hex");
-        if (this.has(hash)) return hash;
-        const chunks = [];
-        let off = 0;
-        do {
-          const part = bytes.subarray(off, off + CHUNK);
-          const h = sha256(part).toString("hex");
-          if (!existsSync2(this.#path("chunks", h))) this.#writeDurable(this.#path("chunks", h), part);
-          chunks.push(h);
-          off += CHUNK;
-        } while (off < bytes.length);
-        const m = { hash, size: bytes.length, chunks };
-        this.#writeDurable(this.#path("objects", hash), Buffer.from(JSON.stringify(m)));
-        return hash;
-      }
-      has(hash) {
-        return HASH.test(hash) && existsSync2(this.#path("objects", hash));
-      }
-      /** The asset's bytes, verified. Throws if anything is missing or corrupt. */
-      get(hash) {
-        if (!this.has(hash)) throw new Error(`No asset ${hash}.`);
-        const m = JSON.parse(readFileSync2(this.#path("objects", hash), "utf8"));
-        const parts = m.chunks.map((h) => {
-          const b = readFileSync2(this.#path("chunks", h));
-          if (sha256(b).toString("hex") !== h) throw new Error(`Asset ${hash}: chunk ${h} is corrupt.`);
-          return b;
-        });
-        const all = Buffer.concat(parts);
-        if (all.length !== m.size || sha256(all).toString("hex") !== hash) throw new Error(`Asset ${hash} is corrupt.`);
-        return all;
-      }
-      /** Accepts bytes from a peer only if they match the hash they were asked for. */
-      putVerified(hash, bytes) {
-        if (sha256(bytes).toString("hex") !== hash) return false;
-        this.put(bytes);
-        return true;
-      }
-      list() {
-        const out3 = [];
-        const objects = join2(this.#root, "objects");
-        for (const d of safeReaddir(objects)) for (const f3 of safeReaddir(join2(objects, d))) if (HASH.test(f3)) out3.push(f3);
-        return out3.sort();
-      }
-    };
-  }
-});
-
-// link/storage/db.ts
-import { DatabaseSync } from "node:sqlite";
-function openDb(path) {
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;");
-  db.exec(SCHEMA);
-  return db;
-}
-function tx(db, fn) {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const out3 = fn();
-    db.exec("COMMIT");
-    return out3;
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
-}
-var SCHEMA;
-var init_db = __esm({
-  "link/storage/db.ts"() {
-    "use strict";
-    SCHEMA = `
-CREATE TABLE IF NOT EXISTS spaces (
-  id TEXT PRIMARY KEY, kind TEXT NOT NULL, created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS inbox (
-  seq INTEGER PRIMARY KEY AUTOINCREMENT, space TEXT NOT NULL, send TEXT NOT NULL,
-  arrived_at INTEGER NOT NULL, via TEXT NOT NULL, UNIQUE(space, send)
-);
-CREATE TABLE IF NOT EXISTS receipts (
-  space TEXT NOT NULL, send TEXT NOT NULL, recipient TEXT NOT NULL,
-  state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, reason TEXT, updated_at INTEGER NOT NULL,
-  PRIMARY KEY (space, send, recipient)
-);
-CREATE TABLE IF NOT EXISTS inbox_to (
-  space TEXT NOT NULL, send TEXT NOT NULL, recipient TEXT NOT NULL, PRIMARY KEY (space, send, recipient)
-);
-CREATE TABLE IF NOT EXISTS catalog (
-  kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, sig TEXT NOT NULL, PRIMARY KEY (kind, id)
-);
-`;
-  }
-});
-
-// link/storage/inbox.ts
-var Inbox;
-var init_inbox = __esm({
-  "link/storage/inbox.ts"() {
-    "use strict";
-    Inbox = class {
-      #db;
-      #waiters = /* @__PURE__ */ new Set();
-      /** Who a new Send goes to, or null when it is delivered to nobody (link/routing.ts). */
-      recipientsFor = () => [];
-      constructor(db) {
-        this.#db = db;
-      }
-      /** Records Sends not yet indexed. Must run inside the caller's transaction. Returns how many were new. */
-      index(space, sends, via, now = Date.now()) {
-        const ins = this.#db.prepare(
-          "INSERT INTO inbox (space, send, arrived_at, via) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
-        );
-        const to = this.#db.prepare("INSERT INTO inbox_to (space, send, recipient) VALUES (?, ?, ?) ON CONFLICT DO NOTHING");
-        let added = 0;
-        for (const s of sends) {
-          if (this.#has(space, s)) continue;
-          const recipients = this.recipientsFor(space, s);
-          if (recipients === null) continue;
-          const n = Number(ins.run(space, s, now, via).changes);
-          if (n) for (const r of recipients) to.run(space, s, r);
-          added += n;
-        }
-        if (added > 0) queueMicrotask(() => this.#wake());
-        return added;
-      }
-      /** Sends to this recipient it hasn't acknowledged, oldest first. Optionally only one Space. */
-      pending(recipient2, space) {
-        const rows = this.#db.prepare(
-          `SELECT i.space, i.send, i.arrived_at, i.via, coalesce(r.state, 'ready') AS state, coalesce(r.attempts, 0) AS attempts
-         FROM inbox i JOIN inbox_to t ON t.space = i.space AND t.send = i.send AND t.recipient = ?
-         LEFT JOIN receipts r ON r.space = i.space AND r.send = i.send AND r.recipient = t.recipient
-         WHERE coalesce(r.state, 'ready') != 'acknowledged' AND (? IS NULL OR i.space = ?)
-         ORDER BY i.seq`
-        ).all(recipient2, space ?? null, space ?? null);
-        return rows;
-      }
-      /** Who a Send was sent to. */
-      recipients(space, send) {
-        return this.#db.prepare("SELECT recipient FROM inbox_to WHERE space = ? AND send = ? ORDER BY recipient").all(space, send).map(
-          (r) => r.recipient
-        );
-      }
-      /** Where a Send is, by its ID. */
-      find(send) {
-        return this.#db.prepare("SELECT space, send, arrived_at, via, 'ready' AS state, 0 AS attempts FROM inbox WHERE send = ?").get(send);
-      }
-      /** A newly attached recipient gets this Space's Sends that had nobody to go to. */
-      adopt(space, recipient2) {
-        const r = this.#db.prepare(
-          `INSERT INTO inbox_to (space, send, recipient)
-         SELECT i.space, i.send, ? FROM inbox i WHERE i.space = ?
-         AND NOT EXISTS (SELECT 1 FROM inbox_to t WHERE t.space = i.space AND t.send = i.send)`
-        ).run(recipient2, space);
-        if (Number(r.changes) > 0) queueMicrotask(() => this.#wake());
-        return Number(r.changes);
-      }
-      all() {
-        return this.#db.prepare("SELECT space, send, arrived_at, via, 'ready' AS state, 0 AS attempts FROM inbox ORDER BY seq").all();
-      }
-      receipts(space, send) {
-        return this.#db.prepare("SELECT recipient, state, attempts FROM receipts WHERE space = ? AND send = ? ORDER BY recipient").all(space, send);
-      }
-      #has(space, send) {
-        return this.#db.prepare("SELECT 1 FROM inbox WHERE space = ? AND send = ?").get(space, send) !== void 0;
-      }
-      /** Moves one recipient's receipt forward. Acknowledged is final; it never goes back. */
-      mark(space, send, recipient2, state, reason, now = Date.now()) {
-        if (!this.#has(space, send)) throw new Error(`No Send '${send}' in Space '${space}'.`);
-        this.#db.prepare(
-          `INSERT INTO receipts (space, send, recipient, state, attempts, reason, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (space, send, recipient) DO UPDATE SET
-           state = CASE WHEN receipts.state = 'acknowledged' THEN 'acknowledged' ELSE excluded.state END,
-           attempts = receipts.attempts + excluded.attempts,
-           reason = excluded.reason, updated_at = excluded.updated_at`
-        ).run(space, send, recipient2, state, state === "delivered" ? 1 : 0, reason ?? null, now);
-      }
-      /** Resolves when a new Send is indexed or adopted, or the signal aborts. */
-      next(signal) {
-        return new Promise((resolve5) => {
-          const done = () => {
-            this.#waiters.delete(done);
-            signal.removeEventListener("abort", done);
-            resolve5();
-          };
-          this.#waiters.add(done);
-          signal.addEventListener("abort", done, { once: true });
-        });
-      }
-      /** Resolves when a new Send is indexed, or after `ms`. */
-      wait(ms) {
-        return new Promise((resolve5) => {
-          const done = () => {
-            clearTimeout(t);
-            this.#waiters.delete(done);
-            resolve5();
-          };
-          const t = setTimeout(done, ms);
-          this.#waiters.add(done);
-        });
-      }
-      #wake() {
-        for (const w of [...this.#waiters]) w();
-      }
-    };
-  }
-});
-
-// link/storage/sends.ts
-function ink(v) {
-  if (!v || typeof v !== "object") return false;
-  const s = v;
-  return id(s.id) && bounds(s.bounds) && finite(s.at) && finite(s.width) && typeof s.color === "string" && Array.isArray(s.points) && s.points.length > 0 && s.points.length <= 2e5 && s.points.every((p) => Array.isArray(p) && p.length === 4 && p.every(finite));
-}
-function nativeSend(raw, space, person, device) {
-  if (!raw || typeof raw !== "object" || !id(space)) throw new Error("Invalid Send envelope");
-  const s = raw;
-  if (!id(s.send) || s.space !== space || !finite(s.at) || !bounds(s.viewport) || !["button", "voice"].includes(s.trigger) || !Array.isArray(s.strokes) || s.strokes.length > 2e4 || !s.strokes.every(ink) || s.context !== void 0 && (!Array.isArray(s.context) || s.context.length > 2e4 || !s.context.every(ink)) || s.said !== void 0 && (typeof s.said !== "string" || s.said.length > 1e5) || s.words !== void 0 && (!Array.isArray(s.words) || !s.words.every((w) => typeof w.text === "string" && finite(w.start_ms) && (w.end_ms === void 0 || finite(w.end_ms)))) || s.hints !== void 0 && (!Array.isArray(s.hints) || !s.hints.every((h) => Array.isArray(h.strokes) && h.strokes.every(id) && typeof h.text === "string" && finite(h.confidence))) || s.crops !== void 0 && (!Array.isArray(s.crops) || !s.crops.every((c) => /^[a-f0-9]{64}$/.test(c.asset) && bounds(c.bounds) && (c.kind === void 0 || ["screen", "recent_strokes"].includes(c.kind)) && (c.strokes === void 0 || Array.isArray(c.strokes) && c.strokes.every(id))))) {
-    throw new Error("Invalid native Send");
-  }
-  return { ...s, space, by: { person, device } };
-}
-var id, finite, bounds, SendStore;
-var init_sends = __esm({
-  "link/storage/sends.ts"() {
-    "use strict";
-    init_db();
-    id = (v) => typeof v === "string" && /^[\w-]{1,200}$/.test(v);
-    finite = (v) => typeof v === "number" && Number.isFinite(v);
-    bounds = (v) => Array.isArray(v) && v.length === 4 && v.every(finite) && v[2] >= 0 && v[3] >= 0;
-    SendStore = class {
-      db;
-      inbox;
-      constructor(db, inbox) {
-        this.db = db;
-        this.inbox = inbox;
-        db.exec("CREATE TABLE IF NOT EXISTS native_sends (send TEXT PRIMARY KEY, space TEXT NOT NULL, body TEXT NOT NULL, device TEXT NOT NULL, at INTEGER NOT NULL)");
-      }
-      ingest(send) {
-        return tx(this.db, () => {
-          const previous = this.get(send.send);
-          if (previous) {
-            if (previous.by.device !== send.by.device || previous.space !== send.space) throw new Error("Send ID belongs to another device or page");
-            return false;
-          }
-          this.db.prepare("INSERT INTO spaces (id, kind, created_at) VALUES (?, 'space', ?) ON CONFLICT DO NOTHING").run(send.space, send.at);
-          this.db.prepare("INSERT INTO native_sends (send, space, body, device, at) VALUES (?, ?, ?, ?, ?)").run(send.send, send.space, JSON.stringify(send), send.by.device, send.at);
-          this.inbox.index(send.space, [send.send], `send:${send.by.device}`);
-          return true;
-        });
-      }
-      get(send) {
-        const row = this.db.prepare("SELECT body FROM native_sends WHERE send = ?").get(send);
-        return row ? JSON.parse(row.body) : void 0;
-      }
-      list(space) {
-        return this.db.prepare("SELECT body FROM native_sends WHERE (? IS NULL OR space = ?) ORDER BY rowid").all(space ?? null, space ?? null).map((r) => JSON.parse(r.body));
-      }
-    };
-  }
-});
-
-// link/pairing/cpace.ts
-import { createPrivateKey as createPrivateKey2, createPublicKey as createPublicKey2, diffieHellman as diffieHellman2, generateKeyPairSync as generateKeyPairSync2 } from "node:crypto";
-function modpow(b, e) {
-  let r = 1n;
-  b %= P;
-  while (e > 0n) {
-    if (e & 1n) r = r * b % P;
-    b = b * b % P;
-    e >>= 1n;
-  }
-  return r;
-}
-function cpaceGenerator(code, transcript) {
-  for (let i = 0; i < 1e3; i++) {
-    const h = sha256(PROTOCOL, ` cpace generator ${i} `, code, " ", transcript);
-    h[31] &= 127;
-    const u = le(h);
-    if (u < 2n || u >= P) continue;
-    if (modpow((u * (u * (u + A) % P) + u) % P, (P - 1n) / 2n) === 1n) return h;
-  }
-  throw new Error("no generator found");
-}
-function x25519(scalar, u) {
-  return diffieHellman2({ privateKey: scalar, publicKey: createPublicKey2({ key: Buffer.concat([X_SPKI2, u]), format: "der", type: "spki" }) });
-}
-var P, A, le, X_SPKI2, X_PKCS8, Cpace;
-var init_cpace = __esm({
-  "link/pairing/cpace.ts"() {
-    "use strict";
-    init_crypto();
-    P = 2n ** 255n - 19n;
-    A = 486662n;
-    le = (b) => b.reduceRight((n, x) => n << 8n | BigInt(x), 0n);
-    X_SPKI2 = Buffer.from("302a300506032b656e032100", "hex");
-    X_PKCS8 = Buffer.from("302e020100300506032b656e04220420", "hex");
-    Cpace = class {
-      #y;
-      share;
-      constructor(code, transcript, scalar) {
-        this.#y = scalar ? createPrivateKey2({ key: Buffer.concat([X_PKCS8, scalar]), format: "der", type: "pkcs8" }) : generateKeyPairSync2("x25519").privateKey;
-        this.share = x25519(this.#y, cpaceGenerator(code, transcript));
-      }
-      /** The pairing secret the auth MACs use: from K, both shares (initiator's first) and the transcript. */
-      secret(theirs, initiator, transcript) {
-        if (theirs.length !== 32) throw new Error("malformed CPace share");
-        const k = x25519(this.#y, theirs);
-        const [ya, yb] = initiator ? [this.share, theirs] : [theirs, this.share];
-        return sha256(PROTOCOL, " cpace secret ", k, ya, yb, transcript);
-      }
-    };
-  }
-});
-
-// link/pairing/handshake.ts
-import { randomBytes as randomBytes5 } from "node:crypto";
-async function nextJson(path, ms) {
-  let timer;
-  const timeout = new Promise((_, rej) => {
-    timer = setTimeout(() => rej(new Error("handshake timed out")), ms);
-  });
-  try {
-    const raw = await Promise.race([path.next(), timeout]);
-    if (!raw) throw new Error("the other device closed the connection during the handshake");
-    const msg = JSON.parse(Buffer.from(raw).toString("utf8"));
-    if (msg.t === "refused") throw new Error(`the other device refused: ${String(msg.reason)}`);
-    return { raw, msg };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-function checkHello(m) {
-  const h = m;
-  if (h.t !== "hello" || h.v !== 0 || h.protocol !== PROTOCOL) throw new Error(`peer speaks ${String(h.protocol)}, not ${PROTOCOL}`);
-  if (typeof h.key !== "string" || typeof h.eph !== "string" || typeof h.device !== "string") throw new Error("malformed hello");
-  if (deviceIdFor(unb64(h.key)) !== h.device) throw new Error(`device ID ${h.device} does not belong to its key`);
-  return h;
-}
-async function handshake(path, me, trust, scanned) {
-  let seen;
-  try {
-    return await handshakeInner(path, me, trust, scanned, (h) => {
-      seen = { device: h.device, name: String(h.name ?? ""), kind: h.kind === "ipad" ? "ipad" : "link", paired: trust.pairedKey(h.device) === h.key, ...typeof h.pair === "string" ? { pair: h.pair } : {} };
-    });
-  } catch (e) {
-    const err = new HandshakeError(e.message);
-    err.peer = seen;
-    throw err;
-  }
-}
-async function handshakeInner(path, me, trust, scanned, saw) {
-  const role = path.initiator ? "i" : "r";
-  const eph = newEphemeral();
-  const hello = (cpace) => ({
-    t: "hello",
-    v: 0,
-    protocol: PROTOCOL,
-    device: me.key.device,
-    key: b64(me.key.publicRaw),
-    eph: b64(eph.publicRaw),
-    person: cpace ? { id: "", name: "" } : path.transport === "relay" ? { id: me.person.id, name: "" } : me.person,
-    name: cpace || path.transport === "relay" ? "" : me.name,
-    kind: me.kind,
-    ...scanned && role === "i" ? { pair: scanned.cpace !== void 0 ? "cpace" : scanned.code !== void 0 ? "code" : scanned.offer } : {}
-  });
-  let mine;
-  let theirsRaw;
-  let theirs;
-  if (role === "i") {
-    mine = enc(hello(scanned?.cpace !== void 0));
-    await path.send(mine, "control");
-    const r = await nextJson(path, 1e4);
-    theirsRaw = r.raw;
-    theirs = checkHello(r.msg);
-    saw(theirs);
-  } else {
-    const r = await nextJson(path, 1e4);
-    theirsRaw = r.raw;
-    theirs = checkHello(r.msg);
-    saw(theirs);
-    mine = enc(hello(theirs.pair === "cpace"));
-    await path.send(mine, "control");
-  }
-  const transcript = role === "i" ? sha256(PROTOCOL, mine, theirsRaw) : sha256(PROTOCOL, theirsRaw, mine);
-  const other = role === "i" ? "r" : "i";
-  if (role === "i" && scanned?.cpace !== void 0 || role === "r" && theirs.pair === "cpace") return cpaceRest(path, me, trust, role, scanned?.cpace, eph, theirs, transcript);
-  let secret;
-  let offer;
-  let codeAgents;
-  if (role === "i" && scanned) {
-    if (theirs.device !== scanned.device || theirs.key !== scanned.key)
-      throw new Error("the device that answered is not the one in the pairing code");
-    secret = scanned.secret;
-    offer = scanned.offer;
-    if (scanned.code !== void 0) secret = await codeRounds(path, role, scanned.code, transcript);
-  } else if (role === "r" && theirs.pair === "code") {
-    const code = trust.liveCode?.();
-    if (!code) throw new Error("no pairing code is live on this Link (they last 10 minutes; ask your agent for a new one)");
-    try {
-      secret = await codeRounds(path, role, code, transcript);
-    } catch (e) {
-      if (e instanceof WrongCode) trust.codeFailed?.();
-      throw e;
-    }
-    codeAgents = trust.takeCode?.(code, theirs.device);
-    if (!codeAgents) throw new Error("the pairing code expired or was already used (ask your agent for a new one)");
-    offer = "code";
-  } else if (role === "r" && typeof theirs.pair === "string") {
-    secret = trust.offerSecret(theirs.pair);
-    if (!secret) throw new Error("unknown or expired pairing offer");
-    offer = theirs.pair;
-  }
-  const auth = {
-    t: "auth",
-    sig: signWith(me.key, Buffer.concat([Buffer.from(`${PROTOCOL} auth ${role} `), transcript])),
-    ...secret ? { mac: mac(secret, Buffer.concat([Buffer.from(`${PROTOCOL} pair ${role} `), transcript])) } : {}
-  };
-  await path.send(enc(auth), "control");
-  const { msg: a } = await nextJson(path, 1e4);
-  if (a.t !== "auth" || typeof a.sig !== "string") throw new Error("malformed auth");
-  if (!verifyFrom(unb64(theirs.key), Buffer.concat([Buffer.from(`${PROTOCOL} auth ${other} `), transcript]), a.sig))
-    throw new Error("peer did not prove its key");
-  let paired = false;
-  const known = trust.pairedKey(theirs.device);
-  if (secret) {
-    const want2 = mac(secret, Buffer.concat([Buffer.from(`${PROTOCOL} pair ${other} `), transcript]));
-    if (typeof a.mac !== "string" || !macEqual(a.mac, want2)) throw new Error("peer does not know the pairing secret");
-    if (known && known !== theirs.key) throw new Error(`device ${theirs.device} is already paired with another key`);
-    paired = !known;
-  } else if (known !== theirs.key) {
-    throw new Error(`device ${theirs.device} is not paired`);
-  }
-  const keys = sessionKeys(eph, unb64(theirs.eph), transcript);
-  const session = new Session(
-    path,
-    new FrameCipher(role === "i" ? keys.i2r : keys.r2i, transcript),
-    new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript)
-  );
-  const kind = theirs.kind === "ipad" ? "ipad" : "link";
-  return { session, peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind }, paired, offer, ...offer === "code" ? { code: true, codeAgents: codeAgents ?? [] } : {} };
-}
-async function cpaceRest(path, me, trust, role, typed, eph, theirs, transcript) {
-  const other = role === "i" ? "r" : "i";
-  const code = role === "i" ? typed : trust.liveCode?.();
-  if (!code) throw new Error("no pairing code is live on this Link (they last 10 minutes; ask your agent for a new one)");
-  if (!/^\d{6}$/.test(code)) throw new WrongCode("a pairing code is 6 digits");
-  const cp = new Cpace(code, transcript);
-  await path.send(enc({ t: "cpace", y: b64(cp.share) }), "control");
-  const { msg: c } = await nextJson(path, 1e4);
-  if (c.t !== "cpace" || typeof c.y !== "string") throw new Error("expected cpace during the code check");
-  let secret;
-  try {
-    secret = cp.secret(unb64(c.y), role === "i", transcript);
-  } catch {
-    if (role === "r") trust.codeFailed?.();
-    throw new WrongCode("wrong pairing code");
-  }
-  const label = (what, who3) => Buffer.concat([Buffer.from(`${PROTOCOL} ${what} ${who3} `), transcript]);
-  const auth = { t: "auth", sig: signWith(me.key, label("auth", role)), mac: mac(secret, label("pair", role)) };
-  const check = (a) => {
-    if (a.t !== "auth" || typeof a.sig !== "string") throw new Error("malformed auth");
-    if (typeof a.mac !== "string" || !macEqual(a.mac, mac(secret, label("pair", other)))) {
-      if (role === "r") trust.codeFailed?.();
-      throw new WrongCode("wrong pairing code");
-    }
-    if (!verifyFrom(unb64(theirs.key), label("auth", other), a.sig)) throw new Error("peer did not prove its key");
-  };
-  let codeAgents;
-  if (role === "i") {
-    await path.send(enc(auth), "control");
-    check((await nextJson(path, 1e4)).msg);
-  } else {
-    check((await nextJson(path, 1e4)).msg);
-    codeAgents = trust.takeCode?.(code, theirs.device);
-    if (!codeAgents) throw new Error("the pairing code expired or was already used (ask your agent for a new one)");
-    await path.send(enc(auth), "control");
-  }
-  const known = trust.pairedKey(theirs.device);
-  if (known && known !== theirs.key) throw new Error(`device ${theirs.device} is already paired with another key`);
-  const keys = sessionKeys(eph, unb64(theirs.eph), transcript);
-  const session = new Session(path, new FrameCipher(role === "i" ? keys.i2r : keys.r2i, transcript), new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript));
-  const who2 = async () => {
-    const m = await Promise.race([session.next(), new Promise((r) => setTimeout(() => r(null), 1e4).unref())]);
-    const p = m?.h.person;
-    if (m?.h.t !== "who" || typeof p?.id !== "string" || typeof p.name !== "string") throw new Error("expected who after the code check");
-    return { person: { id: p.id, name: p.name }, name: String(m.h.name ?? "") };
-  };
-  let them;
-  if (role === "r") {
-    await session.send({ t: "who", person: me.person, name: me.name }, void 0, "control");
-    them = await who2();
-  } else {
-    them = await who2();
-    await session.send({ t: "who", person: them.person, name: me.name }, void 0, "control");
-  }
-  const kind = theirs.kind === "ipad" ? "ipad" : "link";
-  return { session, peer: { device: theirs.device, key: theirs.key, person: them.person, name: them.name, kind }, paired: !known, offer: "code", code: true, cpace: true, codeAgents: codeAgents ?? [] };
-}
-async function codeRounds(path, role, code, transcript) {
-  if (!/^\d{6}$/.test(code)) throw new WrongCode("a pairing code is 6 digits");
-  const other = role === "i" ? "r" : "i";
-  const commit = (n, who2, round, digit) => mac(n, Buffer.concat([Buffer.from(`${PROTOCOL} code ${who2} ${round} ${digit} `), transcript]));
-  const want2 = async (t, field) => {
-    const { msg } = await nextJson(path, 1e4);
-    if (msg.t !== t || typeof msg[field] !== "string") throw new Error(`expected ${t} during the code check`);
-    return msg[field];
-  };
-  for (let round = 0; round < 6; round++) {
-    const digit = code[round];
-    const n = randomBytes5(16);
-    const mine = commit(n, role, round, digit);
-    let theirC;
-    if (role === "i") {
-      await path.send(enc({ t: "commit", c: mine }), "control");
-      theirC = await want2("commit", "c");
-      await path.send(enc({ t: "reveal", n: b64(n) }), "control");
-      const theirN = unb64(await want2("reveal", "n"));
-      if (!macEqual(theirC, commit(theirN, other, round, digit))) throw new WrongCode("wrong pairing code");
-    } else {
-      theirC = await want2("commit", "c");
-      await path.send(enc({ t: "commit", c: mine }), "control");
-      const theirN = unb64(await want2("reveal", "n"));
-      if (!macEqual(theirC, commit(theirN, other, round, digit))) throw new WrongCode("wrong pairing code");
-      await path.send(enc({ t: "reveal", n: b64(n) }), "control");
-    }
-  }
-  return sha256(PROTOCOL, " code secret ", code, transcript);
-}
-var enc, HandshakeError, WrongCode, Session;
-var init_handshake = __esm({
-  "link/pairing/handshake.ts"() {
-    "use strict";
-    init_crypto();
-    init_cpace();
-    enc = (v) => Buffer.from(JSON.stringify(v));
-    HandshakeError = class extends Error {
-      peer;
-    };
-    WrongCode = class extends Error {
-    };
-    Session = class {
-      path;
-      #tx;
-      #rx;
-      constructor(path, tx2, rx) {
-        this.path = path;
-        this.#tx = tx2;
-        this.#rx = rx;
-      }
-      // Sealing happens in call order, so nonces match the order frames hit the wire.
-      send(h, body = new Uint8Array(), priority = "change") {
-        const head = Buffer.from(JSON.stringify(h));
-        const len = Buffer.alloc(4);
-        len.writeUInt32BE(head.length);
-        const plain = Buffer.concat([len, head, body]);
-        if (plain.length + 16 > this.path.limits.maxFrameBytes)
-          return Promise.reject(new Error(`a ${h.t} message of ${plain.length} bytes is over the ${this.path.limits.maxFrameBytes}-byte frame limit`));
-        return this.path.send(this.#tx.seal(plain), priority);
-      }
-      async next() {
-        const f3 = await this.path.next();
-        if (!f3) return null;
-        const plain = this.#rx.open(f3);
-        const n = plain.readUInt32BE(0);
-        return { h: JSON.parse(plain.subarray(4, 4 + n).toString("utf8")), body: plain.subarray(4 + n) };
-      }
-      measurements() {
-        return this.path.measurements();
-      }
-      close(reason) {
-        this.path.close(reason);
-      }
-    };
-  }
-});
-
-// link/sync/paths.ts
-function score(s) {
-  const m = s.measurements();
-  return m.rttMs === null ? Infinity : m.rttMs + m.queuedBytes / 1024;
-}
-var SWITCH_RATIO, MIN_GAIN_MS, HOLD_MS, SILENT_MS, PathSet;
-var init_paths = __esm({
-  "link/sync/paths.ts"() {
-    "use strict";
-    SWITCH_RATIO = 0.75;
-    MIN_GAIN_MS = 1;
-    HOLD_MS = 4e3;
-    SILENT_MS = 7e3;
-    PathSet = class {
-      #paths = [];
-      #active = null;
-      /** The challenger and when it started being better. */
-      #better = null;
-      all() {
-        return [...this.#paths];
-      }
-      get size() {
-        return this.#paths.length;
-      }
-      on(transport) {
-        return this.#paths.find((e) => e.session.path.transport === transport);
-      }
-      entry(s) {
-        return this.#paths.find((e) => e.session === s);
-      }
-      active() {
-        return this.#active?.session ?? null;
-      }
-      /** Adds a path. The first path becomes active; later ones must win on score. */
-      add(session, initiator, now = Date.now()) {
-        const e = { session, initiator, since: now, lastHeard: now };
-        this.#paths.push(e);
-        this.#active ??= e;
-      }
-      /** Removes a path. Returns the new active session if the active one was removed. */
-      remove(session) {
-        const e = this.entry(session);
-        if (!e) return { wasActive: false, active: this.active() };
-        this.#paths = this.#paths.filter((x) => x !== e);
-        if (this.#better?.entry === e) this.#better = null;
-        if (this.#active !== e) return { wasActive: false, active: this.active() };
-        this.#active = this.#best();
-        this.#better = null;
-        return { wasActive: true, active: this.active() };
-      }
-      #best() {
-        let best = null;
-        for (const e of this.#paths) if (!best || score(e.session) < score(best.session)) best = e;
-        return best;
-      }
-      /** Re-checks the active path after a measurement. Returns the new active session if it switched. */
-      evaluate(now = Date.now()) {
-        const cur = this.#active;
-        if (!cur) return null;
-        const best = this.#best();
-        if (!best || best === cur) {
-          this.#better = null;
-          return null;
-        }
-        const a = score(cur.session);
-        const b = score(best.session);
-        if (!(b < a * SWITCH_RATIO && a - b >= MIN_GAIN_MS)) {
-          this.#better = null;
-          return null;
-        }
-        if (this.#better?.entry !== best) this.#better = { entry: best, since: now };
-        if (now - this.#better.since < HOLD_MS) return null;
-        this.#active = best;
-        this.#better = null;
-        return best.session;
-      }
-    };
-  }
-});
-
-// link/sync/coordinator.ts
-function refusal(e, remote) {
-  const peer = e instanceof HandshakeError ? e.peer : void 0;
-  const who2 = peer ? `${peer.name || "a device"} (${peer.device})` : `something at ${remote}`;
-  const m = e.message;
-  const pairAgain = "Fix: run `reflex pair` and scan the new code on it.";
-  if (/refused: .*(paired with another|changed|scan)/i.test(m))
-    return { kind: "changed", line: `${who2} is paired with an earlier Link identity on this computer and has stopped dialing it. ${pairAgain}` };
-  if (/refused: /.test(m)) return { kind: "theirs", line: `${who2} refused this Link (${m.replace(/^.*refused: /, "")}).` };
-  if (/is not paired|closed the connection during the handshake/.test(m) && peer && !peer.paired && !peer.pair)
-    return {
-      kind: "unpaired",
-      line: `${who2} isn't paired with this Link. It most likely still holds a pairing with an earlier Link on this computer (a reset ~/.reflex) and keeps redialing it. ${pairAgain}`
-    };
-  if (/closed the connection during the handshake/.test(m))
-    return peer ? { kind: "dropped", line: `${who2} dropped the connection during the handshake (a network change or a weak signal); it reconnects on its own.` } : { kind: "silent", line: `${who2} connected and closed before saying who it is (a connection cut short, an older Reflex app, or a port scan). Nothing to do unless your iPad won't connect; then run \`reflex pair\` and scan again.` };
-  if (/unknown or expired pairing offer/.test(m)) return { kind: "expired", line: `${who2} used a pairing code that has expired or was already used. ${pairAgain}` };
-  if (/timed out/.test(m)) return { kind: "timeout", line: `${who2} went quiet for 10 s during the handshake (a weak network); it tries again on its own.` };
-  if (/speaks/.test(m)) return { kind: "version", line: `${who2} speaks another Reflex protocol version. Fix: update the Reflex app or this checkout so the two match.` };
-  return { kind: m, line: `${who2}: ${m}` };
-}
-var ASSET_PART, QUIET_MS, Quiet, hostOf, Coordinator;
-var init_coordinator = __esm({
-  "link/sync/coordinator.ts"() {
-    "use strict";
-    init_catalog();
-    init_handshake();
-    init_sends();
-    init_paths();
-    ASSET_PART = 1024 * 1024;
-    QUIET_MS = 10 * 60 * 1e3;
-    Quiet = class {
-      #seen = /* @__PURE__ */ new Map();
-      #swept = 0;
-      #log;
-      constructor(log) {
-        this.#log = log;
-      }
-      say(key, line, now = Date.now()) {
-        if (now - this.#swept > QUIET_MS) {
-          this.#swept = now;
-          for (const [k, v] of this.#seen) if (now - v.at > 2 * QUIET_MS) this.#seen.delete(k);
-        }
-        const s = this.#seen.get(key);
-        if (s && now - s.at < QUIET_MS) {
-          if (s.more++ === 0) this.#log(`${line} (this repeats; logged again at most every ${QUIET_MS / 6e4} min)`);
-          return;
-        }
-        this.#log(s?.more ? `${line} (${s.more} more times in the last ${Math.round((now - s.at) / 6e4)} min)` : line);
-        this.#seen.set(key, { at: now, more: 0 });
-      }
-      /** That place is fine again: its next refusal is news. */
-      clear(prefix) {
-        for (const k of this.#seen.keys()) if (k.startsWith(prefix)) this.#seen.delete(k);
-      }
-    };
-    hostOf = (remote) => remote.replace(/:\d+$/, "");
-    Coordinator = class {
-      #me;
-      #assets;
-      #catalog;
-      #offers;
-      #transports;
-      #log;
-      #peers = /* @__PURE__ */ new Map();
-      #candidates = /* @__PURE__ */ new Map();
-      #dialing = /* @__PURE__ */ new Set();
-      #timer = null;
-      #onPaired = [];
-      #pings = 0;
-      #everyPath;
-      #quiet;
-      /** Agents waiting for approval, shown on every iPad that connects. */
-      pendingAgents = () => [];
-      /** The person's answer about an Agent, from a paired iPad. */
-      onAgentDecision = () => {
-      };
-      /** Called each time a peer is bound, before the coordinator's own opening messages. */
-      onBound = () => {
-      };
-      /** Called when a bound peer's session ends. */
-      onUnbound = () => {
-      };
-      /** Whether a code from this source makes the iPad that scans it approve now (link.ts): only while none does. */
-      grantsApproval = () => false;
-      /** A device paired (or connected again) with a typed code; `agents` asked for that code. */
-      onCodePaired = () => {
-      };
-      /** What to do so an iPad may approve, for logs and for the iPad (link.ts). */
-      approvalHint = () => "";
-      onSend = () => {
-        throw new Error("Send receiver is not ready");
-      };
-      /** Messages the coordinator itself doesn't handle (the Relay's `relay_keys`, link/relay/sync.ts). */
-      onMessage = () => {
-      };
-      constructor(opts) {
-        this.#me = opts.me;
-        this.#assets = opts.assets;
-        this.#catalog = opts.catalog;
-        this.#offers = opts.offers;
-        this.#transports = opts.transports;
-        this.#log = opts.log;
-        this.#quiet = new Quiet(opts.log);
-        this.#everyPath = opts.everyPath ?? false;
-      }
-      /** Starts another transport while running: a Relay room shared with another person, or an invite's room. */
-      async addTransport(t) {
-        if (this.#transports.includes(t)) return;
-        this.#transports.push(t);
-        await t.listen((p) => void this.#accept(p));
-        t.discover((c) => this.#candidate(c));
-      }
-      async removeTransport(t) {
-        this.#transports = this.#transports.filter((x) => x !== t);
-        for (const [d, list] of this.#candidates) this.#candidates.set(d, list.filter((c) => c.transport !== t.name));
-        await t.close();
-      }
-      onPaired(fn) {
-        this.#onPaired.push(fn);
-      }
-      peers() {
-        return [...this.#peers.values()];
-      }
-      async start() {
-        const ports = {};
-        for (const t of this.#transports) {
-          const { port } = await t.listen((p) => void this.#accept(p));
-          ports[t.name] = port;
-          t.discover((c) => this.#candidate(c));
-        }
-        this.#timer = setInterval(() => this.#redial(), 2e3);
-        this.#timer.unref();
-        return { ports };
-      }
-      async stop() {
-        if (this.#timer) clearInterval(this.#timer);
-        for (const p of this.#peers.values()) for (const e of p.paths.all()) e.session.close("link stopping");
-        await Promise.all(this.#transports.map((t) => t.close()));
-      }
-      #trust() {
-        return {
-          pairedKey: (device) => this.#catalog.device(device)?.key,
-          offerSecret: (offer) => this.#offers.secret(offer),
-          liveCode: () => this.#offers.liveCode(),
-          takeCode: (code, device) => this.#offers.takeCode(code, device),
-          codeFailed: () => {
-            this.#offers.codeFailed();
-            this.#log(this.#offers.liveCode() ? "someone typed a wrong pairing code" : "a pairing code was typed wrong too many times and stopped working");
-          }
-        };
-      }
-      async #accept(path) {
-        try {
-          const r = await handshake(path, this.#me, this.#trust());
-          if (r.code) {
-            const agents = r.codeAgents ?? [];
-            if (r.cpace) this.#log(`${r.peer.name} (${r.peer.device}) proved the code through the relay's pairing room (${path.remote})`);
-            if (r.paired) this.#remember(r.peer, null, "code");
-            const d = this.#catalog.device(r.peer.device);
-            if (d.kind === "ipad" && d.person.id === this.#me.person.id && !mayApprove(d, this.#me.person.id)) {
-              const { approver_asked: _, ...rest2 } = d;
-              this.#catalog.pairDevice({ ...rest2, approves: true });
-            }
-            if (!r.paired) for (const f3 of this.#onPaired) f3(this.#catalog.device(r.peer.device));
-            this.onCodePaired(this.#catalog.device(r.peer.device), agents);
-          } else if (r.offer) {
-            const source = this.#offers.source(r.offer) ?? "terminal";
-            this.#offers.consume(r.offer, r.peer.device);
-            if (r.paired) this.#remember(r.peer, null, source === "terminal" ? "offer" : "admin-offer", source);
-            else {
-              const known = this.#catalog.device(r.peer.device);
-              if (known.kind === "ipad" && known.person.id === this.#me.person.id && !mayApprove(known, this.#me.person.id)) this.#letApprove(known, source);
-              for (const f3 of this.#onPaired) f3(this.#catalog.device(r.peer.device));
-            }
-          }
-          this.#quiet.clear(`${hostOf(path.remote)}|`);
-          this.#quiet.clear(`${r.peer.device}|`);
-          this.#bind(r.session, r.peer.device, r.peer.name, r.peer.device);
-        } catch (e) {
-          const why = refusal(e, path.remote);
-          const from = e instanceof HandshakeError && e.peer ? e.peer.device : hostOf(path.remote);
-          this.#quiet.say(`${from}|${why.kind}`, `refused a connection from ${path.remote}: ${why.line}`);
-          await path.send(Buffer.from(JSON.stringify({ t: "refused", reason: e.message })), "control").catch(() => {
-          });
-          setTimeout(() => path.close("handshake failed"), 100);
-        }
-      }
-      #remember(peer, at, via, source) {
-        const own2 = peer.person.id === this.#me.person.id;
-        const d = { device: peer.device, key: peer.key, name: peer.name, person: peer.person, kind: peer.kind, via, paired_at: Date.now() };
-        if (peer.kind === "ipad" && source) d.approves = false;
-        this.#catalog.pairDevice(d);
-        if (at) this.#catalog.seen(d.device, at.host, at.port);
-        this.#log(`paired with ${peer.name} (${peer.device}, person ${peer.person.name})`);
-        if (peer.kind === "ipad" && own2 && source) this.#letApprove(d, source);
-        if (via === "invite") return;
-        for (const p of this.#peers.values()) this.#news(p);
-        for (const f3 of this.#onPaired) f3(this.#catalog.device(d.device) ?? d);
-      }
-      /** iPads of this person's whose Allow counts. */
-      #approvers() {
-        return this.#catalog.devices().filter((d) => mayApprove(d, this.#me.person.id));
-      }
-      /**
-       * An iPad of the person's that can't approve, after it scanned a code: it may approve now if the code grants it (no iPad
-       * approves yet), or an approving iPad is asked "Let it approve Agents?". The person's iPad is the boundary: nothing
-       * with only the person's shell (a terminal, a command) makes another approver once one exists.
-       */
-      #letApprove(d, source) {
-        if (this.grantsApproval(source)) {
-          const { approver_asked: _, ...rest2 } = d;
-          this.#catalog.pairDevice({ ...rest2, approves: true });
-          this.#log(`${d.name} (${d.device}) may approve Agents`);
-          return;
-        }
-        const approvers = this.#approvers();
-        if (!approvers.length) return this.#log(`${d.name} (${d.device}) syncs, but can't approve Agents yet. ${this.approvalHint()}`);
-        if (!d.approver_asked) this.#catalog.pairDevice({ ...d, approves: false, approver_asked: Date.now() });
-        this.#log(`${d.name} (${d.device}) syncs; asked ${approvers.map((a) => a.name).join(", ")} "Let ${d.name} approve Agents?"`);
-        this.#sendApproverRequests();
-      }
-      /** Approving iPads: who waits for "Let … approve Agents?". */
-      #sendApproverRequests(only) {
-        const requests = this.#catalog.devices().filter((d) => d.approver_asked && !mayApprove(d, this.#me.person.id)).map((d) => ({ device: d.device, name: d.name, asked_at: d.approver_asked }));
-        for (const p of only ? [only] : this.#peers.values())
-          if (mayApprove(this.#catalog.device(p.device), this.#me.person.id)) this.#send(p, { t: "approver_requests", requests });
-      }
-      /** What an iPad of the person's hasn't heard yet: devices paired after it (each once), and who waits to approve. */
-      #news(p) {
-        const me = this.#catalog.device(p.device);
-        if (me?.kind !== "ipad" || me.person.id !== this.#me.person.id) return;
-        for (const d of this.#catalog.devices()) {
-          if (d.device === p.device || d.via === "invite" || d.paired_at < me.paired_at || (d.announced ?? []).includes(p.device)) continue;
-          this.#send(p, { t: "device_paired", device: d.device, name: d.name, approves: mayApprove(d, this.#me.person.id) });
-          this.#catalog.pairDevice({ ...d, announced: [...d.announced ?? [], p.device] });
-        }
-        this.#sendApproverRequests(p);
-      }
-      /** Forgets one of this person's devices (`reflex link forget`): it can't connect or approve until it pairs again. */
-      forgetDevice(device) {
-        const d = this.#catalog.device(device);
-        if (!d) return void 0;
-        this.#catalog.forget("device", device);
-        this.#candidates.delete(device);
-        for (const e of this.#peers.get(device)?.paths.all() ?? []) e.session.close("forgotten by the person");
-        this.#log(`forgot ${d.name} (${device})`);
-        this.#sendApproverRequests();
-        return d;
-      }
-      /** Scans a pairing code: reaches the offering device and pairs with it. */
-      async join(offer) {
-        const scanned = { offer: offer.offer, device: offer.device, key: offer.key, secret: offer.secret };
-        const errors = [];
-        for (const host2 of offer.hosts) {
-          const c = { transport: "lan", device: offer.device, host: host2, port: offer.port };
-          let path;
-          try {
-            const lan = this.#transports.find((t) => t.name === "lan");
-            if (!lan) throw new Error("pairing needs the LAN transport");
-            path = await lan.dial(c);
-          } catch (e) {
-            errors.push(`${host2}: ${e.message}`);
-            continue;
-          }
-          try {
-            const r = await handshake(path, this.#me, this.#trust(), scanned);
-            this.#remember(r.peer, c, "join");
-            this.#bind(r.session, r.peer.device, r.peer.name, this.#me.key.device);
-            return this.#catalog.device(r.peer.device);
-          } catch (e) {
-            path.close("pairing failed");
-            errors.push(`${host2}: ${e.message}`);
-          }
-        }
-        throw new Error(`Could not pair with ${offer.name || offer.device}: ${errors.join("; ")}`);
-      }
-      #candidate(c) {
-        if (!c.device || c.device === this.#me.key.device) return;
-        const list = this.#candidates.get(c.device) ?? [];
-        if (!list.some((x) => x.transport === c.transport && x.host === c.host && x.port === c.port)) list.unshift(c);
-        const per = /* @__PURE__ */ new Map();
-        const kept = list.filter((x) => {
-          const n = (per.get(x.transport) ?? 0) + 1;
-          per.set(x.transport, n);
-          return n <= 6;
-        });
-        this.#candidates.set(c.device, kept);
-        if (this.#catalog.device(c.device) && !this.#peers.get(c.device)?.paths.on(c.transport)) void this.#dial(c.device);
-      }
-      #redial() {
-        for (const d of this.#catalog.devices()) void this.#dial(d.device);
-        const now = Date.now();
-        for (const p of this.#peers.values())
-          for (const e of p.paths.all()) {
-            if (now - e.lastHeard > SILENT_MS) {
-              e.session.close(`heard nothing for ${Math.round((now - e.lastHeard) / 1e3)} s`);
-              continue;
-            }
-            void e.session.send({ t: "ping", n: ++this.#pings, at: now }, void 0, "control").catch(() => {
-            });
-          }
-      }
-      /** Dials a paired device on every transport it can be dialed on and has no path over yet. */
-      async #dial(device) {
-        if (this.#dialing.has(device)) return;
-        const known = this.#catalog.device(device);
-        if (!known || known.kind === "ipad") return;
-        const have = (t) => Boolean(this.#peers.get(device)?.paths.on(t));
-        const list = [...this.#candidates.get(device) ?? []];
-        if (known.last_seen) list.unshift({ transport: "lan", device, host: known.last_seen.host, port: known.last_seen.port });
-        const reached = this.#peers.has(device);
-        const todo = list.filter(
-          (c, i) => !have(c.transport) && !(reached && c.transport === "relay") && list.findIndex((x) => x.transport === c.transport && x.host === c.host && x.port === c.port) === i
-        );
-        todo.sort((a, b) => Number(a.transport === "relay") - Number(b.transport === "relay"));
-        if (todo.length === 0) return;
-        this.#dialing.add(device);
-        try {
-          for (const name of new Set(todo.map((c) => c.transport))) {
-            if (have(name) || name === "relay" && this.#peers.has(device)) continue;
-            const t = this.#transports.find((x) => x.name === name);
-            if (!t) continue;
-            const queue = [];
-            let wake = null;
-            let pending = 0;
-            let done = false;
-            for (const c of todo.filter((x) => x.transport === name)) {
-              pending++;
-              t.dial(c).then(
-                (path) => {
-                  if (done) path.close("another address answered first");
-                  else queue.push({ path, c });
-                },
-                () => {
-                }
-              ).finally(() => {
-                pending--;
-                wake?.();
-              });
-            }
-            try {
-              for (; ; ) {
-                while (!queue.length && pending > 0) await new Promise((r) => wake = r);
-                const next = queue.shift();
-                if (!next) break;
-                const { path, c } = next;
-                try {
-                  const r = await handshake(path, this.#me, this.#trust());
-                  if (r.peer.device !== device) throw new Error(`expected ${device}, reached ${r.peer.device}`);
-                  if (c.transport === "lan") this.#catalog.seen(device, c.host, c.port);
-                  this.#quiet.clear(`dial:${device}|`);
-                  this.#bind(r.session, device, r.peer.name, this.#me.key.device);
-                  break;
-                } catch (e) {
-                  path.close("handshake failed");
-                  this.#quiet.say(`dial:${device}|${c.host}|${e.message}`, `could not connect to ${device} at ${c.host}:${c.port}: ${e.message}`);
-                }
-              }
-            } finally {
-              done = true;
-              for (const q2 of queue.splice(0)) q2.path.close("another address answered first");
-            }
-          }
-        } finally {
-          this.#dialing.delete(device);
-        }
-      }
-      /**
-       * One live session per peer per transport. If two exist on one transport (both sides dialed
-       * at once), both sides keep the one dialed by the lower device ID, so they agree. A session on
-       * another transport is another path to the same peer.
-       */
-      #bind(session, device, name, initiator) {
-        name ||= this.#catalog.device(device)?.name ?? device;
-        const transport = session.path.transport;
-        const known = this.#peers.get(device);
-        if (known) {
-          const same2 = known.paths.on(transport);
-          if (same2) {
-            if (same2.initiator <= initiator) {
-              session.close("duplicate path");
-              return;
-            }
-            same2.session.close("replaced by a preferred path");
-          }
-          known.paths.add(session, initiator);
-          this.#log(`added a ${transport} path to ${name} (${session.path.remote}); ${known.paths.size} paths`);
-          void this.#loop(known, session);
-          return;
-        }
-        const peer = { incoming: /* @__PURE__ */ new Map(), device, name, paths: new PathSet(), since: Date.now(), refused: /* @__PURE__ */ new Set() };
-        peer.paths.add(session, initiator);
-        this.#peers.set(device, peer);
-        this.#log(`connected to ${name} (${device}) over ${transport} ${session.path.remote}`);
-        void this.#loop(peer, session);
-        this.#fresh(peer);
-      }
-      /** Restores approvals and device news on a fresh authenticated path. */
-      #fresh(peer) {
-        this.onBound(peer);
-        if (mayApprove(this.#catalog.device(peer.device), this.#me.person.id))
-          for (const a of this.pendingAgents()) this.#send(peer, { t: "agent_request", ...a });
-        this.#sendAgents(peer);
-        this.#news(peer);
-      }
-      /** Whether a peer is one of this person's own devices. */
-      #own(p) {
-        return this.#catalog.device(p.device)?.person.id === this.#me.person.id;
-      }
-      /** Every Agent's name and color, so iPads can label Agent changes (their chips and history). */
-      announceAgents() {
-        for (const p of this.#peers.values()) if (this.#own(p)) this.#sendAgents(p);
-      }
-      #sendAgents(p) {
-        const agents = this.#catalog.agents().map(({ id: id2, name, color, status, requested_at }) => ({ id: id2, name, color, status, requested_at }));
-        this.#send(p, { t: "agents", agents, approver: mayApprove(this.#catalog.device(p.device), this.#me.person.id) });
-      }
-      /** Sends a control message to a peer on its active path (for session extensions). */
-      send(p, h) {
-        this.#send(p, h);
-      }
-      /**
-       * Sends on the peer's active path. With `everyPath`, sync messages go over every live path, so
-       * the same change arrives more than once.
-       */
-      #send(p, h, body, priority = "control") {
-        const active = p.paths.active();
-        const to = this.#everyPath && h.t === "sync" ? p.paths.all().map((e) => e.session) : active ? [active] : [];
-        for (const s of to) void s.send(h, body, priority).catch((e) => this.#log(`could not send ${h.t} to ${p.name} over ${s.path.transport}: ${e.message}`));
-      }
-      /** Asks every connected iPad about an Agent waiting for approval. */
-      askAboutAgent(a) {
-        for (const p of this.#peers.values()) if (mayApprove(this.#catalog.device(p.device), this.#me.person.id)) this.#send(p, { t: "agent_request", ...a });
-        this.announceAgents();
-      }
-      async #loop(p, s) {
-        const transport = s.path.transport;
-        try {
-          for (; ; ) {
-            const m = await s.next();
-            if (!m) break;
-            const e = p.paths.entry(s);
-            if (e) e.lastHeard = Date.now();
-            this.#handle(p, s, m.h, m.body);
-          }
-        } catch (e) {
-          this.#log(`dropping the ${transport} path to ${p.name} (${p.device}): ${e.message}`);
-          s.close("bad frame");
-        }
-        for (const k of p.incoming.keys()) if (k.startsWith(`${s.path.id}:`)) p.incoming.delete(k);
-        if (this.#peers.get(p.device) !== p) return;
-        const r = p.paths.remove(s);
-        if (p.paths.size === 0) {
-          this.#peers.delete(p.device);
-          this.#log(`disconnected from ${p.name} (${p.device})`);
-          this.onUnbound(p);
-          return;
-        }
-        this.#log(`lost the ${transport} path to ${p.name}; ${p.paths.size} left`);
-        if (r.wasActive && r.active) {
-          this.#log(`now sending to ${p.name} over ${r.active.path.transport} ${r.active.path.remote}`);
-          this.#fresh(p);
-        }
-      }
-      #handle(p, s, h, body) {
-        switch (h.t) {
-          case "send": {
-            const device = this.#catalog.device(p.device);
-            if (!device || device.kind !== "ipad" || device.person.id !== this.#me.person.id) return;
-            const send = nativeSend(h.send, h.space, device.person.id, p.device);
-            for (const crop of send.crops ?? []) this.#assets.get(crop.asset);
-            this.onSend(send);
-            this.#send(p, { t: "send_ack", send: send.send });
-            return;
-          }
-          case "assets_have": {
-            return;
-          }
-          case "asset": {
-            if (!this.#own(p) || this.#catalog.device(p.device)?.kind !== "ipad") return;
-            const hash = String(h.hash);
-            const off = Number(h.off);
-            const size2 = Number(h.size);
-            if (!/^[a-f0-9]{64}$/.test(hash) || !Number.isSafeInteger(off) || off < 0 || !Number.isSafeInteger(size2) || size2 < 0 || size2 > 64 * 1024 * 1024) return;
-            if (this.#assets.has(hash)) return;
-            const key = `${s.path.id}:${hash}`;
-            let inc = p.incoming.get(key);
-            if (off === 0) p.incoming.set(key, inc = { size: size2, parts: [], got: 0 });
-            if (!inc || inc.got !== off || inc.size !== size2 || off + body.length > size2) {
-              p.incoming.delete(key);
-              return this.#log(`dropped a malformed part of asset ${hash} from ${p.name}`);
-            }
-            inc.parts.push(Buffer.from(body));
-            inc.got += body.length;
-            if (inc.got < size2) return;
-            p.incoming.delete(key);
-            if (!this.#assets.putVerified(hash, Buffer.concat(inc.parts))) this.#log(`rejected asset ${hash} from ${p.name}: bytes do not match the hash`);
-            return;
-          }
-          case "agent_decision": {
-            const d = this.#catalog.device(p.device);
-            const id2 = String(h.id);
-            const status = h.status === "approved" ? "approved" : "denied";
-            const asked = this.#catalog.agent(id2)?.requested_at;
-            if (!mayApprove(d, this.#me.person.id)) {
-              const hint = this.approvalHint();
-              this.#quiet.say(`decision:${p.device}`, `ignored an Agent decision from ${p.name}: it can't approve Agents. ${hint}`);
-              this.#send(p, { t: "agent_decision_refused", id: id2, reason: `This iPad can't approve Agents. ${hint}` });
-            } else if (h.requested_at !== void 0 && asked !== void 0 && Number(h.requested_at) !== asked)
-              this.#quiet.say(`stale:${p.device}|${id2}`, `ignored an earlier answer about Agent ${id2} from ${p.name}: it was asked again since; the iPad asks anew`);
-            else this.onAgentDecision(p.device, id2, status);
-            this.#sendAgents(p);
-            return;
-          }
-          case "approver_decision": {
-            const d = this.#catalog.device(String(h.device ?? ""));
-            if (!mayApprove(this.#catalog.device(p.device), this.#me.person.id))
-              return this.#quiet.say(`approver:${p.device}`, `ignored "Let \u2026 approve Agents?" from ${p.name}: it can't approve Agents itself`);
-            if (!d || !d.approver_asked || mayApprove(d, this.#me.person.id)) return this.#sendApproverRequests(p);
-            const allow = h.allow === true;
-            const { approver_asked: _, ...rest2 } = d;
-            this.#catalog.pairDevice({ ...rest2, approves: allow });
-            this.#log(`${p.name} ${allow ? "let" : "did not let"} ${d.name} (${d.device}) approve Agents`);
-            this.#sendApproverRequests();
-            const q2 = this.#peers.get(d.device);
-            if (q2) {
-              this.#sendAgents(q2);
-              if (allow) for (const a of this.pendingAgents()) this.#send(q2, { t: "agent_request", ...a });
-            }
-            return;
-          }
-          case "ping":
-            void s.send({ t: "pong", n: h.n, at: h.at }, void 0, "control").catch(() => {
-            });
-            return;
-          case "pong": {
-            s.path.recordRtt(Date.now() - Number(h.at));
-            const from = p.paths.active();
-            const to = p.paths.evaluate();
-            if (to && from)
-              this.#log(
-                `now sending to ${p.name} over ${to.path.transport} (${to.measurements().rttMs} ms) instead of ${from.path.transport} (${from.measurements().rttMs} ms)`
-              );
-            return;
-          }
-          default:
-            return this.onMessage(p, h, body);
-        }
-      }
-    };
-  }
-});
-
-// agent/src/capabilities/native-bundle.ts
-function inside(points, p) {
-  let hit = false;
-  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-    const a = points[i], b = points[j];
-    if (a[1] > p[1] !== b[1] > p[1] && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) hit = !hit;
-  }
-  return hit;
-}
-function closed(s) {
-  if (s.points.length < 8 || !s.points.slice(Math.floor(s.points.length / 2)).some((p) => distance(p, s.points[0]) < 0.3 * size(s))) return false;
-  const enclosed = Math.abs(s.points.reduce((v, p, i) => {
-    const q2 = s.points[(i + 1) % s.points.length];
-    return v + p[0] * q2[1] - q2[0] * p[1];
-  }, 0)) / 2;
-  return length(s) > 2.2 * size(s) || length(s) > 1.4 * (s.bounds[2] + s.bounds[3]) && enclosed > 0.4 * s.bounds[2] * s.bounds[3];
-}
-function groups(send) {
-  const result = [], used = /* @__PURE__ */ new Set();
-  for (const h of send.hints ?? []) {
-    const strokes = send.strokes.filter((s) => h.strokes.includes(s.id) && !used.has(s.id));
-    if (!strokes.length) continue;
-    strokes.forEach((s) => used.add(s.id));
-    result.push({ strokes, bounds: union(strokes.map((s) => s.bounds)), text: h.text, confidence: h.confidence });
-  }
-  let open2;
-  for (const s of [...send.strokes].sort((a, b) => a.at - b.at).filter((s2) => !used.has(s2.id))) {
-    const last = open2?.strokes.at(-1);
-    const quick = last && s.at - (last.at + (last.points.at(-1)?.[2] ?? 0)) <= 1500;
-    const near = open2 && size(s) <= 90 && area(pad(open2.bounds, 50), s.bounds) > 0;
-    const over = last && area(s.bounds, last.bounds) >= 0.5 * Math.min(s.bounds[2] * s.bounds[3], last.bounds[2] * last.bounds[3]);
-    if (open2 && quick && (near || over)) {
-      open2.strokes.push(s);
-      open2.bounds = union([open2.bounds, s.bounds]);
-    } else {
-      open2 = { strokes: [s], bounds: s.bounds };
-      result.push(open2);
-    }
-  }
-  return result.sort((a, b) => Math.min(...a.strokes.map((s) => s.at)) - Math.min(...b.strokes.map((s) => s.at)));
-}
-function classify(g, targets) {
-  const ss = g.strokes, main4 = [...ss].sort((a, b) => length(b) - length(a))[0];
-  const own2 = new Set(ss.map((s) => s.id));
-  const ts = targets.filter((t) => !own2.has(t.id));
-  const nearest = (p2, reach) => ts.filter((t) => boxDistance(t.bounds, p2) <= reach).sort((a, b) => boxDistance(a.bounds, p2) - boxDistance(b.bounds, p2) || a.bounds[2] * a.bounds[3] - b.bounds[2] * b.bounds[3])[0];
-  const under = () => ts.filter((t) => area(t.bounds, g.bounds) > 0).sort((a, b) => area(b.bounds, g.bounds) / Math.max(1, b.bounds[2] * b.bounds[3]) - area(a.bounds, g.bounds) / Math.max(1, a.bounds[2] * a.bounds[3]))[0] ?? nearest(center(g.bounds), 30);
-  if (closed(main4)) {
-    const on = ts.filter((t) => t.bounds[2] <= 1.3 * main4.bounds[2] && t.bounds[3] <= 1.3 * main4.bounds[3] && inside(main4.points, center(t.bounds))).map((t) => t.id);
-    if (on.length) return { kind: "circle", on: on.slice(0, 20) };
-  }
-  if (g.text) return { kind: "writing", text_guess: g.text, confidence: g.confidence };
-  if (ss.length === 2 && ss.every((s) => straight(s) > 0.8 && size(s) > 20) && area(ss[0].bounds, ss[1].bounds) >= 0.5 * Math.min(ss[0].bounds[2] * ss[0].bounds[3], ss[1].bounds[2] * ss[1].bounds[3])) {
-    const t = under();
-    return { kind: "cross", ...t ? { on: [t.id] } : {} };
-  }
-  const first = main4.points[0], last = main4.points.at(-1);
-  const low = main4.points.reduce((best, p2, i) => p2[1] > main4.points[best][1] ? i : best, 0), p = main4.points[low];
-  if (ss.length === 1 && main4.points.length >= 4 && size(main4) <= 220 && low / (main4.points.length - 1) >= 0.1 && low / (main4.points.length - 1) <= 0.6 && first[1] < p[1] - 0.2 * main4.bounds[3] && last[1] < first[1] && last[0] > p[0] && p[0] > first[0] && Math.abs(last[1] - p[1]) > 1.3 * Math.abs(p[1] - first[1])) {
-    const t = under();
-    return { kind: "check", ...t ? { on: [t.id] } : {} };
-  }
-  if (length(main4) >= 50 && straight(main4) > 0.55) {
-    const tip = main4.points.reduce((a, b) => distance(first, a) > distance(first, b) ? a : b);
-    const from = nearest(first, 40), to = nearest(tip, 40);
-    if (from && to && from.id !== to.id) return { kind: "arrow", from: from.id, to: to.id };
-    if (ss.length === 1 && straight(main4) > 0.85) {
-      const middle = [(first[0] + tip[0]) / 2, (first[1] + tip[1]) / 2];
-      const through = ts.filter((t) => boxDistance([t.bounds[0], t.bounds[1] + 0.2 * t.bounds[3], t.bounds[2], 0.6 * t.bounds[3]], middle) === 0 && distance(first, tip) >= 0.45 * t.bounds[2]).sort((a, b) => a.bounds[2] * a.bounds[3] - b.bounds[2] * b.bounds[3])[0];
-      if (through) return { kind: "strikethrough", on: [through.id] };
-      if (main4.bounds[3] <= Math.max(30, 0.35 * main4.bounds[2])) {
-        const below = ts.filter((t) => main4.bounds[1] >= t.bounds[1] + 0.65 * t.bounds[3] && main4.bounds[1] <= t.bounds[1] + t.bounds[3] + 30 && area([main4.bounds[0], t.bounds[1], main4.bounds[2], t.bounds[3]], t.bounds) >= 0.4 * t.bounds[2] * t.bounds[3])[0];
-        if (below) return { kind: "underline", on: [below.id] };
-      }
-    }
-    if ((ss.length > 1 || straight(main4) < 0.92) && (from || to) && from?.id !== to?.id && Math.max(g.bounds[2], g.bounds[3]) >= 60) return { kind: "arrow", ...from ? { from: from.id } : {}, ...to ? { to: to.id } : {} };
-  }
-  const near = nearest(center(g.bounds), 100);
-  return { kind: ss.length >= 2 && ss.every((s) => size(s) <= 120) ? "writing" : "ink", ...near ? { near: near.id } : {} };
-}
-function nativeBundle(send, opts) {
-  const gs = groups(send);
-  const targets = (send.context ?? send.strokes).map((s) => ({ id: s.id, bounds: s.bounds }));
-  const images = [], imageInfo = [];
-  for (const crop of send.crops ?? []) {
-    const bytes = opts.asset(crop.asset);
-    if (bytes) {
-      images.push(bytes);
-      imageInfo.push({
-        n: images.length,
-        kind: crop.kind ?? "recent_strokes",
-        shows: crop.kind === "screen" ? "Full visible board at Send, plus 15% on every side; no Reflex controls. viewport locates the visible screen in board coordinates within bounds." : "Close-up of the recent strokes",
-        bounds: crop.bounds,
-        ...crop.kind === "screen" ? { viewport: send.viewport } : {}
-      });
-    }
-  }
-  const marks = gs.map((g, i) => {
-    const mark = {
-      id: `m${i + 1}`,
-      ...classify(g, targets),
-      strokes: g.strokes.map((s) => s.id),
-      bounds: g.bounds,
-      at: Math.min(...g.strokes.map((s) => s.at)),
-      end: Math.max(...g.strokes.map((s) => s.at + (s.points.at(-1)?.[2] ?? 0)))
-    };
-    const containsMark = (im) => g.bounds[0] + g.bounds[2] >= im.bounds[0] && g.bounds[0] <= im.bounds[0] + im.bounds[2] && g.bounds[1] + g.bounds[3] >= im.bounds[1] && g.bounds[1] <= im.bounds[1] + im.bounds[3];
-    const inImages = imageInfo.filter(containsMark);
-    const image = inImages.find((im) => im.kind === "recent_strokes") ?? inImages[0];
-    return { ...mark, ...image ? { image: image.n, images: inImages.map((im) => im.n) } : {} };
-  });
-  const words = [...send.words ?? []].sort((a, b) => a.start_ms - b.start_ms);
-  const timed = [...marks].sort((a, b) => a.at - b.at), transcript = [];
-  let k = 0;
-  for (const w of words) {
-    while (k < timed.length && timed[k].at < w.start_ms) transcript.push(`[${timed[k++].id}]`);
-    transcript.push(w.text);
-  }
-  while (k < timed.length) transcript.push(`[${timed[k++].id}]`);
-  return { json: {
-    kind: "send",
-    send: send.send,
-    space: send.space,
-    from: { person: send.by.person, name: opts.personName },
-    trigger: send.trigger,
-    ...send.said ? { said: words.length ? transcript.join(" ") : send.said } : {},
-    ...words.length ? { words } : {},
-    marks,
-    strokes: send.strokes,
-    scene: targets,
-    changes: [],
-    viewport: send.viewport,
-    images: imageInfo,
-    also_sent_to: opts.others,
-    redelivered: opts.redelivered,
-    pending_after: opts.pendingAfter,
-    next: opts.pushed ? `Answer the person in your reply, then acknowledge with wait_for_user(after: '${send.send}', timeout_s: 0) and end your turn; the next Send is pushed to you.` : `Do what the person asks and write your answer in your reply (they read only your reply). Then call wait_for_user(after: '${send.send}') to acknowledge this Send and wait for the next one.`
-  }, images };
-}
-var union, distance, length, straight, size, area, pad, center, boxDistance;
-var init_native_bundle = __esm({
-  "agent/src/capabilities/native-bundle.ts"() {
-    "use strict";
-    union = (bs) => {
-      const x = Math.min(...bs.map((b) => b[0])), y = Math.min(...bs.map((b) => b[1]));
-      return [x, y, Math.max(...bs.map((b) => b[0] + b[2])) - x, Math.max(...bs.map((b) => b[1] + b[3])) - y];
-    };
-    distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-    length = (s) => s.points.slice(1).reduce((n, p, i) => n + distance(p, s.points[i]), 0);
-    straight = (s) => distance(s.points[0], s.points.at(-1)) / Math.max(1, length(s));
-    size = (s) => Math.max(s.bounds[2], s.bounds[3]);
-    area = (a, b) => Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
-    pad = (b, n) => [b[0] - n, b[1] - n, b[2] + 2 * n, b[3] + 2 * n];
-    center = (b) => [b[0] + b[2] / 2, b[1] + b[3] / 2];
-    boxDistance = (b, p) => Math.hypot(Math.max(b[0] - p[0], 0, p[0] - b[0] - b[2]), Math.max(b[1] - p[1], 0, p[1] - b[1] - b[3]));
-  }
-});
-
-// agent/src/capabilities/index.ts
-var ReflexError, Core;
-var init_capabilities = __esm({
-  "agent/src/capabilities/index.ts"() {
-    "use strict";
-    init_native_bundle();
-    ReflexError = class extends Error {
-      body;
-      constructor(reason, errors, next) {
-        super(errors[0]?.msg ?? reason);
-        this.body = { reason, errors, ...next ? { next } : {} };
-      }
-    };
-    Core = class {
-      #names = /* @__PURE__ */ new Map();
-      opts;
-      constructor(opts) {
-        this.opts = opts;
-        this.#names.set(opts.person.person, opts.person.name);
-        for (const [id2, name] of Object.entries(opts.names ?? {})) this.#names.set(id2, name);
-      }
-      name(id2, name) {
-        if (name) this.#names.set(id2, name);
-      }
-      async call(tool, args2, ctx) {
-        this.name(ctx.who.agent, ctx.who.name);
-        const a = args2 ?? {};
-        try {
-          if (tool !== "wait_for_user") throw new Error("Use wait_for_user to receive the person's Sends.");
-          const timeout = a.timeout_s === void 0 ? 300 : a.timeout_s;
-          if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout < 0 || timeout > 3600 || a.after !== void 0 && typeof a.after !== "string" || a.space !== void 0 && typeof a.space !== "string") throw new Error("Pass timeout_s between 0 and 3600, and optional after and space strings.");
-          if (typeof a.after === "string") this.opts.inbox.ack(ctx.who.agent, a.after);
-          const started = Date.now(), deadline = started + timeout * 1e3;
-          for (; ; ) {
-            const d = this.opts.inbox.take(ctx.who.agent, { ...typeof a.space === "string" ? { space: a.space } : {} });
-            if (d) return { ...this.project(d.send, ctx.who.agent, d.redelivered), isError: false };
-            const left = deadline - Date.now();
-            if (left <= 0 || ctx.signal?.aborted) break;
-            const tick = new AbortController(), stop2 = () => tick.abort();
-            ctx.signal?.addEventListener("abort", stop2, { once: true });
-            const timer = setTimeout(stop2, Math.min(left, (this.opts.progressEvery ?? 15) * 1e3));
-            try {
-              await this.opts.inbox.arrival(ctx.who.agent, tick.signal);
-            } finally {
-              clearTimeout(timer);
-              ctx.signal?.removeEventListener("abort", stop2);
-            }
-            ctx.progress?.({ elapsed_s: Math.round((Date.now() - started) / 1e3), timeout_s: timeout });
-          }
-          return { json: { status: "still_waiting", pending_sends: this.opts.inbox.pending(ctx.who.agent), next: "Call wait_for_user again." }, images: [], isError: false };
-        } catch (e) {
-          return { json: { ok: false, reason: "invalid_input", errors: [{ code: "invalid_input", msg: e.message, fix: "Use wait_for_user with after, space and timeout_s." }] }, images: [], isError: true };
-        }
-      }
-      project(send, agent, redelivered, pushed = false) {
-        const result = nativeBundle(send, {
-          personName: this.#names.get(send.by.person) ?? send.by.person,
-          others: this.opts.inbox.recipients(send.send).filter((id2) => id2 !== agent).map((id2) => this.#names.get(id2) ?? id2),
-          redelivered,
-          pushed,
-          pendingAfter: Math.max(0, this.opts.inbox.pending(agent) - 1),
-          asset: (hash) => this.opts.assets.get(hash)
-        });
-        this.opts.log?.("send_delivered", { agent, send: send.send, marks: result.json.marks.length, pushed, redelivered });
-        return result;
-      }
-      bundleFor(who2, space, id2) {
-        const send = this.opts.getSend(id2);
-        if (!send || send.space !== space) return void 0;
-        this.name(who2.agent, who2.name);
-        return this.project(send, who2.agent, false, true);
-      }
-    };
-  }
-});
-
 // agent/src/host/rpc.ts
-import { createHash as createHash3, randomBytes as randomBytes6 } from "node:crypto";
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { createHash as createHash3, randomBytes as randomBytes2 } from "node:crypto";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir2, tmpdir as tmpdir2 } from "node:os";
-import { join as join3, resolve as resolve2 } from "node:path";
+import { join as join2, resolve as resolve2 } from "node:path";
 function token() {
-  const file = join3(home2(), "rpc.key");
-  if (!existsSync3(file)) throw new NoLink(`No Reflex Link has run from ${home2()}. Start one with \`reflex link\`.`);
-  return readFileSync3(file, "utf8").trim();
+  const file = join2(home2(), "rpc.key");
+  if (!existsSync2(file)) throw new NoLink(`No Reflex Link has run from ${home2()}. Start one with \`reflex link\`.`);
+  return readFileSync2(file, "utf8").trim();
 }
 function credential(name) {
-  const dir3 = join3(home2(), "agents");
-  mkdirSync3(dir3, { recursive: true, mode: 448 });
-  const file = join3(dir3, createHash3("sha256").update(name).digest("hex").slice(0, 16) + ".cred");
-  if (!existsSync3(file)) writeFileSync2(file, "rxa_" + randomBytes6(32).toString("base64url"), { mode: 384 });
-  return readFileSync3(file, "utf8").trim();
+  const dir3 = join2(home2(), "agents");
+  mkdirSync2(dir3, { recursive: true, mode: 448 });
+  const file = join2(dir3, `${createHash3("sha256").update(name).digest("hex").slice(0, 16)}.cred`);
+  if (!existsSync2(file)) writeFileSync2(file, `rxa_${randomBytes2(32).toString("base64url")}`, { mode: 384 });
+  return readFileSync2(file, "utf8").trim();
 }
-function frames(onFrame) {
+function lines(onLine) {
   let buf = "";
   return (chunk) => {
     buf += chunk.toString();
-    let i;
-    while ((i = buf.indexOf("\n")) >= 0) {
+    for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) {
       const line = buf.slice(0, i);
       buf = buf.slice(i + 1);
-      if (line.trim()) onFrame(JSON.parse(line));
+      if (onLine(line) === false) return;
     }
   };
+}
+function frames(onFrame) {
+  return lines((line) => {
+    if (line.trim()) onFrame(JSON.parse(line));
+    return true;
+  });
 }
 var home2, socketPath, logPath, NoLink;
 var init_rpc = __esm({
   "agent/src/host/rpc.ts"() {
     "use strict";
-    home2 = () => resolve2(process.env.REFLEX_HOME ?? join3(homedir2(), ".reflex", "link"));
+    home2 = () => resolve2(process.env.REFLEX_HOME ?? join2(homedir2(), ".reflex", "link"));
     socketPath = (dir3 = home2()) => {
-      const p = join3(dir3, "agent.sock");
-      return Buffer.byteLength(p) <= 100 ? p : join3(tmpdir2(), `reflex-agent-${createHash3("sha256").update(dir3).digest("hex").slice(0, 12)}.sock`);
+      const p = join2(dir3, "agent.sock");
+      return Buffer.byteLength(p) <= 100 ? p : join2(tmpdir2(), `reflex-agent-${createHash3("sha256").update(dir3).digest("hex").slice(0, 12)}.sock`);
     };
     logPath = (name) => {
-      mkdirSync3(home2(), { recursive: true, mode: 448 });
-      return join3(home2(), `${name}.log`);
+      mkdirSync2(home2(), { recursive: true, mode: 448 });
+      return join2(home2(), `${name}.log`);
     };
     NoLink = class extends Error {
-    };
-  }
-});
-
-// agent/src/host/server.ts
-import { createServer } from "node:net";
-import { rmSync } from "node:fs";
-import { timingSafeEqual as timingSafeEqual2 } from "node:crypto";
-function serveHost(o) {
-  const { core, log } = o;
-  const want2 = Buffer.from(o.token);
-  function serve(sock) {
-    let authed = false;
-    let client2 = "?";
-    const calls = /* @__PURE__ */ new Map();
-    const send = (f3) => sock.writable && sock.write(JSON.stringify(f3) + "\n");
-    const pushes = /* @__PURE__ */ new Map();
-    let pushNo = 0;
-    let closed2;
-    const closedP = new Promise((r) => closed2 = r);
-    sock.on("data", frames(async (f3) => {
-      if (f3.t === "hello") {
-        const got = Buffer.from(String(f3.token ?? ""));
-        authed = got.length === want2.length && timingSafeEqual2(got, want2);
-        client2 = String(f3.client);
-        if (!authed) {
-          log("rejected", { client: client2 });
-          sock.destroy();
-        } else send({ t: "ready" });
-        return;
-      }
-      if (!authed) return sock.destroy();
-      if (f3.t === "pushed") {
-        pushes.get(f3.push)?.({ ok: f3.ok === true, ...f3.reason ? { reason: String(f3.reason).slice(0, 300) } : {} });
-        return;
-      }
-      if (f3.t === "cancel") {
-        calls.get(f3.id)?.abort();
-        log("cancel", { client: client2, id: f3.id });
-        return;
-      }
-      const ac = new AbortController();
-      calls.set(f3.id, ac);
-      try {
-        if (f3.t === "call" && f3.tool === "connect") {
-          if (!o.connect) throw new ReflexError("unavailable", [{ code: "unavailable", msg: "This host can't pair an iPad.", fix: "Use wait_for_user." }]);
-          const json = o.connect(f3.who);
-          log("call", { client: client2, tool: "connect", connected: Boolean(json.connected) });
-          send({ t: "result", id: f3.id, json, images: [], isError: json.ok === false });
-        } else if (f3.t === "call") {
-          const who2 = await o.authorize(f3.who, ac.signal, (p) => send({ t: "progress", id: f3.id, ...p }));
-          const started = Date.now();
-          if (f3.tool === "wait_for_user") log("wait_start", { client: client2, who: who2.name, args: f3.args });
-          const r = await core.call(f3.tool, f3.args, {
-            who: who2,
-            signal: ac.signal,
-            progress: (p) => send({ t: "progress", id: f3.id, ...p })
-          });
-          log("call", { client: client2, who: who2.name, tool: f3.tool, ms: Date.now() - started, isError: r.isError, ...r.isError ? { reason: r.json.reason } : {}, aborted: ac.signal.aborted });
-          send({
-            t: "result",
-            id: f3.id,
-            json: r.json,
-            images: r.images.map((b) => b.toString("base64")),
-            ...r.files?.length ? { files: r.files.map((x) => ({ id: x.id, name: x.name, mime: x.mime, data: x.data.toString("base64") })) } : {},
-            isError: r.isError
-          });
-        } else if (f3.t === "listen") {
-          if (!o.listen) throw new ReflexError("unavailable", [{ code: "unavailable", msg: "This host takes no push targets.", fix: "Use wait_for_user." }]);
-          const who2 = await o.authorize(f3.who, ac.signal);
-          const id2 = f3.id;
-          const target = o.listen({
-            who: who2,
-            adapter: String(f3.adapter),
-            config: f3.config && typeof f3.config === "object" ? f3.config : {},
-            client: client2,
-            closed: closedP,
-            push: (json, images, ms = 5e3) => new Promise((resolve5) => {
-              if (!sock.writable) return resolve5({ ok: false, reason: "connection closed" });
-              const n = ++pushNo;
-              const done = (r) => {
-                clearTimeout(timer);
-                pushes.delete(n);
-                resolve5(r);
-              };
-              const timer = setTimeout(() => done({ ok: false, reason: `no answer within ${ms} ms` }), ms);
-              pushes.set(n, done);
-              void closedP.then(() => done({ ok: false, reason: "connection closed" }));
-              send({ t: "push", id: id2, push: n, json, images: images.map((b) => b.toString("base64")), deadline: Date.now() + ms - 250 });
-            })
-          });
-          log("listening", { client: client2, who: who2.name, adapter: f3.adapter, target });
-          send({ t: "listening", id: id2, target, agent: who2.agent });
-        } else if (f3.t === "adapters") {
-          if (!o.adapters) throw new ReflexError("unavailable", [{ code: "unavailable", msg: "This host takes no push targets.", fix: "Use wait_for_user." }]);
-          const who2 = await o.authorize(f3.who, ac.signal);
-          const json = o.adapters(who2, String(f3.action), f3.args && typeof f3.args === "object" ? f3.args : {});
-          log("adapters", { client: client2, who: who2.name, action: f3.action });
-          send({ t: "result", id: f3.id, json, images: [], isError: false });
-        } else {
-          throw new ReflexError("invalid_input", [{ code: "invalid_input", msg: "Unknown receiver request.", fix: "Use wait_for_user or a Send adapter." }]);
-        }
-      } catch (e) {
-        if (e instanceof ReflexError) send({ t: "result", id: f3.id, json: { ok: false, ...e.body }, images: [], isError: true });
-        else send({ t: "failed", id: f3.id, message: String(e.message) });
-      } finally {
-        calls.delete(f3.id);
-      }
-    }));
-    sock.on("close", () => {
-      closed2();
-      if (calls.size) log("client_closed", { client: client2, held: [...calls.keys()] });
-      for (const ac of calls.values()) ac.abort();
-    });
-    sock.on("error", () => {
-    });
-  }
-  rmSync(o.socket, { force: true });
-  return new Promise((resolve5, reject) => {
-    const server = createServer(serve);
-    const open2 = /* @__PURE__ */ new Set();
-    server.on("connection", (s) => {
-      open2.add(s);
-      s.on("close", () => open2.delete(s));
-    });
-    const close = server.close.bind(server);
-    server.close = (cb) => {
-      for (const s of open2) s.destroy();
-      return close(cb);
-    };
-    server.once("error", reject);
-    server.listen(o.socket, () => resolve5(server));
-  });
-}
-var init_server = __esm({
-  "agent/src/host/server.ts"() {
-    "use strict";
-    init_capabilities();
-    init_rpc();
-  }
-});
-
-// link/routing.ts
-var recipient;
-var init_routing = __esm({
-  "link/routing.ts"() {
-    "use strict";
-    recipient = (agent) => `agent:${agent}`;
-  }
-});
-
-// link/adapters/surface.ts
-var SurfaceAdapter;
-var init_surface = __esm({
-  "link/adapters/surface.ts"() {
-    "use strict";
-    SurfaceAdapter = class {
-      #live = /* @__PURE__ */ new Map();
-      /** A surface's connection is live for `target` until it closes. */
-      attach(target, listener, onClose) {
-        const entry = { listener, since: Date.now() };
-        this.#live.set(target.id, entry);
-        void listener.closed.then(() => {
-          if (this.#live.get(target.id) === entry) this.#live.delete(target.id);
-          onClose();
-        });
-      }
-      liveSince(target) {
-        return this.#live.get(target.id)?.since;
-      }
-      async deliver(target, push) {
-        const live = this.#live.get(target.id);
-        if (!live) return { ok: false, reason: "the surface's connection is closed" };
-        const r = await live.listener.push(push.bundle, push.images);
-        return r.ok ? { ok: true } : { ok: false, reason: r.reason ?? "the surface did not take it" };
-      }
-    };
-  }
-});
-
-// link/adapters/claude-channel.ts
-var ClaudeChannel;
-var init_claude_channel = __esm({
-  "link/adapters/claude-channel.ts"() {
-    "use strict";
-    init_surface();
-    ClaudeChannel = class extends SurfaceAdapter {
-      name = "claude-channel";
-      config = {
-        type: "object",
-        required: ["harness"],
-        properties: {
-          harness: { type: "string", description: "The harness that opened the channel, from its MCP clientInfo." },
-          version: { type: "string" },
-          protocol: { type: "string", description: "The MCP protocol version the session negotiated." },
-          pid: { type: "integer", description: "The `reflex mcp` process holding the channel." }
-        },
-        additionalProperties: false
-      };
-    };
-  }
-});
-
-// link/adapters/webhook.ts
-import { createHmac as createHmac2 } from "node:crypto";
-function sign2(secret, timestamp, body) {
-  return `v1=${createHmac2("sha256", secret).update(`${timestamp}.${body}`).digest("hex")}`;
-}
-var TIMEOUT_MS, Webhook;
-var init_webhook = __esm({
-  "link/adapters/webhook.ts"() {
-    "use strict";
-    TIMEOUT_MS = Number(process.env.REFLEX_WEBHOOK_TIMEOUT_S ?? 5) * 1e3;
-    Webhook = class {
-      name = "webhook";
-      config = {
-        type: "object",
-        required: ["url"],
-        properties: {
-          url: { type: "string", pattern: "^https?://", maxLength: 2048, description: "Where each Send Bundle is POSTed." }
-        },
-        additionalProperties: false
-      };
-      retries = [1e3, 5e3];
-      /** A webhook is always reachable as far as the Link knows; whether it answers is found out by trying. */
-      liveSince(target) {
-        return target.created_at;
-      }
-      async deliver(target, push, ctx) {
-        if (!ctx.secret) return { ok: false, reason: "the target has no signing secret" };
-        const url = String(target.config.url);
-        const bundle = { ...push.bundle, images: (push.bundle.images ?? []).map((img, i) => ({ ...img, mime: "image/png", data: push.images[i]?.toString("base64") })) };
-        const body = JSON.stringify({ type: "send", delivery: `${push.space}/${push.send}`, target: target.id, agent: target.agent, attempt: ctx.attempt, bundle });
-        const timestamp = String(Date.now());
-        try {
-          const res = await fetch(url, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "user-agent": "reflex-link/0.1",
-              "reflex-delivery": `${push.space}/${push.send}`,
-              "reflex-attempt": String(ctx.attempt),
-              "reflex-timestamp": timestamp,
-              "reflex-signature": sign2(ctx.secret, timestamp, body)
-            },
-            body,
-            redirect: "manual",
-            signal: AbortSignal.timeout(TIMEOUT_MS)
-          });
-          await res.body?.cancel().catch(() => {
-          });
-          if (res.ok) return { ok: true };
-          const retry = res.status >= 500 || res.status === 429 || res.status === 408;
-          return { ok: false, reason: `the receiver answered ${res.status}`, retry };
-        } catch (e) {
-          const err = e;
-          const reason = err.name === "TimeoutError" ? `no answer within ${TIMEOUT_MS / 1e3} s` : `could not reach it (${err.cause?.code ?? err.message})`;
-          return { ok: false, reason, retry: true };
-        }
-      }
-    };
-  }
-});
-
-// link/adapters/dispatch.ts
-var Dispatcher;
-var init_dispatch = __esm({
-  "link/adapters/dispatch.ts"() {
-    "use strict";
-    init_routing();
-    Dispatcher = class {
-      #o;
-      #inFlight = /* @__PURE__ */ new Set();
-      /** Sends whose push failed and will be tried again: by Send and recipient, which target, how many tries, when. */
-      #retries = /* @__PURE__ */ new Map();
-      #scheduled = false;
-      #running = Promise.resolve();
-      #stop = new AbortController();
-      constructor(o) {
-        this.#o = o;
-      }
-      /** Whether a push of this Send to this recipient is under way. */
-      inFlight(space, send, to) {
-        return this.#inFlight.has(`${space}|${send}|${to}`);
-      }
-      start() {
-        const loop = async () => {
-          while (!this.#stop.signal.aborted) {
-            await this.#o.inbox.next(this.#stop.signal);
-            this.kick();
-          }
-        };
-        void loop();
-      }
-      stop() {
-        this.#stop.abort();
-      }
-      /** Runs a pass after the waits the arrival woke have taken their Sends. */
-      kick() {
-        if (this.#scheduled) return;
-        this.#scheduled = true;
-        setImmediate(() => {
-          this.#scheduled = false;
-          this.#running = this.#running.then(() => this.#pass()).catch((e) => this.#o.log("push_error", { error: String(e.stack ?? e) }));
-        });
-      }
-      /** The live target each Agent's Sends go to: its most recently seen one. */
-      #targets() {
-        const out3 = /* @__PURE__ */ new Map();
-        for (const target of this.#o.store.all()) {
-          if (out3.has(target.agent)) continue;
-          const adapter = this.#o.adapters.find((a) => a.name === target.adapter);
-          const since = adapter?.liveSince(target);
-          if (adapter && since !== void 0) out3.set(target.agent, { target, adapter, since });
-        }
-        return [...out3.values()];
-      }
-      async #pass() {
-        await Promise.all(this.#targets().map((t) => this.#pushTo(t.target, t.adapter, t.since)));
-      }
-      async #pushTo(target, adapter, since) {
-        const { inbox, store, log } = this.#o;
-        if (!this.#o.approved(target.agent)) return;
-        const to = recipient(target.agent);
-        for (const e of inbox.pending(to)) {
-          const key = `${e.space}|${e.send}|${to}`;
-          const retry = this.#retries.get(key);
-          if (e.state !== "ready") {
-            this.#retries.delete(key);
-            continue;
-          }
-          if (e.arrived_at < since || this.#inFlight.has(key)) continue;
-          if (retry) {
-            if (retry.target !== target.id || Date.now() < retry.due) continue;
-          } else if (store.tried(e.space, e.send, to)) continue;
-          if (adapter.liveSince(target) === void 0) break;
-          const attempt = (retry?.tries ?? 0) + 1;
-          this.#inFlight.add(key);
-          const seq = store.begin(target, e.space, e.send, to);
-          const started = Date.now();
-          let outcome;
-          try {
-            const built = await this.#o.bundle(target.agent, e.space, e.send);
-            outcome = built ? await adapter.deliver(target, { space: e.space, send: e.send, ...built }, { secret: target.has_secret ? store.secret(target.id) : void 0, attempt, log: (m) => log("push_log", { target: target.id, m }) }) : { ok: false, reason: "the Send could not be read" };
-          } catch (err) {
-            outcome = { ok: false, reason: String(err.message ?? err).slice(0, 300) };
-          } finally {
-            this.#inFlight.delete(key);
-          }
-          const wait = !outcome.ok && outcome.retry ? adapter.retries?.[attempt - 1] : void 0;
-          if (outcome.ok) {
-            this.#retries.delete(key);
-            inbox.mark(e.space, e.send, to, "delivered");
-            store.end(seq, "pushed");
-            store.touch(target.id);
-          } else if (wait !== void 0) {
-            this.#retries.set(key, { target: target.id, tries: attempt, due: Date.now() + wait });
-            setTimeout(() => this.kick(), wait).unref?.();
-            store.end(seq, "failed", `${outcome.reason}; try ${attempt}, again in ${Math.round(wait / 1e3)} s`);
-          } else {
-            this.#retries.delete(key);
-            inbox.mark(e.space, e.send, to, "failed", `push: ${outcome.reason}`);
-            store.end(seq, "failed", outcome.reason);
-          }
-          log("push", { target: target.id, adapter: adapter.name, agent: target.agent, space: e.space, send: e.send, attempt, ok: outcome.ok, ...outcome.ok ? {} : { reason: outcome.reason, ...wait !== void 0 ? { retry_in_ms: wait } : {} }, ms: Date.now() - started });
-        }
-      }
-    };
-  }
-});
-
-// link/adapters/store.ts
-import { randomBytes as randomBytes7 } from "node:crypto";
-import { existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync4, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join4 } from "node:path";
-var SCHEMA2, PushStore;
-var init_store = __esm({
-  "link/adapters/store.ts"() {
-    "use strict";
-    SCHEMA2 = `
-CREATE TABLE IF NOT EXISTS push_targets (
-  id TEXT PRIMARY KEY, agent TEXT NOT NULL, adapter TEXT NOT NULL, instance TEXT NOT NULL,
-  config TEXT NOT NULL, callback TEXT NOT NULL, created_at INTEGER NOT NULL, seen_at INTEGER NOT NULL,
-  UNIQUE (agent, adapter, instance)
-);
-CREATE TABLE IF NOT EXISTS push_attempts (
-  seq INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT NOT NULL, adapter TEXT NOT NULL,
-  space TEXT NOT NULL, send TEXT NOT NULL, recipient TEXT NOT NULL,
-  started_at INTEGER NOT NULL, ended_at INTEGER, outcome TEXT NOT NULL, reason TEXT
-);
-CREATE INDEX IF NOT EXISTS push_attempts_send ON push_attempts(space, send, recipient);
-`;
-    PushStore = class {
-      #db;
-      #dir;
-      constructor(db, home3) {
-        this.#db = db;
-        this.#dir = join4(home3, "adapters");
-        db.exec(SCHEMA2);
-        db.prepare("UPDATE push_attempts SET outcome = 'failed', reason = 'the Link stopped during the push', ended_at = ? WHERE outcome = 'pushing'").run(Date.now());
-      }
-      #secretFile(id2) {
-        return join4(this.#dir, `${id2}.secret`);
-      }
-      #target(r) {
-        return {
-          id: r.id,
-          agent: r.agent,
-          adapter: r.adapter,
-          config: JSON.parse(r.config),
-          callback: r.callback,
-          has_secret: existsSync4(this.#secretFile(r.id)),
-          created_at: r.created_at,
-          seen_at: r.seen_at
-        };
-      }
-      /** Creates or refreshes the target for one Agent, adapter and instance (a session, a URL). */
-      upsert(t, now = Date.now()) {
-        this.#db.prepare(
-          `INSERT INTO push_targets (id, agent, adapter, instance, config, callback, created_at, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (agent, adapter, instance) DO UPDATE SET config = excluded.config, callback = excluded.callback, seen_at = excluded.seen_at`
-        ).run(`pt_${randomBytes7(6).toString("hex")}`, t.agent, t.adapter, t.instance, JSON.stringify(t.config), t.callback, now, now);
-        return this.#target(this.#db.prepare("SELECT * FROM push_targets WHERE agent = ? AND adapter = ? AND instance = ?").get(t.agent, t.adapter, t.instance));
-      }
-      get(id2) {
-        const r = this.#db.prepare("SELECT * FROM push_targets WHERE id = ?").get(id2);
-        return r && this.#target(r);
-      }
-      all() {
-        return this.#db.prepare("SELECT * FROM push_targets ORDER BY seen_at DESC").all().map((r) => this.#target(r));
-      }
-      /** Removes a target and its secret. Its attempts stay, as history. */
-      remove(id2) {
-        rmSync2(this.#secretFile(id2), { force: true });
-        return Number(this.#db.prepare("DELETE FROM push_targets WHERE id = ?").run(id2).changes) > 0;
-      }
-      touch(id2, now = Date.now()) {
-        this.#db.prepare("UPDATE push_targets SET seen_at = ? WHERE id = ?").run(now, id2);
-      }
-      /** Keeps a target's secret (a webhook signing key, a token) in its own 0600 file. */
-      setSecret(id2, secret) {
-        mkdirSync4(this.#dir, { recursive: true, mode: 448 });
-        writeFileSync3(this.#secretFile(id2), secret, { mode: 384 });
-      }
-      secret(id2) {
-        const f3 = this.#secretFile(id2);
-        return existsSync4(f3) ? readFileSync4(f3, "utf8") : void 0;
-      }
-      /** Records that a push started; durable before the adapter runs. */
-      begin(target, space, send, recipient2, now = Date.now()) {
-        return Number(
-          this.#db.prepare("INSERT INTO push_attempts (target, adapter, space, send, recipient, started_at, outcome) VALUES (?, ?, ?, ?, ?, ?, 'pushing')").run(target.id, target.adapter, space, send, recipient2, now).lastInsertRowid
-        );
-      }
-      end(seq, outcome, reason, now = Date.now()) {
-        this.#db.prepare("UPDATE push_attempts SET outcome = ?, reason = ?, ended_at = ? WHERE seq = ?").run(outcome, reason ?? null, now, seq);
-      }
-      /** Whether this Send was ever pushed to this recipient (any outcome). */
-      tried(space, send, recipient2) {
-        return this.#db.prepare("SELECT 1 FROM push_attempts WHERE space = ? AND send = ? AND recipient = ?").get(space, send, recipient2) !== void 0;
-      }
-      attempts(o = {}) {
-        return this.#db.prepare(
-          `SELECT * FROM push_attempts WHERE (? IS NULL OR space = ?) AND (? IS NULL OR send = ?) ORDER BY seq DESC LIMIT ?`
-        ).all(o.space ?? null, o.space ?? null, o.send ?? null, o.send ?? null, o.limit ?? 50);
-      }
     };
   }
 });
@@ -5342,9 +3151,9 @@ var require_compile = __commonJS({
       if (_sch)
         return _sch;
       const rootId = (0, resolve_1.getFullPath)(this.opts.uriResolver, sch.root.baseId);
-      const { es5, lines } = this.opts.code;
+      const { es5, lines: lines2 } = this.opts.code;
       const { ownProperties } = this.opts;
-      const gen = new codegen_1.CodeGen(this.scope, { es5, lines, ownProperties });
+      const gen = new codegen_1.CodeGen(this.scope, { es5, lines: lines2, ownProperties });
       let _ValidationError;
       if (sch.$async) {
         _ValidationError = gen.scopeValue("Error", {
@@ -5429,7 +3238,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve5.call(this, root, ref);
+      let _sch = resolve4.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a3 = root.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
         const { schemaId } = this.opts;
@@ -5456,7 +3265,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve5(root, ref) {
+    function resolve4(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -6320,7 +4129,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve5(baseURI, relativeURI, options) {
+    function resolve4(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -6711,7 +4520,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve5,
+      resolve: resolve4,
       resolveComponent,
       equal,
       serialize,
@@ -6851,8 +4660,8 @@ var require_core = __commonJS({
         this._loading = {};
         this._cache = /* @__PURE__ */ new Map();
         opts = this.opts = { ...opts, ...requiredOptions(opts) };
-        const { es5, lines } = this.opts.code;
-        this.scope = new codegen_2.ValueScope({ scope: {}, prefixes: EXT_SCOPE_NAMES, es5, lines });
+        const { es5, lines: lines2 } = this.opts.code;
+        this.scope = new codegen_2.ValueScope({ scope: {}, prefixes: EXT_SCOPE_NAMES, es5, lines: lines2 });
         this.logger = getLogger(opts.logger);
         const formatOpt = opts.validateFormats;
         opts.validateFormats = false;
@@ -9949,8 +7758,843 @@ var require__ = __commonJS({
   }
 });
 
+// agent/src/capabilities/native-bundle.ts
+function inside(points, p) {
+  let hit = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const a = points[i], b = points[j];
+    if (a[1] > p[1] !== b[1] > p[1] && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) hit = !hit;
+  }
+  return hit;
+}
+function closed(s) {
+  if (s.points.length < 8 || !s.points.slice(Math.floor(s.points.length / 2)).some((p) => distance(p, s.points[0]) < 0.3 * size(s)))
+    return false;
+  const enclosed = Math.abs(
+    s.points.reduce((v, p, i) => {
+      const q2 = s.points[(i + 1) % s.points.length];
+      return v + p[0] * q2[1] - q2[0] * p[1];
+    }, 0)
+  ) / 2;
+  return length(s) > 2.2 * size(s) || length(s) > 1.4 * (s.bounds[2] + s.bounds[3]) && enclosed > 0.4 * s.bounds[2] * s.bounds[3];
+}
+function groups(send) {
+  const result = [], used = /* @__PURE__ */ new Set();
+  for (const h of send.hints ?? []) {
+    const strokes = send.strokes.filter((s) => h.strokes.includes(s.id) && !used.has(s.id));
+    if (!strokes.length) continue;
+    for (const s of strokes) used.add(s.id);
+    result.push({ strokes, bounds: union(strokes.map((s) => s.bounds)), text: h.text, confidence: h.confidence });
+  }
+  let open2;
+  for (const s of [...send.strokes].sort((a, b) => a.at - b.at).filter((s2) => !used.has(s2.id))) {
+    const last = open2?.strokes.at(-1);
+    const quick = last && s.at - (last.at + (last.points.at(-1)?.[2] ?? 0)) <= 1500;
+    const near = open2 && size(s) <= 90 && area(pad(open2.bounds, 50), s.bounds) > 0;
+    const over = last && area(s.bounds, last.bounds) >= 0.5 * Math.min(s.bounds[2] * s.bounds[3], last.bounds[2] * last.bounds[3]);
+    if (open2 && quick && (near || over)) {
+      open2.strokes.push(s);
+      open2.bounds = union([open2.bounds, s.bounds]);
+    } else {
+      open2 = { strokes: [s], bounds: s.bounds };
+      result.push(open2);
+    }
+  }
+  return result.sort((a, b) => Math.min(...a.strokes.map((s) => s.at)) - Math.min(...b.strokes.map((s) => s.at)));
+}
+function classify(g, targets) {
+  const ss = g.strokes, main4 = [...ss].sort((a, b) => length(b) - length(a))[0];
+  const own2 = new Set(ss.map((s) => s.id));
+  const ts = targets.filter((t) => !own2.has(t.id));
+  const nearest = (p2, reach) => ts.filter((t) => boxDistance(t.bounds, p2) <= reach).sort(
+    (a, b) => boxDistance(a.bounds, p2) - boxDistance(b.bounds, p2) || a.bounds[2] * a.bounds[3] - b.bounds[2] * b.bounds[3]
+  )[0];
+  const under = () => ts.filter((t) => area(t.bounds, g.bounds) > 0).sort(
+    (a, b) => area(b.bounds, g.bounds) / Math.max(1, b.bounds[2] * b.bounds[3]) - area(a.bounds, g.bounds) / Math.max(1, a.bounds[2] * a.bounds[3])
+  )[0] ?? nearest(center(g.bounds), 30);
+  if (closed(main4)) {
+    const on = ts.filter(
+      (t) => t.bounds[2] <= 1.3 * main4.bounds[2] && t.bounds[3] <= 1.3 * main4.bounds[3] && inside(main4.points, center(t.bounds))
+    ).map((t) => t.id);
+    if (on.length) return { kind: "circle", on: on.slice(0, 20) };
+  }
+  if (g.text) return { kind: "writing", text_guess: g.text, confidence: g.confidence };
+  if (ss.length === 2 && ss.every((s) => straight(s) > 0.8 && size(s) > 20) && area(ss[0].bounds, ss[1].bounds) >= 0.5 * Math.min(ss[0].bounds[2] * ss[0].bounds[3], ss[1].bounds[2] * ss[1].bounds[3])) {
+    const t = under();
+    return { kind: "cross", ...t ? { on: [t.id] } : {} };
+  }
+  const first = main4.points[0], last = main4.points[main4.points.length - 1];
+  const low = main4.points.reduce((best, p2, i) => p2[1] > main4.points[best][1] ? i : best, 0), p = main4.points[low];
+  if (ss.length === 1 && main4.points.length >= 4 && size(main4) <= 220 && low / (main4.points.length - 1) >= 0.1 && low / (main4.points.length - 1) <= 0.6 && first[1] < p[1] - 0.2 * main4.bounds[3] && last[1] < first[1] && last[0] > p[0] && p[0] > first[0] && Math.abs(last[1] - p[1]) > 1.3 * Math.abs(p[1] - first[1])) {
+    const t = under();
+    return { kind: "check", ...t ? { on: [t.id] } : {} };
+  }
+  if (length(main4) >= 50 && straight(main4) > 0.55) {
+    const tip = main4.points.reduce((a, b) => distance(first, a) > distance(first, b) ? a : b);
+    const from = nearest(first, 40), to = nearest(tip, 40);
+    if (from && to && from.id !== to.id) return { kind: "arrow", from: from.id, to: to.id };
+    if (ss.length === 1 && straight(main4) > 0.85) {
+      const middle = [(first[0] + tip[0]) / 2, (first[1] + tip[1]) / 2];
+      const through = ts.filter(
+        (t) => boxDistance([t.bounds[0], t.bounds[1] + 0.2 * t.bounds[3], t.bounds[2], 0.6 * t.bounds[3]], middle) === 0 && distance(first, tip) >= 0.45 * t.bounds[2]
+      ).sort((a, b) => a.bounds[2] * a.bounds[3] - b.bounds[2] * b.bounds[3])[0];
+      if (through) return { kind: "strikethrough", on: [through.id] };
+      if (main4.bounds[3] <= Math.max(30, 0.35 * main4.bounds[2])) {
+        const below = ts.filter(
+          (t) => main4.bounds[1] >= t.bounds[1] + 0.65 * t.bounds[3] && main4.bounds[1] <= t.bounds[1] + t.bounds[3] + 30 && area([main4.bounds[0], t.bounds[1], main4.bounds[2], t.bounds[3]], t.bounds) >= 0.4 * t.bounds[2] * t.bounds[3]
+        )[0];
+        if (below) return { kind: "underline", on: [below.id] };
+      }
+    }
+    if ((ss.length > 1 || straight(main4) < 0.92) && (from || to) && from?.id !== to?.id && Math.max(g.bounds[2], g.bounds[3]) >= 60)
+      return { kind: "arrow", ...from ? { from: from.id } : {}, ...to ? { to: to.id } : {} };
+  }
+  const near = nearest(center(g.bounds), 100);
+  return {
+    kind: ss.length >= 2 && ss.every((s) => size(s) <= 120) ? "writing" : "ink",
+    ...near ? { near: near.id } : {}
+  };
+}
+function nativeBundle(send, opts) {
+  const gs = groups(send);
+  const targets = (send.context ?? send.strokes).map((s) => ({ id: s.id, bounds: s.bounds }));
+  const images = [], imageInfo = [];
+  for (const crop of send.crops ?? []) {
+    const bytes = opts.asset(crop.asset);
+    if (bytes) {
+      images.push(bytes);
+      imageInfo.push({
+        n: images.length,
+        kind: crop.kind ?? "recent_strokes",
+        shows: crop.kind === "screen" ? "Full visible board at Send, plus 15% on every side; no Reflex controls. viewport locates the visible screen in board coordinates within bounds." : "Close-up of the recent strokes",
+        bounds: crop.bounds,
+        ...crop.kind === "screen" ? { viewport: send.viewport } : {}
+      });
+    }
+  }
+  const marks = gs.map((g, i) => {
+    const mark = {
+      id: `m${i + 1}`,
+      ...classify(g, targets),
+      strokes: g.strokes.map((s) => s.id),
+      bounds: g.bounds,
+      at: Math.min(...g.strokes.map((s) => s.at)),
+      end: Math.max(...g.strokes.map((s) => s.at + (s.points.at(-1)?.[2] ?? 0)))
+    };
+    const containsMark = (im) => g.bounds[0] + g.bounds[2] >= im.bounds[0] && g.bounds[0] <= im.bounds[0] + im.bounds[2] && g.bounds[1] + g.bounds[3] >= im.bounds[1] && g.bounds[1] <= im.bounds[1] + im.bounds[3];
+    const inImages = imageInfo.filter(containsMark);
+    const image = inImages.find((im) => im.kind === "recent_strokes") ?? inImages[0];
+    return { ...mark, ...image ? { image: image.n, images: inImages.map((im) => im.n) } : {} };
+  });
+  const words = [...send.words ?? []].sort((a, b) => a.start_ms - b.start_ms);
+  const timed = [...marks].sort((a, b) => a.at - b.at), transcript = [];
+  let k = 0;
+  for (const w of words) {
+    while (k < timed.length && timed[k].at < w.start_ms) transcript.push(`[${timed[k++].id}]`);
+    transcript.push(w.text);
+  }
+  while (k < timed.length) transcript.push(`[${timed[k++].id}]`);
+  return {
+    json: {
+      kind: "send",
+      send: send.send,
+      space: send.space,
+      from: { person: send.by.person, name: opts.personName },
+      trigger: send.trigger,
+      ...send.said ? { said: words.length ? transcript.join(" ") : send.said } : {},
+      ...words.length ? { words } : {},
+      marks,
+      strokes: send.strokes,
+      scene: targets,
+      changes: [],
+      viewport: send.viewport,
+      images: imageInfo,
+      also_sent_to: opts.others,
+      redelivered: opts.redelivered,
+      pending_after: opts.pendingAfter,
+      next: opts.pushed ? `Answer the person in your reply, then acknowledge with wait_for_user(after: '${send.send}', timeout_s: 0) and end your turn; the next Send is pushed to you.` : `Do what the person asks and write your answer in your reply (they read only your reply). Then call wait_for_user(after: '${send.send}') to acknowledge this Send and wait for the next one.`
+    },
+    images
+  };
+}
+var union, distance, length, straight, size, area, pad, center, boxDistance;
+var init_native_bundle = __esm({
+  "agent/src/capabilities/native-bundle.ts"() {
+    "use strict";
+    union = (bs) => {
+      const x = Math.min(...bs.map((b) => b[0])), y = Math.min(...bs.map((b) => b[1]));
+      return [x, y, Math.max(...bs.map((b) => b[0] + b[2])) - x, Math.max(...bs.map((b) => b[1] + b[3])) - y];
+    };
+    distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    length = (s) => s.points.slice(1).reduce((n, p, i) => n + distance(p, s.points[i]), 0);
+    straight = (s) => distance(s.points[0], s.points[s.points.length - 1]) / Math.max(1, length(s));
+    size = (s) => Math.max(s.bounds[2], s.bounds[3]);
+    area = (a, b) => Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
+    pad = (b, n) => [b[0] - n, b[1] - n, b[2] + 2 * n, b[3] + 2 * n];
+    center = (b) => [b[0] + b[2] / 2, b[1] + b[3] / 2];
+    boxDistance = (b, p) => Math.hypot(Math.max(b[0] - p[0], 0, p[0] - b[0] - b[2]), Math.max(b[1] - p[1], 0, p[1] - b[1] - b[3]));
+  }
+});
+
+// agent/src/capabilities/index.ts
+var ReflexError, Core;
+var init_capabilities = __esm({
+  "agent/src/capabilities/index.ts"() {
+    "use strict";
+    init_native_bundle();
+    ReflexError = class extends Error {
+      body;
+      constructor(reason, errors, next) {
+        super(errors[0]?.msg ?? reason);
+        this.body = { reason, errors, ...next ? { next } : {} };
+      }
+    };
+    Core = class {
+      #names = /* @__PURE__ */ new Map();
+      opts;
+      constructor(opts) {
+        this.opts = opts;
+        this.#names.set(opts.person.person, opts.person.name);
+        for (const [id2, name] of Object.entries(opts.names ?? {})) this.#names.set(id2, name);
+      }
+      name(id2, name) {
+        if (name) this.#names.set(id2, name);
+      }
+      async call(tool, args2, ctx) {
+        this.name(ctx.who.agent, ctx.who.name);
+        const a = args2 ?? {};
+        try {
+          if (tool !== "wait_for_user") throw new Error("Use wait_for_user to receive the person's Sends.");
+          const timeout = a.timeout_s === void 0 ? 300 : a.timeout_s;
+          if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout < 0 || timeout > 3600 || a.after !== void 0 && typeof a.after !== "string" || a.space !== void 0 && typeof a.space !== "string")
+            throw new Error("Pass timeout_s between 0 and 3600, and optional after and space strings.");
+          if (typeof a.after === "string") this.opts.inbox.ack(ctx.who.agent, a.after);
+          const started = Date.now(), deadline = started + timeout * 1e3;
+          for (; ; ) {
+            const d = this.opts.inbox.take(ctx.who.agent, { ...typeof a.space === "string" ? { space: a.space } : {} });
+            if (d)
+              return { ...this.project(d.send, ctx.who.agent, d.redelivered), isError: false };
+            const left = deadline - Date.now();
+            if (left <= 0 || ctx.signal?.aborted) break;
+            const tick = new AbortController(), stop2 = () => tick.abort();
+            ctx.signal?.addEventListener("abort", stop2, { once: true });
+            const timer = setTimeout(stop2, Math.min(left, (this.opts.progressEvery ?? 15) * 1e3));
+            try {
+              await this.opts.inbox.arrival(ctx.who.agent, tick.signal);
+            } finally {
+              clearTimeout(timer);
+              ctx.signal?.removeEventListener("abort", stop2);
+            }
+            ctx.progress?.({ elapsed_s: Math.round((Date.now() - started) / 1e3), timeout_s: timeout });
+          }
+          return {
+            json: {
+              status: "still_waiting",
+              pending_sends: this.opts.inbox.pending(ctx.who.agent),
+              next: "Call wait_for_user again."
+            },
+            images: [],
+            isError: false
+          };
+        } catch (e) {
+          return {
+            json: {
+              ok: false,
+              reason: "invalid_input",
+              errors: [
+                {
+                  code: "invalid_input",
+                  msg: e.message,
+                  fix: "Use wait_for_user with after, space and timeout_s."
+                }
+              ]
+            },
+            images: [],
+            isError: true
+          };
+        }
+      }
+      project(send, agent, redelivered, pushed = false) {
+        const result = nativeBundle(send, {
+          personName: this.#names.get(send.by.person) ?? send.by.person,
+          others: this.opts.inbox.recipients(send.send).filter((id2) => id2 !== agent).map((id2) => this.#names.get(id2) ?? id2),
+          redelivered,
+          pushed,
+          pendingAfter: Math.max(0, this.opts.inbox.pending(agent) - 1),
+          asset: (hash) => this.opts.assets.get(hash)
+        });
+        this.opts.log?.("send_delivered", { agent, send: send.send, marks: result.json.marks.length, pushed, redelivered });
+        return result;
+      }
+      bundleFor(who2, space, id2) {
+        const send = this.opts.getSend(id2);
+        if (!send || send.space !== space) return void 0;
+        this.name(who2.agent, who2.name);
+        return this.project(send, who2.agent, false, true);
+      }
+    };
+  }
+});
+
+// agent/src/host/server.ts
+import { timingSafeEqual as timingSafeEqual2 } from "node:crypto";
+import { rmSync } from "node:fs";
+import { createServer } from "node:net";
+function serveHost(o) {
+  const { core, log } = o;
+  const want2 = Buffer.from(o.token);
+  function serve(sock) {
+    let authed = false;
+    let client2 = "?";
+    const calls = /* @__PURE__ */ new Map();
+    const send = (f3) => sock.writable && sock.write(`${JSON.stringify(f3)}
+`);
+    const pushes = /* @__PURE__ */ new Map();
+    let pushNo = 0;
+    let closed2;
+    const closedP = new Promise((r) => closed2 = r);
+    sock.on(
+      "data",
+      frames(async (f3) => {
+        if (f3.t === "hello") {
+          const got = Buffer.from(String(f3.token ?? ""));
+          authed = got.length === want2.length && timingSafeEqual2(got, want2);
+          client2 = String(f3.client);
+          if (!authed) {
+            log("rejected", { client: client2 });
+            sock.destroy();
+          } else send({ t: "ready" });
+          return;
+        }
+        if (!authed) {
+          sock.destroy();
+          return;
+        }
+        if (f3.t === "pushed") {
+          pushes.get(f3.push)?.({ ok: f3.ok === true, ...f3.reason ? { reason: String(f3.reason).slice(0, 300) } : {} });
+          return;
+        }
+        if (f3.t === "cancel") {
+          calls.get(f3.id)?.abort();
+          log("cancel", { client: client2, id: f3.id });
+          return;
+        }
+        const ac = new AbortController();
+        calls.set(f3.id, ac);
+        try {
+          if (f3.t === "call" && f3.tool === "connect") {
+            if (!o.connect)
+              throw new ReflexError("unavailable", [
+                { code: "unavailable", msg: "This host can't pair an iPad.", fix: "Use wait_for_user." }
+              ]);
+            const json = o.connect(f3.who);
+            log("call", { client: client2, tool: "connect", connected: Boolean(json.connected) });
+            send({ t: "result", id: f3.id, json, images: [], isError: json.ok === false });
+          } else if (f3.t === "call") {
+            const who2 = await o.authorize(f3.who, ac.signal, (p) => send({ t: "progress", id: f3.id, ...p }));
+            const started = Date.now();
+            if (f3.tool === "wait_for_user")
+              log("wait_start", { client: client2, who: who2.name, args: f3.args });
+            const r = await core.call(f3.tool, f3.args, {
+              who: who2,
+              signal: ac.signal,
+              progress: (p) => send({ t: "progress", id: f3.id, ...p })
+            });
+            log("call", {
+              client: client2,
+              who: who2.name,
+              tool: f3.tool,
+              ms: Date.now() - started,
+              isError: r.isError,
+              ...r.isError ? { reason: r.json.reason } : {},
+              aborted: ac.signal.aborted
+            });
+            send({
+              t: "result",
+              id: f3.id,
+              json: r.json,
+              images: r.images.map((b) => b.toString("base64")),
+              ...r.files?.length ? {
+                files: r.files.map((x) => ({
+                  id: x.id,
+                  name: x.name,
+                  mime: x.mime,
+                  data: x.data.toString("base64")
+                }))
+              } : {},
+              isError: r.isError
+            });
+          } else if (f3.t === "listen") {
+            if (!o.listen)
+              throw new ReflexError("unavailable", [
+                { code: "unavailable", msg: "This host takes no push targets.", fix: "Use wait_for_user." }
+              ]);
+            const who2 = await o.authorize(f3.who, ac.signal);
+            const id2 = f3.id;
+            const target = o.listen({
+              who: who2,
+              adapter: String(f3.adapter),
+              config: f3.config && typeof f3.config === "object" ? f3.config : {},
+              client: client2,
+              closed: closedP,
+              push: (json, images, ms = 5e3) => new Promise((resolve4) => {
+                if (!sock.writable) return resolve4({ ok: false, reason: "connection closed" });
+                const n = ++pushNo;
+                const done = (r) => {
+                  clearTimeout(timer);
+                  pushes.delete(n);
+                  resolve4(r);
+                };
+                const timer = setTimeout(() => done({ ok: false, reason: `no answer within ${ms} ms` }), ms);
+                pushes.set(n, done);
+                void closedP.then(() => done({ ok: false, reason: "connection closed" }));
+                send({
+                  t: "push",
+                  id: id2,
+                  push: n,
+                  json,
+                  images: images.map((b) => b.toString("base64")),
+                  deadline: Date.now() + ms - 250
+                });
+              })
+            });
+            log("listening", { client: client2, who: who2.name, adapter: f3.adapter, target });
+            send({ t: "listening", id: id2, target, agent: who2.agent });
+          } else if (f3.t === "adapters") {
+            if (!o.adapters)
+              throw new ReflexError("unavailable", [
+                { code: "unavailable", msg: "This host takes no push targets.", fix: "Use wait_for_user." }
+              ]);
+            const who2 = await o.authorize(f3.who, ac.signal);
+            const json = o.adapters(who2, String(f3.action), f3.args && typeof f3.args === "object" ? f3.args : {});
+            log("adapters", { client: client2, who: who2.name, action: f3.action });
+            send({ t: "result", id: f3.id, json, images: [], isError: false });
+          } else {
+            throw new ReflexError("invalid_input", [
+              { code: "invalid_input", msg: "Unknown receiver request.", fix: "Use wait_for_user or a Send adapter." }
+            ]);
+          }
+        } catch (e) {
+          if (e instanceof ReflexError)
+            send({ t: "result", id: f3.id, json: { ok: false, ...e.body }, images: [], isError: true });
+          else send({ t: "failed", id: f3.id, message: String(e.message) });
+        } finally {
+          calls.delete(f3.id);
+        }
+      })
+    );
+    sock.on("close", () => {
+      closed2();
+      if (calls.size) log("client_closed", { client: client2, held: [...calls.keys()] });
+      for (const ac of calls.values()) ac.abort();
+    });
+    sock.on("error", () => {
+    });
+  }
+  rmSync(o.socket, { force: true });
+  return new Promise((resolve4, reject) => {
+    const server = createServer(serve);
+    const open2 = /* @__PURE__ */ new Set();
+    server.on("connection", (s) => {
+      open2.add(s);
+      s.on("close", () => open2.delete(s));
+    });
+    const close = server.close.bind(server);
+    server.close = (cb) => {
+      for (const s of open2) s.destroy();
+      return close(cb);
+    };
+    server.once("error", reject);
+    server.listen(o.socket, () => resolve4(server));
+  });
+}
+var init_server = __esm({
+  "agent/src/host/server.ts"() {
+    "use strict";
+    init_capabilities();
+    init_rpc();
+  }
+});
+
+// link/adapters/surface.ts
+var SurfaceAdapter;
+var init_surface = __esm({
+  "link/adapters/surface.ts"() {
+    "use strict";
+    SurfaceAdapter = class {
+      #live = /* @__PURE__ */ new Map();
+      /** A surface's connection is live for `target` until it closes. */
+      attach(target, listener, onClose) {
+        const entry = { listener, since: Date.now() };
+        this.#live.set(target.id, entry);
+        void listener.closed.then(() => {
+          if (this.#live.get(target.id) === entry) this.#live.delete(target.id);
+          onClose();
+        });
+      }
+      liveSince(target) {
+        return this.#live.get(target.id)?.since;
+      }
+      async deliver(target, push) {
+        const live = this.#live.get(target.id);
+        if (!live) return { ok: false, reason: "the surface's connection is closed" };
+        const r = await live.listener.push(push.bundle, push.images);
+        return r.ok ? { ok: true } : { ok: false, reason: r.reason ?? "the surface did not take it" };
+      }
+    };
+  }
+});
+
+// link/adapters/claude-channel.ts
+var ClaudeChannel;
+var init_claude_channel = __esm({
+  "link/adapters/claude-channel.ts"() {
+    "use strict";
+    init_surface();
+    ClaudeChannel = class extends SurfaceAdapter {
+      name = "claude-channel";
+      config = {
+        type: "object",
+        required: ["harness"],
+        properties: {
+          harness: { type: "string", description: "The harness that opened the channel, from its MCP clientInfo." },
+          version: { type: "string" },
+          protocol: { type: "string", description: "The MCP protocol version the session negotiated." },
+          pid: { type: "integer", description: "The `reflex mcp` process holding the channel." }
+        },
+        additionalProperties: false
+      };
+    };
+  }
+});
+
+// link/routing.ts
+var recipient;
+var init_routing = __esm({
+  "link/routing.ts"() {
+    "use strict";
+    recipient = (agent) => `agent:${agent}`;
+  }
+});
+
+// link/adapters/dispatch.ts
+var Dispatcher;
+var init_dispatch = __esm({
+  "link/adapters/dispatch.ts"() {
+    "use strict";
+    init_routing();
+    Dispatcher = class {
+      #o;
+      #inFlight = /* @__PURE__ */ new Set();
+      /** Sends whose push failed and will be tried again: by Send and recipient, which target, how many tries, when. */
+      #retries = /* @__PURE__ */ new Map();
+      #scheduled = false;
+      #running = Promise.resolve();
+      #stop = new AbortController();
+      constructor(o) {
+        this.#o = o;
+      }
+      /** Whether a push of this Send to this recipient is under way. */
+      inFlight(space, send, to) {
+        return this.#inFlight.has(`${space}|${send}|${to}`);
+      }
+      start() {
+        const loop = async () => {
+          while (!this.#stop.signal.aborted) {
+            await this.#o.inbox.next(this.#stop.signal);
+            this.kick();
+          }
+        };
+        void loop();
+      }
+      stop() {
+        this.#stop.abort();
+      }
+      /** Runs a pass after the waits the arrival woke have taken their Sends. */
+      kick() {
+        if (this.#scheduled) return;
+        this.#scheduled = true;
+        setImmediate(() => {
+          this.#scheduled = false;
+          this.#running = this.#running.then(() => this.#pass()).catch((e) => this.#o.log("push_error", { error: String(e.stack ?? e) }));
+        });
+      }
+      /** The live target each Agent's Sends go to: its most recently seen one. */
+      #targets() {
+        const out3 = /* @__PURE__ */ new Map();
+        for (const target of this.#o.store.all()) {
+          if (out3.has(target.agent)) continue;
+          const adapter = this.#o.adapters.find((a) => a.name === target.adapter);
+          const since = adapter?.liveSince(target);
+          if (adapter && since !== void 0) out3.set(target.agent, { target, adapter, since });
+        }
+        return [...out3.values()];
+      }
+      async #pass() {
+        await Promise.all(this.#targets().map((t) => this.#pushTo(t.target, t.adapter, t.since)));
+      }
+      async #pushTo(target, adapter, since) {
+        const { inbox, store, log } = this.#o;
+        if (!this.#o.approved(target.agent)) return;
+        const to = recipient(target.agent);
+        for (const e of inbox.pending(to)) {
+          const key = `${e.space}|${e.send}|${to}`;
+          const retry = this.#retries.get(key);
+          if (e.state !== "ready") {
+            this.#retries.delete(key);
+            continue;
+          }
+          if (e.arrived_at < since || this.#inFlight.has(key)) continue;
+          if (retry) {
+            if (retry.target !== target.id || Date.now() < retry.due) continue;
+          } else if (store.tried(e.space, e.send, to)) continue;
+          if (adapter.liveSince(target) === void 0) break;
+          const attempt = (retry?.tries ?? 0) + 1;
+          this.#inFlight.add(key);
+          const seq = store.begin(target, e.space, e.send, to);
+          const started = Date.now();
+          let outcome;
+          try {
+            const built = await this.#o.bundle(target.agent, e.space, e.send);
+            outcome = built ? await adapter.deliver(
+              target,
+              { space: e.space, send: e.send, ...built },
+              {
+                secret: target.has_secret ? store.secret(target.id) : void 0,
+                attempt,
+                log: (m) => log("push_log", { target: target.id, m })
+              }
+            ) : { ok: false, reason: "the Send could not be read" };
+          } catch (err) {
+            outcome = { ok: false, reason: String(err.message ?? err).slice(0, 300) };
+          } finally {
+            this.#inFlight.delete(key);
+          }
+          const wait = !outcome.ok && outcome.retry ? adapter.retries?.[attempt - 1] : void 0;
+          if (outcome.ok) {
+            this.#retries.delete(key);
+            inbox.mark(e.space, e.send, to, "delivered");
+            store.end(seq, "pushed");
+            store.touch(target.id);
+          } else if (wait !== void 0) {
+            this.#retries.set(key, { target: target.id, tries: attempt, due: Date.now() + wait });
+            setTimeout(() => this.kick(), wait).unref?.();
+            store.end(seq, "failed", `${outcome.reason}; try ${attempt}, again in ${Math.round(wait / 1e3)} s`);
+          } else {
+            this.#retries.delete(key);
+            inbox.mark(e.space, e.send, to, "failed", `push: ${outcome.reason}`);
+            store.end(seq, "failed", outcome.reason);
+          }
+          log("push", {
+            target: target.id,
+            adapter: adapter.name,
+            agent: target.agent,
+            space: e.space,
+            send: e.send,
+            attempt,
+            ok: outcome.ok,
+            ...outcome.ok ? {} : { reason: outcome.reason, ...wait !== void 0 ? { retry_in_ms: wait } : {} },
+            ms: Date.now() - started
+          });
+        }
+      }
+    };
+  }
+});
+
+// link/adapters/store.ts
+import { randomBytes as randomBytes3 } from "node:crypto";
+import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
+var SCHEMA, PushStore;
+var init_store = __esm({
+  "link/adapters/store.ts"() {
+    "use strict";
+    SCHEMA = `
+CREATE TABLE IF NOT EXISTS push_targets (
+  id TEXT PRIMARY KEY, agent TEXT NOT NULL, adapter TEXT NOT NULL, instance TEXT NOT NULL,
+  config TEXT NOT NULL, callback TEXT NOT NULL, created_at INTEGER NOT NULL, seen_at INTEGER NOT NULL,
+  UNIQUE (agent, adapter, instance)
+);
+CREATE TABLE IF NOT EXISTS push_attempts (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT NOT NULL, adapter TEXT NOT NULL,
+  space TEXT NOT NULL, send TEXT NOT NULL, recipient TEXT NOT NULL,
+  started_at INTEGER NOT NULL, ended_at INTEGER, outcome TEXT NOT NULL, reason TEXT
+);
+CREATE INDEX IF NOT EXISTS push_attempts_send ON push_attempts(space, send, recipient);
+`;
+    PushStore = class {
+      #db;
+      #dir;
+      constructor(db, home3) {
+        this.#db = db;
+        this.#dir = join3(home3, "adapters");
+        db.exec(SCHEMA);
+        db.prepare(
+          "UPDATE push_attempts SET outcome = 'failed', reason = 'the Link stopped during the push', ended_at = ? WHERE outcome = 'pushing'"
+        ).run(Date.now());
+      }
+      #secretFile(id2) {
+        return join3(this.#dir, `${id2}.secret`);
+      }
+      #target(r) {
+        return {
+          id: r.id,
+          agent: r.agent,
+          adapter: r.adapter,
+          config: JSON.parse(r.config),
+          callback: r.callback,
+          has_secret: existsSync3(this.#secretFile(r.id)),
+          created_at: r.created_at,
+          seen_at: r.seen_at
+        };
+      }
+      /** Creates or refreshes the target for one Agent, adapter and instance (a session, a URL). */
+      upsert(t, now = Date.now()) {
+        this.#db.prepare(
+          `INSERT INTO push_targets (id, agent, adapter, instance, config, callback, created_at, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (agent, adapter, instance) DO UPDATE SET config = excluded.config, callback = excluded.callback, seen_at = excluded.seen_at`
+        ).run(
+          `pt_${randomBytes3(6).toString("hex")}`,
+          t.agent,
+          t.adapter,
+          t.instance,
+          JSON.stringify(t.config),
+          t.callback,
+          now,
+          now
+        );
+        return this.#target(
+          this.#db.prepare("SELECT * FROM push_targets WHERE agent = ? AND adapter = ? AND instance = ?").get(t.agent, t.adapter, t.instance)
+        );
+      }
+      get(id2) {
+        const r = this.#db.prepare("SELECT * FROM push_targets WHERE id = ?").get(id2);
+        return r && this.#target(r);
+      }
+      all() {
+        return this.#db.prepare("SELECT * FROM push_targets ORDER BY seen_at DESC").all().map(
+          (r) => this.#target(r)
+        );
+      }
+      /** Removes a target and its secret. Its attempts stay, as history. */
+      remove(id2) {
+        rmSync2(this.#secretFile(id2), { force: true });
+        return Number(this.#db.prepare("DELETE FROM push_targets WHERE id = ?").run(id2).changes) > 0;
+      }
+      touch(id2, now = Date.now()) {
+        this.#db.prepare("UPDATE push_targets SET seen_at = ? WHERE id = ?").run(now, id2);
+      }
+      /** Keeps a target's secret (a webhook signing key, a token) in its own 0600 file. */
+      setSecret(id2, secret) {
+        mkdirSync3(this.#dir, { recursive: true, mode: 448 });
+        writeFileSync3(this.#secretFile(id2), secret, { mode: 384 });
+      }
+      secret(id2) {
+        const f3 = this.#secretFile(id2);
+        return existsSync3(f3) ? readFileSync3(f3, "utf8") : void 0;
+      }
+      /** Records that a push started; durable before the adapter runs. */
+      begin(target, space, send, recipient2, now = Date.now()) {
+        return Number(
+          this.#db.prepare(
+            "INSERT INTO push_attempts (target, adapter, space, send, recipient, started_at, outcome) VALUES (?, ?, ?, ?, ?, ?, 'pushing')"
+          ).run(target.id, target.adapter, space, send, recipient2, now).lastInsertRowid
+        );
+      }
+      end(seq, outcome, reason, now = Date.now()) {
+        this.#db.prepare("UPDATE push_attempts SET outcome = ?, reason = ?, ended_at = ? WHERE seq = ?").run(outcome, reason ?? null, now, seq);
+      }
+      /** Whether this Send was ever pushed to this recipient (any outcome). */
+      tried(space, send, recipient2) {
+        return this.#db.prepare("SELECT 1 FROM push_attempts WHERE space = ? AND send = ? AND recipient = ?").get(space, send, recipient2) !== void 0;
+      }
+      attempts(o = {}) {
+        return this.#db.prepare(
+          `SELECT * FROM push_attempts WHERE (? IS NULL OR space = ?) AND (? IS NULL OR send = ?) ORDER BY seq DESC LIMIT ?`
+        ).all(o.space ?? null, o.space ?? null, o.send ?? null, o.send ?? null, o.limit ?? 50);
+      }
+    };
+  }
+});
+
+// link/adapters/webhook.ts
+import { createHmac as createHmac2 } from "node:crypto";
+function sign2(secret, timestamp, body) {
+  return `v1=${createHmac2("sha256", secret).update(`${timestamp}.${body}`).digest("hex")}`;
+}
+var TIMEOUT_MS, Webhook;
+var init_webhook = __esm({
+  "link/adapters/webhook.ts"() {
+    "use strict";
+    TIMEOUT_MS = Number(process.env.REFLEX_WEBHOOK_TIMEOUT_S ?? 5) * 1e3;
+    Webhook = class {
+      name = "webhook";
+      config = {
+        type: "object",
+        required: ["url"],
+        properties: {
+          url: { type: "string", pattern: "^https?://", maxLength: 2048, description: "Where each Send Bundle is POSTed." }
+        },
+        additionalProperties: false
+      };
+      retries = [1e3, 5e3];
+      /** A webhook is always reachable as far as the Link knows; whether it answers is found out by trying. */
+      liveSince(target) {
+        return target.created_at;
+      }
+      async deliver(target, push, ctx) {
+        if (!ctx.secret) return { ok: false, reason: "the target has no signing secret" };
+        const url = String(target.config.url);
+        const bundle = {
+          ...push.bundle,
+          images: (push.bundle.images ?? []).map((img, i) => ({
+            ...img,
+            mime: "image/png",
+            data: push.images[i]?.toString("base64")
+          }))
+        };
+        const body = JSON.stringify({
+          type: "send",
+          delivery: `${push.space}/${push.send}`,
+          target: target.id,
+          agent: target.agent,
+          attempt: ctx.attempt,
+          bundle
+        });
+        const timestamp = String(Date.now());
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "user-agent": "reflex-link/0.1",
+              "reflex-delivery": `${push.space}/${push.send}`,
+              "reflex-attempt": String(ctx.attempt),
+              "reflex-timestamp": timestamp,
+              "reflex-signature": sign2(ctx.secret, timestamp, body)
+            },
+            body,
+            redirect: "manual",
+            signal: AbortSignal.timeout(TIMEOUT_MS)
+          });
+          await res.body?.cancel().catch(() => {
+          });
+          if (res.ok) return { ok: true };
+          const retry = res.status >= 500 || res.status === 429 || res.status === 408;
+          return { ok: false, reason: `the receiver answered ${res.status}`, retry };
+        } catch (e) {
+          const err = e;
+          const reason = err.name === "TimeoutError" ? `no answer within ${TIMEOUT_MS / 1e3} s` : `could not reach it (${err.cause?.code ?? err.message})`;
+          return { ok: false, reason, retry: true };
+        }
+      }
+    };
+  }
+});
+
 // link/agent-host.ts
-import { randomBytes as randomBytes8 } from "node:crypto";
+import { randomBytes as randomBytes4 } from "node:crypto";
 async function startAgentHost(o) {
   o.inbox.recipientsFor = () => o.catalog.agents().filter((a) => a.status === "approved").map((a) => recipient(a.id));
   const names = Object.fromEntries(o.catalog.agents().map((a) => [a.id, a.name]));
@@ -9964,11 +8608,18 @@ async function startAgentHost(o) {
     progressEvery: Number(process.env.REFLEX_PROGRESS_S ?? 15),
     log: o.log
   });
-  const notApproved = (a, msg, fix) => new ReflexError("not_approved", [{ code: "not_approved", msg, fix }]);
+  const notApproved = (msg, fix) => new ReflexError("not_approved", [{ code: "not_approved", msg, fix }]);
   function caller(who2) {
     const name = String(who2?.name ?? "").trim().slice(0, 80);
     const credential2 = String(who2?.credential ?? "");
-    if (!name || credential2.length < 32) throw new ReflexError("invalid_input", [{ code: "invalid_input", msg: "An Agent must say its name and present its credential.", fix: "Connect through `reflex mcp` or the reflex CLI." }]);
+    if (!name || credential2.length < 32)
+      throw new ReflexError("invalid_input", [
+        {
+          code: "invalid_input",
+          msg: "An Agent must say its name and present its credential.",
+          fix: "Connect through `reflex mcp` or the reflex CLI."
+        }
+      ]);
     return { name, credential: credential2 };
   }
   function connect4(who2) {
@@ -9985,14 +8636,33 @@ async function startAgentHost(o) {
     }
     const ipads = o.ipads?.() ?? [];
     if (a.status === "approved" && ipads.length)
-      return { connected: true, ipads, next: "You're connected. Call wait_for_user to receive the person's next Send, and call it again after you answer each one." };
-    if (!o.code) return { ok: false, reason: "unavailable", errors: [{ code: "unavailable", msg: "This Link can't make pairing codes.", fix: "Restart the Link without --no-lan." }] };
+      return {
+        connected: true,
+        ipads,
+        next: "You're connected. Call wait_for_user to receive the person's next Send, and call it again after you answer each one."
+      };
+    if (!o.code)
+      return {
+        ok: false,
+        reason: "unavailable",
+        errors: [
+          {
+            code: "unavailable",
+            msg: "This Link can't make pairing codes.",
+            fix: "Restart the Link without --no-lan."
+          }
+        ]
+      };
     let c;
     try {
       c = o.code(a.id);
     } catch (e) {
       const err = e;
-      return { ok: false, reason: "unavailable", errors: [{ code: "unavailable", msg: err.message, fix: err.fix ?? "" }] };
+      return {
+        ok: false,
+        reason: "unavailable",
+        errors: [{ code: "unavailable", msg: err.message, fix: err.fix ?? "" }]
+      };
     }
     o.log("code_given", { agent: a.id, name: a.name });
     return {
@@ -10032,16 +8702,20 @@ async function startAgentHost(o) {
       const started = Date.now();
       const code = o.codeFor?.(a.id);
       const message2 = code ? `Waiting for you to type ${spaced(code)} in Reflex on your iPad` : `Waiting for you to tap Allow on your iPad for ${a.name}`;
-      const tick = setInterval(() => progress?.({ elapsed_s: Math.round((Date.now() - started) / 1e3), timeout_s: ms / 1e3, message: message2 }), 1e4);
+      const tick = setInterval(
+        () => progress?.({ elapsed_s: Math.round((Date.now() - started) / 1e3), timeout_s: ms / 1e3, message: message2 }),
+        1e4
+      );
       try {
         await o.decision(a.id, ms, signal);
       } finally {
         clearInterval(tick);
       }
-      a = o.catalog.agent(a.id);
+      a = o.catalog.knownAgent(a.id);
     }
-    if (a.status === "pending" && o.codeFor?.(a.id)) {
-      const code = spaced(o.codeFor(a.id));
+    const waitingOn = a.status === "pending" ? o.codeFor?.(a.id) : void 0;
+    if (waitingOn) {
+      const code = spaced(waitingOn);
       throw new ReflexError(
         "not_approved",
         [
@@ -10068,7 +8742,11 @@ async function startAgentHost(o) {
         ["Call the same tool again: it waits for the person's answer."]
       );
     }
-    if (a.status !== "approved") throw notApproved(a, `The person ${a.status} ${a.name}.`, "Call again to ask the person once more, and tell them to expect the question on their iPad or in the Link's terminal.");
+    if (a.status !== "approved")
+      throw notApproved(
+        `The person ${a.status} ${a.name}.`,
+        "Call again to ask the person once more, and tell them to expect the question on their iPad or in the Link's terminal."
+      );
     for (const send of o.store.list()) o.inbox.adopt(send.space, recipient(a.id));
     return { agent: a.id, name: a.name, color: a.color };
   }
@@ -10082,6 +8760,11 @@ async function startAgentHost(o) {
   ]);
   const ajv = new import__.Ajv2020({ strict: false });
   const validConfig = new Map(adapters2.map((a) => [a.name, ajv.compile(a.config)]));
+  const validator = (adapter) => {
+    const valid = validConfig.get(adapter);
+    if (!valid) throw new Error(`no config schema for the ${adapter} adapter`);
+    return valid;
+  };
   const invalid = (msg, fix) => new ReflexError("invalid_input", [{ code: "invalid_input", msg, fix }]);
   const dispatcher = new Dispatcher({
     inbox: o.inbox,
@@ -10100,10 +8783,18 @@ async function startAgentHost(o) {
   dispatcher.start();
   const listen = (l) => {
     const s = surfaces.get(l.adapter);
-    if (!s) throw invalid(`No push adapter '${l.adapter}' takes a connection.`, `Use ${[...surfaces.keys()].join(" or ")}.`);
-    const valid = validConfig.get(l.adapter);
-    if (!valid(l.config)) throw invalid(`The ${l.adapter} config is not valid: ${ajv.errorsText(valid.errors)}.`, s.fix);
-    const target = pushes.upsert({ agent: l.who.agent, adapter: l.adapter, instance: l.client, config: l.config, callback: "mcp" });
+    if (!s)
+      throw invalid(`No push adapter '${l.adapter}' takes a connection.`, `Use ${[...surfaces.keys()].join(" or ")}.`);
+    const valid = validator(l.adapter);
+    if (!valid(l.config))
+      throw invalid(`The ${l.adapter} config is not valid: ${ajv.errorsText(valid.errors)}.`, s.fix);
+    const target = pushes.upsert({
+      agent: l.who.agent,
+      adapter: l.adapter,
+      instance: l.client,
+      config: l.config,
+      callback: "mcp"
+    });
     s.adapter.attach(target, l, () => {
       pushes.touch(target.id);
       o.log(`${s.event}_closed`, { target: target.id, agent: l.who.name });
@@ -10111,43 +8802,85 @@ async function startAgentHost(o) {
     o.log(`${s.event}_open`, { target: target.id, agent: l.who.name, config: l.config });
     return target.id;
   };
-  const shown = (t) => ({ target: t.id, adapter: t.adapter, config: t.config, callback: t.callback, live: adapters2.some((a) => a.name === t.adapter && a.liveSince(t) !== void 0), created_at: t.created_at });
+  const shown = (t) => ({
+    target: t.id,
+    adapter: t.adapter,
+    config: t.config,
+    callback: t.callback,
+    live: adapters2.some((a) => a.name === t.adapter && a.liveSince(t) !== void 0),
+    created_at: t.created_at
+  });
   const manage = (who2, action, args2) => {
     const mine = pushes.all().filter((t2) => t2.agent === who2.agent);
     if (action === "list") return { ok: true, targets: mine.map(shown) };
     if (action === "remove") {
       const t2 = mine.find((x) => x.id === args2.target);
-      if (!t2) throw invalid(`You have no push target '${String(args2.target)}'.`, "List yours with `reflex adapters list`.");
+      if (!t2)
+        throw invalid(`You have no push target '${String(args2.target)}'.`, "List yours with `reflex adapters list`.");
       pushes.remove(t2.id);
       o.log("push_target_removed", { target: t2.id, agent: who2.name, adapter: t2.adapter });
       return { ok: true, removed: t2.id };
     }
     if (action !== "add") throw invalid(`Unknown adapters action '${action}'.`, "Use add, list or remove.");
-    if (args2.adapter !== webhook.name) throw invalid(`'${String(args2.adapter)}' can't be added by hand.`, `Add a ${webhook.name}; ${[...surfaces.keys()].join(" and ")} targets open on their own from \`reflex mcp\`.`);
+    if (args2.adapter !== webhook.name)
+      throw invalid(
+        `'${String(args2.adapter)}' can't be added by hand.`,
+        `Add a ${webhook.name}; ${[...surfaces.keys()].join(" and ")} targets open on their own from \`reflex mcp\`.`
+      );
     const config2 = args2.config ?? {};
-    const valid = validConfig.get(webhook.name);
-    if (!valid(config2)) throw invalid(`The webhook config is not valid: ${ajv.errorsText(valid.errors)}.`, "Pass --url https://\u2026 (or http:// for a receiver on this machine).");
-    const t = pushes.upsert({ agent: who2.agent, adapter: webhook.name, instance: String(config2.url), config: config2, callback: "tools" });
-    const secret = `whsec_${randomBytes8(24).toString("base64url")}`;
+    const valid = validator(webhook.name);
+    if (!valid(config2))
+      throw invalid(
+        `The webhook config is not valid: ${ajv.errorsText(valid.errors)}.`,
+        "Pass --url https://\u2026 (or http:// for a receiver on this machine)."
+      );
+    const t = pushes.upsert({
+      agent: who2.agent,
+      adapter: webhook.name,
+      instance: String(config2.url),
+      config: config2,
+      callback: "tools"
+    });
+    const secret = `whsec_${randomBytes4(24).toString("base64url")}`;
     pushes.setSecret(t.id, secret);
     o.log("push_target_added", { target: t.id, agent: who2.name, adapter: webhook.name, url: config2.url });
-    return { ok: true, ...shown(pushes.get(t.id)), secret, next: "Keep the secret in your receiver to check each request's reflex-signature. It is not shown again; adding the same URL again makes a new one." };
+    return {
+      ok: true,
+      ...shown(pushes.get(t.id) ?? t),
+      secret,
+      next: "Keep the secret in your receiver to check each request's reflex-signature. It is not shown again; adding the same URL again makes a new one."
+    };
   };
-  const server = await serveHost({ core, socket: o.socket, token: o.token, authorize, connect: connect4, listen, adapters: manage, log: o.log });
-  return { core, server, pushes, dispatcher, live: (t) => adapters2.some((a) => a.name === t.adapter && a.liveSince(t) !== void 0) };
+  const server = await serveHost({
+    core,
+    socket: o.socket,
+    token: o.token,
+    authorize,
+    connect: connect4,
+    listen,
+    adapters: manage,
+    log: o.log
+  });
+  return {
+    core,
+    server,
+    pushes,
+    dispatcher,
+    live: (t) => adapters2.some((a) => a.name === t.adapter && a.liveSince(t) !== void 0)
+  };
 }
 var import__, LinkInbox, LinkAssets, spaced, approvalWaitMs, reaskMs;
 var init_agent_host = __esm({
   "link/agent-host.ts"() {
     "use strict";
+    import__ = __toESM(require__(), 1);
     init_capabilities();
     init_server();
-    init_routing();
     init_claude_channel();
-    init_webhook();
     init_dispatch();
     init_store();
-    import__ = __toESM(require__(), 1);
+    init_webhook();
+    init_routing();
     LinkInbox = class {
       #inbox;
       #store;
@@ -10203,6 +8936,1688 @@ var init_agent_host = __esm({
     spaced = (code) => `${code.slice(0, 3)} ${code.slice(3)}`;
     approvalWaitMs = () => Number(process.env.REFLEX_APPROVAL_WAIT_S ?? 50) * 1e3;
     reaskMs = () => Number(process.env.REFLEX_REASK_S ?? 600) * 1e3;
+  }
+});
+
+// link/pairing/catalog.ts
+import { randomBytes as randomBytes5 } from "node:crypto";
+function mayApprove(d, person) {
+  return d?.kind === "ipad" && d.person.id === person && (d.approves ?? (d.via === "offer" || d.via === "code"));
+}
+var COLORS, Catalog;
+var init_catalog = __esm({
+  "link/pairing/catalog.ts"() {
+    "use strict";
+    init_crypto();
+    COLORS = ["violet", "teal", "blue", "orange", "pink", "green"];
+    Catalog = class {
+      #db;
+      #key;
+      #rejected = 0;
+      constructor(db, key) {
+        this.#db = db;
+        this.#key = key;
+      }
+      #put(kind, id2, body) {
+        const text = JSON.stringify(body);
+        const sig = signWith(this.#key, `${kind}
+${id2}
+${text}`);
+        this.#db.prepare(
+          "INSERT INTO catalog (kind, id, body, sig) VALUES (?, ?, ?, ?) ON CONFLICT (kind, id) DO UPDATE SET body = excluded.body, sig = excluded.sig"
+        ).run(kind, id2, text, sig);
+      }
+      #all(kind) {
+        const rows = this.#db.prepare("SELECT id, body, sig FROM catalog WHERE kind = ? ORDER BY id").all(kind);
+        const out3 = [];
+        for (const r of rows) {
+          if (verifyFrom(this.#key.publicRaw, `${kind}
+${r.id}
+${r.body}`, r.sig)) out3.push(JSON.parse(r.body));
+          else this.#rejected++;
+        }
+        return out3;
+      }
+      /** Records whose signature did not verify since start. */
+      get rejected() {
+        return this.#rejected;
+      }
+      putRecord(kind, id2, body) {
+        this.#put(kind, id2, body);
+      }
+      forget(kind, id2) {
+        this.#db.prepare("DELETE FROM catalog WHERE kind = ? AND id = ?").run(kind, id2);
+      }
+      // Devices
+      devices() {
+        return this.#all("device");
+      }
+      device(id2) {
+        return this.devices().find((d) => d.device === id2);
+      }
+      /** A device that is paired for certain (it was just paired, say); throws if it isn't. */
+      pairedDevice(id2) {
+        const d = this.device(id2);
+        if (!d) throw new Error(`${id2} isn't a paired device`);
+        return d;
+      }
+      pairDevice(d) {
+        this.#put("device", d.device, d);
+      }
+      seen(id2, host2, port) {
+        const d = this.device(id2);
+        if (d) this.#put("device", id2, { ...d, last_seen: { host: host2, port, at: Date.now() } });
+      }
+      // Agents
+      agents() {
+        return this.#all("agent");
+      }
+      agent(id2) {
+        return this.agents().find((a) => a.id === id2);
+      }
+      /** An Agent that is known for certain (it was just asked about, say); throws if it isn't. */
+      knownAgent(id2) {
+        const a = this.agent(id2);
+        if (!a) throw new Error(`${id2} isn't a known Agent`);
+        return a;
+      }
+      /** The Agent this credential belongs to, whatever its status. */
+      byCredential(credential2) {
+        const h = sha256(credential2).toString("hex");
+        return this.agents().find((a) => a.credential_hash === h);
+      }
+      /** A first connection: a pending approval record, with a fresh stable ID. */
+      request(name, credential2, now = Date.now()) {
+        const id2 = `a_${randomBytes5(5).toString("hex")}`;
+        const color = COLORS[this.agents().length % COLORS.length];
+        const rec = {
+          id: id2,
+          name,
+          color,
+          status: "pending",
+          credential_hash: sha256(credential2).toString("hex"),
+          requested_at: now,
+          decided_at: null
+        };
+        this.#put("agent", id2, rec);
+        return rec;
+      }
+      /** A denied or revoked Agent that connects again: pending, so the person is asked again. */
+      askAgain(id2, now = Date.now()) {
+        const a = this.agent(id2);
+        if (!a) throw new Error(`No Agent '${id2}'.`);
+        const rec = { ...a, status: "pending", requested_at: now, decided_at: null };
+        this.#put("agent", id2, rec);
+        return rec;
+      }
+      decide(id2, status, by, now = Date.now()) {
+        const a = this.agent(id2);
+        if (!a) throw new Error(`No Agent '${id2}'. Run \`reflex link agents\` to see them.`);
+        const rec = { ...a, status, decided_at: now, decided_by: by };
+        this.#put("agent", id2, rec);
+        return rec;
+      }
+    };
+  }
+});
+
+// link/pairing/offer.ts
+import { randomBytes as randomBytes6, randomInt } from "node:crypto";
+import { networkInterfaces } from "node:os";
+function lanAddresses() {
+  const rank = (ip) => {
+    const [a, b] = ip.split(".").map(Number);
+    if (a === 192 && b === 168) return 0;
+    if (a === 10 || a === 172 && b >= 16 && b <= 31) return 1;
+    if (a === 100 && b >= 64 && b <= 127) return 3;
+    return 2;
+  };
+  const out3 = [];
+  for (const list of Object.values(networkInterfaces()))
+    for (const a of list ?? [])
+      if (!a.internal && a.family === "IPv4" && !a.address.startsWith("169.254.") && !out3.includes(a.address))
+        out3.push(a.address);
+  out3.sort((x, y) => rank(x) - rank(y));
+  return out3.length ? out3 : ["127.0.0.1"];
+}
+function parseOffer(uri) {
+  let u;
+  try {
+    u = new URL(uri.trim());
+  } catch {
+    throw new Error("That is not a pairing code. It starts with reflex://pair?");
+  }
+  if (u.protocol !== "reflex:" || u.host !== "pair")
+    throw new Error("That is not a pairing code. It starts with reflex://pair?");
+  const g = (k) => {
+    const v = u.searchParams.get(k);
+    if (!v) throw new Error(`The pairing code is missing '${k}'. Copy the whole code.`);
+    return v;
+  };
+  if (g("v") !== "0") throw new Error(`Pairing code version ${g("v")} is not supported.`);
+  if (!/^p_[0-9a-f]{12}$/.test(g("pi")) || u.searchParams.get("pn") === null)
+    throw new Error("The pairing code is cut short. Copy the whole code.");
+  return {
+    offer: g("o"),
+    device: g("d"),
+    key: g("k"),
+    secret: unb64(g("s")),
+    hosts: g("h").split(","),
+    port: Number(g("p")),
+    name: u.searchParams.get("n") ?? "",
+    person: { id: g("pi"), name: u.searchParams.get("pn") ?? "" }
+  };
+}
+var TTL_MS, CODE_TRIES, Offers;
+var init_offer = __esm({
+  "link/pairing/offer.ts"() {
+    "use strict";
+    init_crypto();
+    TTL_MS = 10 * 60 * 1e3;
+    CODE_TRIES = 5;
+    Offers = class {
+      #live = /* @__PURE__ */ new Map();
+      #code = null;
+      /** The device that used the last typed code, and which Agents it approved. */
+      lastCode = null;
+      /**
+       * The live typed code, with this Agent added to the ones it approves; a new one if none is live, or if this Agent
+       * (or, with no Agent, a terminal) asks again: after a failed typing the person is told to ask for a new code, and a
+       * new one makes any digit a look-alike Link learned useless. The Agents waiting on the old code carry over.
+       */
+      code(agent, now = Date.now()) {
+        const live = this.#liveTyped(now);
+        const again = live !== void 0 && (agent ? live.agents.has(agent) : true);
+        let c = live;
+        if (!c || again) {
+          c = {
+            code: String(randomInt(0, 1e6)).padStart(6, "0"),
+            expires: now + TTL_MS,
+            agents: new Set(again ? live.agents : []),
+            fails: 0
+          };
+          this.#code = c;
+        }
+        if (agent) c.agents.add(agent);
+        return c;
+      }
+      liveCode(now = Date.now()) {
+        return this.#liveTyped(now)?.code;
+      }
+      /** The typed code while it is live; an expired code, or one typed wrong too often, is dropped here. */
+      #liveTyped(now = Date.now()) {
+        const c = this.#code;
+        if (!c) return void 0;
+        if (c.expires < now || c.fails >= CODE_TRIES) {
+          this.#code = null;
+          return void 0;
+        }
+        return c;
+      }
+      /** Whether this Agent waits on the live code. */
+      codeFor(agent) {
+        const c = this.#liveTyped();
+        return c?.agents.has(agent) ? c : void 0;
+      }
+      codeFailed() {
+        if (this.#code) this.#code.fails++;
+      }
+      /** Uses up the typed code if it is still the live one; returns the Agents it approves, or undefined. */
+      takeCode(code, device) {
+        const c = this.#liveTyped();
+        if (c?.code !== code) return void 0;
+        this.#code = null;
+        this.lastCode = { code: c.code, device, agents: [...c.agents] };
+        return [...c.agents];
+      }
+      /** Codes used up, and by which device: `reflex pair` waits on this, so an iPad that was paired already and scans again counts. */
+      #used = /* @__PURE__ */ new Map();
+      create(me, port, source = "terminal", now = Date.now()) {
+        const offer = `o_${randomBytes6(6).toString("hex")}`;
+        const secret = randomBytes6(32);
+        const q2 = new URLSearchParams({
+          v: "0",
+          o: offer,
+          d: me.device,
+          k: me.key,
+          s: b64(secret),
+          h: lanAddresses().join(","),
+          p: String(port),
+          n: me.name,
+          pi: me.person.id,
+          pn: me.person.name
+        });
+        const o = { offer, secret, expires: now + TTL_MS, uri: `reflex://pair?${q2}`, source };
+        this.#live.set(offer, o);
+        return o;
+      }
+      /** The secret of a live offer. */
+      secret(offer, now = Date.now()) {
+        const o = this.#live.get(offer);
+        if (!o) return void 0;
+        if (o.expires < now) {
+          this.#live.delete(offer);
+          return void 0;
+        }
+        return o.secret;
+      }
+      /** Where a live (or just consumed) offer's code was shown. */
+      source(offer) {
+        return this.#live.get(offer)?.source;
+      }
+      /** An offer is used up once a device pairs with it. */
+      consume(offer, device) {
+        if (this.#live.delete(offer) && device) this.#used.set(offer, device);
+      }
+      /** The device that used this code, if one did. */
+      usedBy(offer) {
+        return this.#used.get(offer);
+      }
+      remaining(offer, now = Date.now()) {
+        return Math.max(0, (this.#live.get(offer)?.expires ?? now) - now);
+      }
+      live(offer) {
+        return this.secret(offer) !== void 0;
+      }
+    };
+  }
+});
+
+// link/storage/assets.ts
+import { randomBytes as randomBytes7 } from "node:crypto";
+import {
+  closeSync,
+  existsSync as existsSync4,
+  fsyncSync,
+  mkdirSync as mkdirSync4,
+  openSync,
+  readdirSync,
+  readFileSync as readFileSync4,
+  renameSync,
+  writeSync
+} from "node:fs";
+import { dirname, join as join4 } from "node:path";
+function safeReaddir(p) {
+  try {
+    return readdirSync(p);
+  } catch {
+    return [];
+  }
+}
+var CHUNK, HASH, AssetStore;
+var init_assets = __esm({
+  "link/storage/assets.ts"() {
+    "use strict";
+    init_crypto();
+    CHUNK = 1024 * 1024;
+    HASH = /^[0-9a-f]{64}$/;
+    AssetStore = class {
+      #root;
+      constructor(root) {
+        this.#root = root;
+        mkdirSync4(join4(root, "chunks"), { recursive: true });
+        mkdirSync4(join4(root, "objects"), { recursive: true });
+      }
+      #path(kind, hash) {
+        return join4(this.#root, kind, hash.slice(0, 2), hash);
+      }
+      #writeDurable(path, bytes) {
+        mkdirSync4(dirname(path), { recursive: true });
+        const tmp = `${path}.${randomBytes7(4).toString("hex")}.tmp`;
+        const fd = openSync(tmp, "w", 384);
+        try {
+          writeSync(fd, bytes);
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
+        renameSync(tmp, path);
+        const dir3 = openSync(dirname(path), "r");
+        try {
+          fsyncSync(dir3);
+        } finally {
+          closeSync(dir3);
+        }
+      }
+      /** Stores bytes and returns their hash. Storing the same bytes twice is a no-op. */
+      put(bytes) {
+        const hash = sha256(bytes).toString("hex");
+        if (this.has(hash)) return hash;
+        const chunks = [];
+        let off = 0;
+        do {
+          const part = bytes.subarray(off, off + CHUNK);
+          const h = sha256(part).toString("hex");
+          if (!existsSync4(this.#path("chunks", h))) this.#writeDurable(this.#path("chunks", h), part);
+          chunks.push(h);
+          off += CHUNK;
+        } while (off < bytes.length);
+        const m = { hash, size: bytes.length, chunks };
+        this.#writeDurable(this.#path("objects", hash), Buffer.from(JSON.stringify(m)));
+        return hash;
+      }
+      has(hash) {
+        return HASH.test(hash) && existsSync4(this.#path("objects", hash));
+      }
+      /** The asset's bytes, verified. Throws if anything is missing or corrupt. */
+      get(hash) {
+        if (!this.has(hash)) throw new Error(`No asset ${hash}.`);
+        const m = JSON.parse(readFileSync4(this.#path("objects", hash), "utf8"));
+        const parts = m.chunks.map((h) => {
+          const b = readFileSync4(this.#path("chunks", h));
+          if (sha256(b).toString("hex") !== h) throw new Error(`Asset ${hash}: chunk ${h} is corrupt.`);
+          return b;
+        });
+        const all = Buffer.concat(parts);
+        if (all.length !== m.size || sha256(all).toString("hex") !== hash) throw new Error(`Asset ${hash} is corrupt.`);
+        return all;
+      }
+      /** Accepts bytes from a peer only if they match the hash they were asked for. */
+      putVerified(hash, bytes) {
+        if (sha256(bytes).toString("hex") !== hash) return false;
+        this.put(bytes);
+        return true;
+      }
+      list() {
+        const out3 = [];
+        const objects = join4(this.#root, "objects");
+        for (const d of safeReaddir(objects)) for (const f3 of safeReaddir(join4(objects, d))) if (HASH.test(f3)) out3.push(f3);
+        return out3.sort();
+      }
+    };
+  }
+});
+
+// link/storage/db.ts
+import { DatabaseSync } from "node:sqlite";
+function openDb(path) {
+  const db = new DatabaseSync(path);
+  db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;");
+  db.exec(SCHEMA2);
+  return db;
+}
+function tx(db, fn) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const out3 = fn();
+    db.exec("COMMIT");
+    return out3;
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+}
+var SCHEMA2;
+var init_db = __esm({
+  "link/storage/db.ts"() {
+    "use strict";
+    SCHEMA2 = `
+CREATE TABLE IF NOT EXISTS spaces (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS inbox (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, space TEXT NOT NULL, send TEXT NOT NULL,
+  arrived_at INTEGER NOT NULL, via TEXT NOT NULL, UNIQUE(space, send)
+);
+CREATE TABLE IF NOT EXISTS receipts (
+  space TEXT NOT NULL, send TEXT NOT NULL, recipient TEXT NOT NULL,
+  state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, reason TEXT, updated_at INTEGER NOT NULL,
+  PRIMARY KEY (space, send, recipient)
+);
+CREATE TABLE IF NOT EXISTS inbox_to (
+  space TEXT NOT NULL, send TEXT NOT NULL, recipient TEXT NOT NULL, PRIMARY KEY (space, send, recipient)
+);
+CREATE TABLE IF NOT EXISTS catalog (
+  kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, sig TEXT NOT NULL, PRIMARY KEY (kind, id)
+);
+`;
+  }
+});
+
+// link/storage/inbox.ts
+var Inbox;
+var init_inbox = __esm({
+  "link/storage/inbox.ts"() {
+    "use strict";
+    Inbox = class {
+      #db;
+      #waiters = /* @__PURE__ */ new Set();
+      /** Who a new Send goes to, or null when it is delivered to nobody (link/routing.ts). */
+      recipientsFor = () => [];
+      constructor(db) {
+        this.#db = db;
+      }
+      /** Records Sends not yet indexed. Must run inside the caller's transaction. Returns how many were new. */
+      index(space, sends, via, now = Date.now()) {
+        const ins = this.#db.prepare(
+          "INSERT INTO inbox (space, send, arrived_at, via) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
+        );
+        const to = this.#db.prepare(
+          "INSERT INTO inbox_to (space, send, recipient) VALUES (?, ?, ?) ON CONFLICT DO NOTHING"
+        );
+        let added = 0;
+        for (const s of sends) {
+          if (this.#has(space, s)) continue;
+          const recipients = this.recipientsFor(space, s);
+          if (recipients === null) continue;
+          const n = Number(ins.run(space, s, now, via).changes);
+          if (n) for (const r of recipients) to.run(space, s, r);
+          added += n;
+        }
+        if (added > 0) queueMicrotask(() => this.#wake());
+        return added;
+      }
+      /** Sends to this recipient it hasn't acknowledged, oldest first. Optionally only one Space. */
+      pending(recipient2, space) {
+        const rows = this.#db.prepare(
+          `SELECT i.space, i.send, i.arrived_at, i.via, coalesce(r.state, 'ready') AS state, coalesce(r.attempts, 0) AS attempts
+         FROM inbox i JOIN inbox_to t ON t.space = i.space AND t.send = i.send AND t.recipient = ?
+         LEFT JOIN receipts r ON r.space = i.space AND r.send = i.send AND r.recipient = t.recipient
+         WHERE coalesce(r.state, 'ready') != 'acknowledged' AND (? IS NULL OR i.space = ?)
+         ORDER BY i.seq`
+        ).all(recipient2, space ?? null, space ?? null);
+        return rows;
+      }
+      /** Who a Send was sent to. */
+      recipients(space, send) {
+        return this.#db.prepare("SELECT recipient FROM inbox_to WHERE space = ? AND send = ? ORDER BY recipient").all(space, send).map((r) => r.recipient);
+      }
+      /** Where a Send is, by its ID. */
+      find(send) {
+        return this.#db.prepare("SELECT space, send, arrived_at, via, 'ready' AS state, 0 AS attempts FROM inbox WHERE send = ?").get(send);
+      }
+      /** A newly attached recipient gets this Space's Sends that had nobody to go to. */
+      adopt(space, recipient2) {
+        const r = this.#db.prepare(
+          `INSERT INTO inbox_to (space, send, recipient)
+         SELECT i.space, i.send, ? FROM inbox i WHERE i.space = ?
+         AND NOT EXISTS (SELECT 1 FROM inbox_to t WHERE t.space = i.space AND t.send = i.send)`
+        ).run(recipient2, space);
+        if (Number(r.changes) > 0) queueMicrotask(() => this.#wake());
+        return Number(r.changes);
+      }
+      all() {
+        return this.#db.prepare("SELECT space, send, arrived_at, via, 'ready' AS state, 0 AS attempts FROM inbox ORDER BY seq").all();
+      }
+      receipts(space, send) {
+        return this.#db.prepare("SELECT recipient, state, attempts FROM receipts WHERE space = ? AND send = ? ORDER BY recipient").all(space, send);
+      }
+      #has(space, send) {
+        return this.#db.prepare("SELECT 1 FROM inbox WHERE space = ? AND send = ?").get(space, send) !== void 0;
+      }
+      /** Moves one recipient's receipt forward. Acknowledged is final; it never goes back. */
+      mark(space, send, recipient2, state, reason, now = Date.now()) {
+        if (!this.#has(space, send)) throw new Error(`No Send '${send}' in Space '${space}'.`);
+        this.#db.prepare(
+          `INSERT INTO receipts (space, send, recipient, state, attempts, reason, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (space, send, recipient) DO UPDATE SET
+           state = CASE WHEN receipts.state = 'acknowledged' THEN 'acknowledged' ELSE excluded.state END,
+           attempts = receipts.attempts + excluded.attempts,
+           reason = excluded.reason, updated_at = excluded.updated_at`
+        ).run(space, send, recipient2, state, state === "delivered" ? 1 : 0, reason ?? null, now);
+      }
+      /** Resolves when a new Send is indexed or adopted, or the signal aborts. */
+      next(signal) {
+        return new Promise((resolve4) => {
+          const done = () => {
+            this.#waiters.delete(done);
+            signal.removeEventListener("abort", done);
+            resolve4();
+          };
+          this.#waiters.add(done);
+          signal.addEventListener("abort", done, { once: true });
+        });
+      }
+      /** Resolves when a new Send is indexed, or after `ms`. */
+      wait(ms) {
+        return new Promise((resolve4) => {
+          const done = () => {
+            clearTimeout(t);
+            this.#waiters.delete(done);
+            resolve4();
+          };
+          const t = setTimeout(done, ms);
+          this.#waiters.add(done);
+        });
+      }
+      #wake() {
+        for (const w of [...this.#waiters]) w();
+      }
+    };
+  }
+});
+
+// link/storage/sends.ts
+function ink(v) {
+  if (!v || typeof v !== "object") return false;
+  const s = v;
+  return id(s.id) && bounds(s.bounds) && finite(s.at) && finite(s.width) && typeof s.color === "string" && Array.isArray(s.points) && s.points.length > 0 && s.points.length <= 2e5 && s.points.every((p) => Array.isArray(p) && p.length === 4 && p.every(finite));
+}
+function nativeSend(raw, space, person, device) {
+  if (!raw || typeof raw !== "object" || !id(space)) throw new Error("Invalid Send envelope");
+  const s = raw;
+  if (!id(s.send) || s.space !== space || !finite(s.at) || !bounds(s.viewport) || !["button", "voice"].includes(s.trigger) || !Array.isArray(s.strokes) || s.strokes.length > 2e4 || !s.strokes.every(ink) || s.context !== void 0 && (!Array.isArray(s.context) || s.context.length > 2e4 || !s.context.every(ink)) || s.said !== void 0 && (typeof s.said !== "string" || s.said.length > 1e5) || s.words !== void 0 && (!Array.isArray(s.words) || !s.words.every(
+    (w) => typeof w.text === "string" && finite(w.start_ms) && (w.end_ms === void 0 || finite(w.end_ms))
+  )) || s.hints !== void 0 && (!Array.isArray(s.hints) || !s.hints.every(
+    (h) => Array.isArray(h.strokes) && h.strokes.every(id) && typeof h.text === "string" && finite(h.confidence)
+  )) || s.crops !== void 0 && (!Array.isArray(s.crops) || !s.crops.every(
+    (c) => /^[a-f0-9]{64}$/.test(c.asset) && bounds(c.bounds) && (c.kind === void 0 || ["screen", "recent_strokes"].includes(c.kind)) && (c.strokes === void 0 || Array.isArray(c.strokes) && c.strokes.every(id))
+  ))) {
+    throw new Error("Invalid native Send");
+  }
+  return { ...s, space, by: { person, device } };
+}
+var id, finite, bounds, SendStore;
+var init_sends = __esm({
+  "link/storage/sends.ts"() {
+    "use strict";
+    init_db();
+    id = (v) => typeof v === "string" && /^[\w-]{1,200}$/.test(v);
+    finite = (v) => typeof v === "number" && Number.isFinite(v);
+    bounds = (v) => Array.isArray(v) && v.length === 4 && v.every(finite) && v[2] >= 0 && v[3] >= 0;
+    SendStore = class {
+      db;
+      inbox;
+      constructor(db, inbox) {
+        this.db = db;
+        this.inbox = inbox;
+        db.exec(
+          "CREATE TABLE IF NOT EXISTS native_sends (send TEXT PRIMARY KEY, space TEXT NOT NULL, body TEXT NOT NULL, device TEXT NOT NULL, at INTEGER NOT NULL)"
+        );
+      }
+      ingest(send) {
+        return tx(this.db, () => {
+          const previous = this.get(send.send);
+          if (previous) {
+            if (previous.by.device !== send.by.device || previous.space !== send.space)
+              throw new Error("Send ID belongs to another device or page");
+            return false;
+          }
+          this.db.prepare("INSERT INTO spaces (id, kind, created_at) VALUES (?, 'space', ?) ON CONFLICT DO NOTHING").run(send.space, send.at);
+          this.db.prepare("INSERT INTO native_sends (send, space, body, device, at) VALUES (?, ?, ?, ?, ?)").run(send.send, send.space, JSON.stringify(send), send.by.device, send.at);
+          this.inbox.index(send.space, [send.send], `send:${send.by.device}`);
+          return true;
+        });
+      }
+      get(send) {
+        const row = this.db.prepare("SELECT body FROM native_sends WHERE send = ?").get(send);
+        return row ? JSON.parse(row.body) : void 0;
+      }
+      list(space) {
+        return this.db.prepare("SELECT body FROM native_sends WHERE (? IS NULL OR space = ?) ORDER BY rowid").all(space ?? null, space ?? null).map((r) => JSON.parse(r.body));
+      }
+    };
+  }
+});
+
+// link/pairing/cpace.ts
+import { createPrivateKey as createPrivateKey2, createPublicKey as createPublicKey2, diffieHellman as diffieHellman2, generateKeyPairSync as generateKeyPairSync2 } from "node:crypto";
+function modpow(b, e) {
+  let r = 1n;
+  b %= P;
+  while (e > 0n) {
+    if (e & 1n) r = r * b % P;
+    b = b * b % P;
+    e >>= 1n;
+  }
+  return r;
+}
+function cpaceGenerator(code, transcript) {
+  for (let i = 0; i < 1e3; i++) {
+    const h = sha256(PROTOCOL, ` cpace generator ${i} `, code, " ", transcript);
+    h[31] &= 127;
+    const u = le(h);
+    if (u < 2n || u >= P) continue;
+    if (modpow((u * (u * (u + A) % P) + u) % P, (P - 1n) / 2n) === 1n) return h;
+  }
+  throw new Error("no generator found");
+}
+function x25519(scalar, u) {
+  return diffieHellman2({
+    privateKey: scalar,
+    publicKey: createPublicKey2({ key: Buffer.concat([X_SPKI2, u]), format: "der", type: "spki" })
+  });
+}
+var P, A, le, X_SPKI2, X_PKCS8, Cpace;
+var init_cpace = __esm({
+  "link/pairing/cpace.ts"() {
+    "use strict";
+    init_crypto();
+    P = 2n ** 255n - 19n;
+    A = 486662n;
+    le = (b) => b.reduceRight((n, x) => n << 8n | BigInt(x), 0n);
+    X_SPKI2 = Buffer.from("302a300506032b656e032100", "hex");
+    X_PKCS8 = Buffer.from("302e020100300506032b656e04220420", "hex");
+    Cpace = class {
+      #y;
+      share;
+      constructor(code, transcript, scalar) {
+        this.#y = scalar ? createPrivateKey2({ key: Buffer.concat([X_PKCS8, scalar]), format: "der", type: "pkcs8" }) : generateKeyPairSync2("x25519").privateKey;
+        this.share = x25519(this.#y, cpaceGenerator(code, transcript));
+      }
+      /** The pairing secret the auth MACs use: from K, both shares (initiator's first) and the transcript. */
+      secret(theirs, initiator, transcript) {
+        if (theirs.length !== 32) throw new Error("malformed CPace share");
+        const k = x25519(this.#y, theirs);
+        const [ya, yb] = initiator ? [this.share, theirs] : [theirs, this.share];
+        return sha256(PROTOCOL, " cpace secret ", k, ya, yb, transcript);
+      }
+    };
+  }
+});
+
+// link/pairing/handshake.ts
+import { randomBytes as randomBytes8 } from "node:crypto";
+async function nextJson(path, ms) {
+  let timer;
+  const timeout = new Promise((_, rej) => {
+    timer = setTimeout(() => rej(new Error("handshake timed out")), ms);
+  });
+  try {
+    const raw = await Promise.race([path.next(), timeout]);
+    if (!raw) throw new Error("the other device closed the connection during the handshake");
+    const msg = JSON.parse(Buffer.from(raw).toString("utf8"));
+    if (msg.t === "refused") throw new Error(`the other device refused: ${String(msg.reason)}`);
+    return { raw, msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function checkHello(m) {
+  const h = m;
+  if (h.t !== "hello" || h.v !== 0 || h.protocol !== PROTOCOL)
+    throw new Error(`peer speaks ${String(h.protocol)}, not ${PROTOCOL}`);
+  if (typeof h.key !== "string" || typeof h.eph !== "string" || typeof h.device !== "string")
+    throw new Error("malformed hello");
+  if (deviceIdFor(unb64(h.key)) !== h.device) throw new Error(`device ID ${h.device} does not belong to its key`);
+  return h;
+}
+async function handshake(path, me, trust, scanned) {
+  let seen;
+  try {
+    return await handshakeInner(path, me, trust, scanned, (h) => {
+      seen = {
+        device: h.device,
+        name: String(h.name ?? ""),
+        kind: h.kind === "ipad" ? "ipad" : "link",
+        paired: trust.pairedKey(h.device) === h.key,
+        ...typeof h.pair === "string" ? { pair: h.pair } : {}
+      };
+    });
+  } catch (e) {
+    const err = new HandshakeError(e.message);
+    err.peer = seen;
+    throw err;
+  }
+}
+async function handshakeInner(path, me, trust, scanned, saw) {
+  const role = path.initiator ? "i" : "r";
+  const eph = newEphemeral();
+  const hello = (cpace) => ({
+    t: "hello",
+    v: 0,
+    protocol: PROTOCOL,
+    device: me.key.device,
+    key: b64(me.key.publicRaw),
+    eph: b64(eph.publicRaw),
+    person: cpace ? { id: "", name: "" } : path.transport === "relay" ? { id: me.person.id, name: "" } : me.person,
+    name: cpace || path.transport === "relay" ? "" : me.name,
+    kind: me.kind,
+    ...scanned && role === "i" ? { pair: scanned.cpace !== void 0 ? "cpace" : scanned.code !== void 0 ? "code" : scanned.offer } : {}
+  });
+  let mine;
+  let theirsRaw;
+  let theirs;
+  if (role === "i") {
+    mine = enc(hello(scanned?.cpace !== void 0));
+    await path.send(mine, "control");
+    const r = await nextJson(path, 1e4);
+    theirsRaw = r.raw;
+    theirs = checkHello(r.msg);
+    saw(theirs);
+  } else {
+    const r = await nextJson(path, 1e4);
+    theirsRaw = r.raw;
+    theirs = checkHello(r.msg);
+    saw(theirs);
+    mine = enc(hello(theirs.pair === "cpace"));
+    await path.send(mine, "control");
+  }
+  const transcript = role === "i" ? sha256(PROTOCOL, mine, theirsRaw) : sha256(PROTOCOL, theirsRaw, mine);
+  const other = role === "i" ? "r" : "i";
+  if (role === "i" && scanned?.cpace !== void 0 || role === "r" && theirs.pair === "cpace")
+    return cpaceRest(path, me, trust, role, scanned?.cpace, eph, theirs, transcript);
+  let secret;
+  let offer;
+  let codeAgents;
+  if (role === "i" && scanned) {
+    if (theirs.device !== scanned.device || theirs.key !== scanned.key)
+      throw new Error("the device that answered is not the one in the pairing code");
+    secret = scanned.secret;
+    offer = scanned.offer;
+    if (scanned.code !== void 0) secret = await codeRounds(path, role, scanned.code, transcript);
+  } else if (role === "r" && theirs.pair === "code") {
+    const code = trust.liveCode?.();
+    if (!code)
+      throw new Error("no pairing code is live on this Link (they last 10 minutes; ask your agent for a new one)");
+    try {
+      secret = await codeRounds(path, role, code, transcript);
+    } catch (e) {
+      if (e instanceof WrongCode) trust.codeFailed?.();
+      throw e;
+    }
+    codeAgents = trust.takeCode?.(code, theirs.device);
+    if (!codeAgents) throw new Error("the pairing code expired or was already used (ask your agent for a new one)");
+    offer = "code";
+  } else if (role === "r" && typeof theirs.pair === "string") {
+    secret = trust.offerSecret(theirs.pair);
+    if (!secret) throw new Error("unknown or expired pairing offer");
+    offer = theirs.pair;
+  }
+  const auth = {
+    t: "auth",
+    sig: signWith(me.key, Buffer.concat([Buffer.from(`${PROTOCOL} auth ${role} `), transcript])),
+    ...secret ? { mac: mac(secret, Buffer.concat([Buffer.from(`${PROTOCOL} pair ${role} `), transcript])) } : {}
+  };
+  await path.send(enc(auth), "control");
+  const { msg: a } = await nextJson(path, 1e4);
+  if (a.t !== "auth" || typeof a.sig !== "string") throw new Error("malformed auth");
+  if (!verifyFrom(unb64(theirs.key), Buffer.concat([Buffer.from(`${PROTOCOL} auth ${other} `), transcript]), a.sig))
+    throw new Error("peer did not prove its key");
+  let paired = false;
+  const known = trust.pairedKey(theirs.device);
+  if (secret) {
+    const want2 = mac(secret, Buffer.concat([Buffer.from(`${PROTOCOL} pair ${other} `), transcript]));
+    if (typeof a.mac !== "string" || !macEqual(a.mac, want2)) throw new Error("peer does not know the pairing secret");
+    if (known && known !== theirs.key) throw new Error(`device ${theirs.device} is already paired with another key`);
+    paired = !known;
+  } else if (known !== theirs.key) {
+    throw new Error(`device ${theirs.device} is not paired`);
+  }
+  const keys = sessionKeys(eph, unb64(theirs.eph), transcript);
+  const session = new Session(
+    path,
+    new FrameCipher(role === "i" ? keys.i2r : keys.r2i, transcript),
+    new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript)
+  );
+  const kind = theirs.kind === "ipad" ? "ipad" : "link";
+  return {
+    session,
+    peer: { device: theirs.device, key: theirs.key, person: theirs.person, name: theirs.name, kind },
+    paired,
+    offer,
+    ...offer === "code" ? { code: true, codeAgents: codeAgents ?? [] } : {}
+  };
+}
+async function cpaceRest(path, me, trust, role, typed, eph, theirs, transcript) {
+  const other = role === "i" ? "r" : "i";
+  const code = role === "i" ? typed : trust.liveCode?.();
+  if (!code)
+    throw new Error("no pairing code is live on this Link (they last 10 minutes; ask your agent for a new one)");
+  if (!/^\d{6}$/.test(code)) throw new WrongCode("a pairing code is 6 digits");
+  const cp = new Cpace(code, transcript);
+  await path.send(enc({ t: "cpace", y: b64(cp.share) }), "control");
+  const { msg: c } = await nextJson(path, 1e4);
+  if (c.t !== "cpace" || typeof c.y !== "string") throw new Error("expected cpace during the code check");
+  let secret;
+  try {
+    secret = cp.secret(unb64(c.y), role === "i", transcript);
+  } catch {
+    if (role === "r") trust.codeFailed?.();
+    throw new WrongCode("wrong pairing code");
+  }
+  const label = (what, who3) => Buffer.concat([Buffer.from(`${PROTOCOL} ${what} ${who3} `), transcript]);
+  const auth = { t: "auth", sig: signWith(me.key, label("auth", role)), mac: mac(secret, label("pair", role)) };
+  const check = (a) => {
+    if (a.t !== "auth" || typeof a.sig !== "string") throw new Error("malformed auth");
+    if (typeof a.mac !== "string" || !macEqual(a.mac, mac(secret, label("pair", other)))) {
+      if (role === "r") trust.codeFailed?.();
+      throw new WrongCode("wrong pairing code");
+    }
+    if (!verifyFrom(unb64(theirs.key), label("auth", other), a.sig)) throw new Error("peer did not prove its key");
+  };
+  let codeAgents;
+  if (role === "i") {
+    await path.send(enc(auth), "control");
+    check((await nextJson(path, 1e4)).msg);
+  } else {
+    check((await nextJson(path, 1e4)).msg);
+    codeAgents = trust.takeCode?.(code, theirs.device);
+    if (!codeAgents) throw new Error("the pairing code expired or was already used (ask your agent for a new one)");
+    await path.send(enc(auth), "control");
+  }
+  const known = trust.pairedKey(theirs.device);
+  if (known && known !== theirs.key) throw new Error(`device ${theirs.device} is already paired with another key`);
+  const keys = sessionKeys(eph, unb64(theirs.eph), transcript);
+  const session = new Session(
+    path,
+    new FrameCipher(role === "i" ? keys.i2r : keys.r2i, transcript),
+    new FrameCipher(role === "i" ? keys.r2i : keys.i2r, transcript)
+  );
+  const who2 = async () => {
+    const m = await Promise.race([session.next(), new Promise((r) => setTimeout(() => r(null), 1e4).unref())]);
+    const p = m?.h.person;
+    if (m?.h.t !== "who" || typeof p?.id !== "string" || typeof p.name !== "string")
+      throw new Error("expected who after the code check");
+    return { person: { id: p.id, name: p.name }, name: String(m.h.name ?? "") };
+  };
+  let them;
+  if (role === "r") {
+    await session.send({ t: "who", person: me.person, name: me.name }, void 0, "control");
+    them = await who2();
+  } else {
+    them = await who2();
+    await session.send({ t: "who", person: them.person, name: me.name }, void 0, "control");
+  }
+  const kind = theirs.kind === "ipad" ? "ipad" : "link";
+  return {
+    session,
+    peer: { device: theirs.device, key: theirs.key, person: them.person, name: them.name, kind },
+    paired: !known,
+    offer: "code",
+    code: true,
+    cpace: true,
+    codeAgents: codeAgents ?? []
+  };
+}
+async function codeRounds(path, role, code, transcript) {
+  if (!/^\d{6}$/.test(code)) throw new WrongCode("a pairing code is 6 digits");
+  const other = role === "i" ? "r" : "i";
+  const commit = (n, who2, round, digit) => mac(n, Buffer.concat([Buffer.from(`${PROTOCOL} code ${who2} ${round} ${digit} `), transcript]));
+  const want2 = async (t, field) => {
+    const { msg } = await nextJson(path, 1e4);
+    if (msg.t !== t || typeof msg[field] !== "string") throw new Error(`expected ${t} during the code check`);
+    return msg[field];
+  };
+  for (let round = 0; round < 6; round++) {
+    const digit = code[round];
+    const n = randomBytes8(16);
+    const mine = commit(n, role, round, digit);
+    let theirC;
+    if (role === "i") {
+      await path.send(enc({ t: "commit", c: mine }), "control");
+      theirC = await want2("commit", "c");
+      await path.send(enc({ t: "reveal", n: b64(n) }), "control");
+      const theirN = unb64(await want2("reveal", "n"));
+      if (!macEqual(theirC, commit(theirN, other, round, digit))) throw new WrongCode("wrong pairing code");
+    } else {
+      theirC = await want2("commit", "c");
+      await path.send(enc({ t: "commit", c: mine }), "control");
+      const theirN = unb64(await want2("reveal", "n"));
+      if (!macEqual(theirC, commit(theirN, other, round, digit))) throw new WrongCode("wrong pairing code");
+      await path.send(enc({ t: "reveal", n: b64(n) }), "control");
+    }
+  }
+  return sha256(PROTOCOL, " code secret ", code, transcript);
+}
+var enc, HandshakeError, WrongCode, Session;
+var init_handshake = __esm({
+  "link/pairing/handshake.ts"() {
+    "use strict";
+    init_cpace();
+    init_crypto();
+    enc = (v) => Buffer.from(JSON.stringify(v));
+    HandshakeError = class extends Error {
+      peer;
+    };
+    WrongCode = class extends Error {
+    };
+    Session = class {
+      path;
+      #tx;
+      #rx;
+      constructor(path, tx2, rx) {
+        this.path = path;
+        this.#tx = tx2;
+        this.#rx = rx;
+      }
+      // Sealing happens in call order, so nonces match the order frames hit the wire.
+      send(h, body = new Uint8Array(), priority = "change") {
+        const head = Buffer.from(JSON.stringify(h));
+        const len = Buffer.alloc(4);
+        len.writeUInt32BE(head.length);
+        const plain = Buffer.concat([len, head, body]);
+        if (plain.length + 16 > this.path.limits.maxFrameBytes)
+          return Promise.reject(
+            new Error(
+              `a ${h.t} message of ${plain.length} bytes is over the ${this.path.limits.maxFrameBytes}-byte frame limit`
+            )
+          );
+        return this.path.send(this.#tx.seal(plain), priority);
+      }
+      async next() {
+        const f3 = await this.path.next();
+        if (!f3) return null;
+        const plain = this.#rx.open(f3);
+        const n = plain.readUInt32BE(0);
+        return { h: JSON.parse(plain.subarray(4, 4 + n).toString("utf8")), body: plain.subarray(4 + n) };
+      }
+      measurements() {
+        return this.path.measurements();
+      }
+      close(reason) {
+        this.path.close(reason);
+      }
+    };
+  }
+});
+
+// link/sync/paths.ts
+function score(s) {
+  const m = s.measurements();
+  return m.rttMs === null ? Infinity : m.rttMs + m.queuedBytes / 1024;
+}
+var SWITCH_RATIO, MIN_GAIN_MS, HOLD_MS, SILENT_MS, PathSet;
+var init_paths = __esm({
+  "link/sync/paths.ts"() {
+    "use strict";
+    SWITCH_RATIO = 0.75;
+    MIN_GAIN_MS = 1;
+    HOLD_MS = 4e3;
+    SILENT_MS = 7e3;
+    PathSet = class {
+      #paths = [];
+      #active = null;
+      /** The challenger and when it started being better. */
+      #better = null;
+      all() {
+        return [...this.#paths];
+      }
+      get size() {
+        return this.#paths.length;
+      }
+      on(transport) {
+        return this.#paths.find((e) => e.session.path.transport === transport);
+      }
+      entry(s) {
+        return this.#paths.find((e) => e.session === s);
+      }
+      active() {
+        return this.#active?.session ?? null;
+      }
+      /** Adds a path. The first path becomes active; later ones must win on score. */
+      add(session, initiator, now = Date.now()) {
+        const e = { session, initiator, since: now, lastHeard: now };
+        this.#paths.push(e);
+        this.#active ??= e;
+      }
+      /** Removes a path. Returns the new active session if the active one was removed. */
+      remove(session) {
+        const e = this.entry(session);
+        if (!e) return { wasActive: false, active: this.active() };
+        this.#paths = this.#paths.filter((x) => x !== e);
+        if (this.#better?.entry === e) this.#better = null;
+        if (this.#active !== e) return { wasActive: false, active: this.active() };
+        this.#active = this.#best();
+        this.#better = null;
+        return { wasActive: true, active: this.active() };
+      }
+      #best() {
+        let best = null;
+        for (const e of this.#paths) if (!best || score(e.session) < score(best.session)) best = e;
+        return best;
+      }
+      /** Re-checks the active path after a measurement. Returns the new active session if it switched. */
+      evaluate(now = Date.now()) {
+        const cur = this.#active;
+        if (!cur) return null;
+        const best = this.#best();
+        if (!best || best === cur) {
+          this.#better = null;
+          return null;
+        }
+        const a = score(cur.session);
+        const b = score(best.session);
+        if (!(b < a * SWITCH_RATIO && a - b >= MIN_GAIN_MS)) {
+          this.#better = null;
+          return null;
+        }
+        if (this.#better?.entry !== best) this.#better = { entry: best, since: now };
+        if (now - this.#better.since < HOLD_MS) return null;
+        this.#active = best;
+        this.#better = null;
+        return best.session;
+      }
+    };
+  }
+});
+
+// link/sync/coordinator.ts
+function refusal(e, remote) {
+  const peer = e instanceof HandshakeError ? e.peer : void 0;
+  const who2 = peer ? `${peer.name || "a device"} (${peer.device})` : `something at ${remote}`;
+  const m = e.message;
+  const pairAgain = "Fix: run `reflex pair` and scan the new code on it.";
+  if (/refused: .*(paired with another|changed|scan)/i.test(m))
+    return {
+      kind: "changed",
+      line: `${who2} is paired with an earlier Link identity on this computer and has stopped dialing it. ${pairAgain}`
+    };
+  if (/refused: /.test(m))
+    return { kind: "theirs", line: `${who2} refused this Link (${m.replace(/^.*refused: /, "")}).` };
+  if (/is not paired|closed the connection during the handshake/.test(m) && peer && !peer.paired && !peer.pair)
+    return {
+      kind: "unpaired",
+      line: `${who2} isn't paired with this Link. It most likely still holds a pairing with an earlier Link on this computer (a reset ~/.reflex) and keeps redialing it. ${pairAgain}`
+    };
+  if (/closed the connection during the handshake/.test(m))
+    return peer ? {
+      kind: "dropped",
+      line: `${who2} dropped the connection during the handshake (a network change or a weak signal); it reconnects on its own.`
+    } : {
+      kind: "silent",
+      line: `${who2} connected and closed before saying who it is (a connection cut short, an older Reflex app, or a port scan). Nothing to do unless your iPad won't connect; then run \`reflex pair\` and scan again.`
+    };
+  if (/unknown or expired pairing offer/.test(m))
+    return { kind: "expired", line: `${who2} used a pairing code that has expired or was already used. ${pairAgain}` };
+  if (/timed out/.test(m))
+    return {
+      kind: "timeout",
+      line: `${who2} went quiet for 10 s during the handshake (a weak network); it tries again on its own.`
+    };
+  if (/speaks/.test(m))
+    return {
+      kind: "version",
+      line: `${who2} speaks another Reflex protocol version. Fix: update the Reflex app or this checkout so the two match.`
+    };
+  return { kind: m, line: `${who2}: ${m}` };
+}
+var QUIET_MS, Quiet, hostOf, Coordinator;
+var init_coordinator = __esm({
+  "link/sync/coordinator.ts"() {
+    "use strict";
+    init_catalog();
+    init_handshake();
+    init_sends();
+    init_paths();
+    QUIET_MS = 10 * 60 * 1e3;
+    Quiet = class {
+      #seen = /* @__PURE__ */ new Map();
+      #swept = 0;
+      #log;
+      constructor(log) {
+        this.#log = log;
+      }
+      say(key, line, now = Date.now()) {
+        if (now - this.#swept > QUIET_MS) {
+          this.#swept = now;
+          for (const [k, v] of this.#seen) if (now - v.at > 2 * QUIET_MS) this.#seen.delete(k);
+        }
+        const s = this.#seen.get(key);
+        if (s && now - s.at < QUIET_MS) {
+          if (s.more++ === 0) this.#log(`${line} (this repeats; logged again at most every ${QUIET_MS / 6e4} min)`);
+          return;
+        }
+        this.#log(s?.more ? `${line} (${s.more} more times in the last ${Math.round((now - s.at) / 6e4)} min)` : line);
+        this.#seen.set(key, { at: now, more: 0 });
+      }
+      /** That place is fine again: its next refusal is news. */
+      clear(prefix) {
+        for (const k of this.#seen.keys()) if (k.startsWith(prefix)) this.#seen.delete(k);
+      }
+    };
+    hostOf = (remote) => remote.replace(/:\d+$/, "");
+    Coordinator = class {
+      #me;
+      #assets;
+      #catalog;
+      #offers;
+      #transports;
+      #log;
+      #peers = /* @__PURE__ */ new Map();
+      #candidates = /* @__PURE__ */ new Map();
+      #dialing = /* @__PURE__ */ new Set();
+      #timer = null;
+      #onPaired = [];
+      #pings = 0;
+      #everyPath;
+      #quiet;
+      /** Agents waiting for approval, shown on every iPad that connects. */
+      pendingAgents = () => [];
+      /** The person's answer about an Agent, from a paired iPad. */
+      onAgentDecision = () => {
+      };
+      /** Called each time a peer is bound, before the coordinator's own opening messages. */
+      onBound = () => {
+      };
+      /** Called when a bound peer's session ends. */
+      onUnbound = () => {
+      };
+      /** Whether a code from this source makes the iPad that scans it approve now (link.ts): only while none does. */
+      grantsApproval = () => false;
+      /** A device paired (or connected again) with a typed code; `agents` asked for that code. */
+      onCodePaired = () => {
+      };
+      /** What to do so an iPad may approve, for logs and for the iPad (link.ts). */
+      approvalHint = () => "";
+      onSend = () => {
+        throw new Error("Send receiver is not ready");
+      };
+      /** Messages the coordinator itself doesn't handle (the Relay's `relay_keys`, link/relay/sync.ts). */
+      onMessage = () => {
+      };
+      constructor(opts) {
+        this.#me = opts.me;
+        this.#assets = opts.assets;
+        this.#catalog = opts.catalog;
+        this.#offers = opts.offers;
+        this.#transports = opts.transports;
+        this.#log = opts.log;
+        this.#quiet = new Quiet(opts.log);
+        this.#everyPath = opts.everyPath ?? false;
+      }
+      /** Starts another transport while running: a Relay room shared with another person, or an invite's room. */
+      async addTransport(t) {
+        if (this.#transports.includes(t)) return;
+        this.#transports.push(t);
+        await t.listen((p) => void this.#accept(p));
+        t.discover((c) => this.#candidate(c));
+      }
+      async removeTransport(t) {
+        this.#transports = this.#transports.filter((x) => x !== t);
+        for (const [d, list] of this.#candidates)
+          this.#candidates.set(
+            d,
+            list.filter((c) => c.transport !== t.name)
+          );
+        await t.close();
+      }
+      onPaired(fn) {
+        this.#onPaired.push(fn);
+      }
+      peers() {
+        return [...this.#peers.values()];
+      }
+      async start() {
+        const ports = {};
+        for (const t of this.#transports) {
+          const { port } = await t.listen((p) => void this.#accept(p));
+          ports[t.name] = port;
+          t.discover((c) => this.#candidate(c));
+        }
+        this.#timer = setInterval(() => this.#redial(), 2e3);
+        this.#timer.unref();
+        return { ports };
+      }
+      async stop() {
+        if (this.#timer) clearInterval(this.#timer);
+        for (const p of this.#peers.values()) for (const e of p.paths.all()) e.session.close("link stopping");
+        await Promise.all(this.#transports.map((t) => t.close()));
+      }
+      #trust() {
+        return {
+          pairedKey: (device) => this.#catalog.device(device)?.key,
+          offerSecret: (offer) => this.#offers.secret(offer),
+          liveCode: () => this.#offers.liveCode(),
+          takeCode: (code, device) => this.#offers.takeCode(code, device),
+          codeFailed: () => {
+            this.#offers.codeFailed();
+            this.#log(
+              this.#offers.liveCode() ? "someone typed a wrong pairing code" : "a pairing code was typed wrong too many times and stopped working"
+            );
+          }
+        };
+      }
+      async #accept(path) {
+        try {
+          const r = await handshake(path, this.#me, this.#trust());
+          if (r.code) {
+            const agents = r.codeAgents ?? [];
+            if (r.cpace)
+              this.#log(
+                `${r.peer.name} (${r.peer.device}) proved the code through the relay's pairing room (${path.remote})`
+              );
+            if (r.paired) this.#remember(r.peer, null, "code");
+            const d = this.#catalog.pairedDevice(r.peer.device);
+            if (d.kind === "ipad" && d.person.id === this.#me.person.id && !mayApprove(d, this.#me.person.id)) {
+              const { approver_asked: _, ...rest2 } = d;
+              this.#catalog.pairDevice({ ...rest2, approves: true });
+            }
+            if (!r.paired) for (const f3 of this.#onPaired) f3(this.#catalog.pairedDevice(r.peer.device));
+            this.onCodePaired(this.#catalog.pairedDevice(r.peer.device), agents);
+          } else if (r.offer) {
+            const source = this.#offers.source(r.offer) ?? "terminal";
+            this.#offers.consume(r.offer, r.peer.device);
+            if (r.paired) this.#remember(r.peer, null, source === "terminal" ? "offer" : "admin-offer", source);
+            else {
+              const known = this.#catalog.pairedDevice(r.peer.device);
+              if (known.kind === "ipad" && known.person.id === this.#me.person.id && !mayApprove(known, this.#me.person.id))
+                this.#letApprove(known, source);
+              for (const f3 of this.#onPaired) f3(this.#catalog.pairedDevice(r.peer.device));
+            }
+          }
+          this.#quiet.clear(`${hostOf(path.remote)}|`);
+          this.#quiet.clear(`${r.peer.device}|`);
+          this.#bind(r.session, r.peer.device, r.peer.name, r.peer.device);
+        } catch (e) {
+          const why = refusal(e, path.remote);
+          const from = e instanceof HandshakeError && e.peer ? e.peer.device : hostOf(path.remote);
+          this.#quiet.say(`${from}|${why.kind}`, `refused a connection from ${path.remote}: ${why.line}`);
+          await path.send(Buffer.from(JSON.stringify({ t: "refused", reason: e.message })), "control").catch(() => {
+          });
+          setTimeout(() => path.close("handshake failed"), 100);
+        }
+      }
+      #remember(peer, at, via, source) {
+        const own2 = peer.person.id === this.#me.person.id;
+        const d = {
+          device: peer.device,
+          key: peer.key,
+          name: peer.name,
+          person: peer.person,
+          kind: peer.kind,
+          via,
+          paired_at: Date.now()
+        };
+        if (peer.kind === "ipad" && source) d.approves = false;
+        this.#catalog.pairDevice(d);
+        if (at) this.#catalog.seen(d.device, at.host, at.port);
+        this.#log(`paired with ${peer.name} (${peer.device}, person ${peer.person.name})`);
+        if (peer.kind === "ipad" && own2 && source) this.#letApprove(d, source);
+        if (via === "invite") return;
+        for (const p of this.#peers.values()) this.#news(p);
+        for (const f3 of this.#onPaired) f3(this.#catalog.device(d.device) ?? d);
+      }
+      /** iPads of this person's whose Allow counts. */
+      #approvers() {
+        return this.#catalog.devices().filter((d) => mayApprove(d, this.#me.person.id));
+      }
+      /**
+       * An iPad of the person's that can't approve, after it scanned a code: it may approve now if the code grants it (no iPad
+       * approves yet), or an approving iPad is asked "Let it approve Agents?". The person's iPad is the boundary: nothing
+       * with only the person's shell (a terminal, a command) makes another approver once one exists.
+       */
+      #letApprove(d, source) {
+        if (this.grantsApproval(source)) {
+          const { approver_asked: _, ...rest2 } = d;
+          this.#catalog.pairDevice({ ...rest2, approves: true });
+          this.#log(`${d.name} (${d.device}) may approve Agents`);
+          return;
+        }
+        const approvers = this.#approvers();
+        if (!approvers.length) {
+          this.#log(`${d.name} (${d.device}) syncs, but can't approve Agents yet. ${this.approvalHint()}`);
+          return;
+        }
+        if (!d.approver_asked) this.#catalog.pairDevice({ ...d, approves: false, approver_asked: Date.now() });
+        this.#log(
+          `${d.name} (${d.device}) syncs; asked ${approvers.map((a) => a.name).join(", ")} "Let ${d.name} approve Agents?"`
+        );
+        this.#sendApproverRequests();
+      }
+      /** Approving iPads: who waits for "Let … approve Agents?". */
+      #sendApproverRequests(only) {
+        const requests = this.#catalog.devices().flatMap(
+          (d) => d.approver_asked && !mayApprove(d, this.#me.person.id) ? [{ device: d.device, name: d.name, asked_at: d.approver_asked }] : []
+        );
+        for (const p of only ? [only] : this.#peers.values())
+          if (mayApprove(this.#catalog.device(p.device), this.#me.person.id))
+            this.#send(p, { t: "approver_requests", requests });
+      }
+      /** What an iPad of the person's hasn't heard yet: devices paired after it (each once), and who waits to approve. */
+      #news(p) {
+        const me = this.#catalog.device(p.device);
+        if (me?.kind !== "ipad" || me.person.id !== this.#me.person.id) return;
+        for (const d of this.#catalog.devices()) {
+          if (d.device === p.device || d.via === "invite" || d.paired_at < me.paired_at || (d.announced ?? []).includes(p.device))
+            continue;
+          this.#send(p, {
+            t: "device_paired",
+            device: d.device,
+            name: d.name,
+            approves: mayApprove(d, this.#me.person.id)
+          });
+          this.#catalog.pairDevice({ ...d, announced: [...d.announced ?? [], p.device] });
+        }
+        this.#sendApproverRequests(p);
+      }
+      /** Forgets one of this person's devices (`reflex link forget`): it can't connect or approve until it pairs again. */
+      forgetDevice(device) {
+        const d = this.#catalog.device(device);
+        if (!d) return void 0;
+        this.#catalog.forget("device", device);
+        this.#candidates.delete(device);
+        for (const e of this.#peers.get(device)?.paths.all() ?? []) e.session.close("forgotten by the person");
+        this.#log(`forgot ${d.name} (${device})`);
+        this.#sendApproverRequests();
+        return d;
+      }
+      /** Scans a pairing code: reaches the offering device and pairs with it. */
+      async join(offer) {
+        const scanned = { offer: offer.offer, device: offer.device, key: offer.key, secret: offer.secret };
+        const errors = [];
+        for (const host2 of offer.hosts) {
+          const c = { transport: "lan", device: offer.device, host: host2, port: offer.port };
+          let path;
+          try {
+            const lan = this.#transports.find((t) => t.name === "lan");
+            if (!lan) throw new Error("pairing needs the LAN transport");
+            path = await lan.dial(c);
+          } catch (e) {
+            errors.push(`${host2}: ${e.message}`);
+            continue;
+          }
+          try {
+            const r = await handshake(path, this.#me, this.#trust(), scanned);
+            this.#remember(r.peer, c, "join");
+            this.#bind(r.session, r.peer.device, r.peer.name, this.#me.key.device);
+            return this.#catalog.pairedDevice(r.peer.device);
+          } catch (e) {
+            path.close("pairing failed");
+            errors.push(`${host2}: ${e.message}`);
+          }
+        }
+        throw new Error(`Could not pair with ${offer.name || offer.device}: ${errors.join("; ")}`);
+      }
+      #candidate(c) {
+        if (!c.device || c.device === this.#me.key.device) return;
+        const list = this.#candidates.get(c.device) ?? [];
+        if (!list.some((x) => x.transport === c.transport && x.host === c.host && x.port === c.port)) list.unshift(c);
+        const per = /* @__PURE__ */ new Map();
+        const kept = list.filter((x) => {
+          const n = (per.get(x.transport) ?? 0) + 1;
+          per.set(x.transport, n);
+          return n <= 6;
+        });
+        this.#candidates.set(c.device, kept);
+        if (this.#catalog.device(c.device) && !this.#peers.get(c.device)?.paths.on(c.transport)) void this.#dial(c.device);
+      }
+      #redial() {
+        for (const d of this.#catalog.devices()) void this.#dial(d.device);
+        const now = Date.now();
+        for (const p of this.#peers.values())
+          for (const e of p.paths.all()) {
+            if (now - e.lastHeard > SILENT_MS) {
+              e.session.close(`heard nothing for ${Math.round((now - e.lastHeard) / 1e3)} s`);
+              continue;
+            }
+            void e.session.send({ t: "ping", n: ++this.#pings, at: now }, void 0, "control").catch(() => {
+            });
+          }
+      }
+      /** Dials a paired device on every transport it can be dialed on and has no path over yet. */
+      async #dial(device) {
+        if (this.#dialing.has(device)) return;
+        const known = this.#catalog.device(device);
+        if (!known || known.kind === "ipad") return;
+        const have = (t) => Boolean(this.#peers.get(device)?.paths.on(t));
+        const list = [...this.#candidates.get(device) ?? []];
+        if (known.last_seen)
+          list.unshift({ transport: "lan", device, host: known.last_seen.host, port: known.last_seen.port });
+        const reached = this.#peers.has(device);
+        const todo = list.filter(
+          (c, i) => !have(c.transport) && !(reached && c.transport === "relay") && list.findIndex((x) => x.transport === c.transport && x.host === c.host && x.port === c.port) === i
+        );
+        todo.sort((a, b) => Number(a.transport === "relay") - Number(b.transport === "relay"));
+        if (todo.length === 0) return;
+        this.#dialing.add(device);
+        try {
+          for (const name of new Set(todo.map((c) => c.transport))) {
+            if (have(name) || name === "relay" && this.#peers.has(device)) continue;
+            const t = this.#transports.find((x) => x.name === name);
+            if (!t) continue;
+            const queue = [];
+            let wake = null;
+            let pending = 0;
+            let done = false;
+            for (const c of todo.filter((x) => x.transport === name)) {
+              pending++;
+              t.dial(c).then(
+                (path) => {
+                  if (done) path.close("another address answered first");
+                  else queue.push({ path, c });
+                },
+                () => {
+                }
+              ).finally(() => {
+                pending--;
+                wake?.();
+              });
+            }
+            try {
+              for (; ; ) {
+                while (!queue.length && pending > 0) await new Promise((r) => wake = r);
+                const next = queue.shift();
+                if (!next) break;
+                const { path, c } = next;
+                try {
+                  const r = await handshake(path, this.#me, this.#trust());
+                  if (r.peer.device !== device) throw new Error(`expected ${device}, reached ${r.peer.device}`);
+                  if (c.transport === "lan") this.#catalog.seen(device, c.host, c.port);
+                  this.#quiet.clear(`dial:${device}|`);
+                  this.#bind(r.session, device, r.peer.name, this.#me.key.device);
+                  break;
+                } catch (e) {
+                  path.close("handshake failed");
+                  this.#quiet.say(
+                    `dial:${device}|${c.host}|${e.message}`,
+                    `could not connect to ${device} at ${c.host}:${c.port}: ${e.message}`
+                  );
+                }
+              }
+            } finally {
+              done = true;
+              for (const q2 of queue.splice(0)) q2.path.close("another address answered first");
+            }
+          }
+        } finally {
+          this.#dialing.delete(device);
+        }
+      }
+      /**
+       * One live session per peer per transport. If two exist on one transport (both sides dialed
+       * at once), both sides keep the one dialed by the lower device ID, so they agree. A session on
+       * another transport is another path to the same peer.
+       */
+      #bind(session, device, name, initiator) {
+        name ||= this.#catalog.device(device)?.name ?? device;
+        const transport = session.path.transport;
+        const known = this.#peers.get(device);
+        if (known) {
+          const same2 = known.paths.on(transport);
+          if (same2) {
+            if (same2.initiator <= initiator) {
+              session.close("duplicate path");
+              return;
+            }
+            same2.session.close("replaced by a preferred path");
+          }
+          known.paths.add(session, initiator);
+          this.#log(`added a ${transport} path to ${name} (${session.path.remote}); ${known.paths.size} paths`);
+          void this.#loop(known, session);
+          return;
+        }
+        const peer = {
+          incoming: /* @__PURE__ */ new Map(),
+          device,
+          name,
+          paths: new PathSet(),
+          since: Date.now(),
+          refused: /* @__PURE__ */ new Set()
+        };
+        peer.paths.add(session, initiator);
+        this.#peers.set(device, peer);
+        this.#log(`connected to ${name} (${device}) over ${transport} ${session.path.remote}`);
+        void this.#loop(peer, session);
+        this.#fresh(peer);
+      }
+      /** Restores approvals and device news on a fresh authenticated path. */
+      #fresh(peer) {
+        this.onBound(peer);
+        if (mayApprove(this.#catalog.device(peer.device), this.#me.person.id))
+          for (const a of this.pendingAgents()) this.#send(peer, { t: "agent_request", ...a });
+        this.#sendAgents(peer);
+        this.#news(peer);
+      }
+      /** Whether a peer is one of this person's own devices. */
+      #own(p) {
+        return this.#catalog.device(p.device)?.person.id === this.#me.person.id;
+      }
+      /** Every Agent's name and color, so iPads can label Agent changes (their chips and history). */
+      announceAgents() {
+        for (const p of this.#peers.values()) if (this.#own(p)) this.#sendAgents(p);
+      }
+      #sendAgents(p) {
+        const agents = this.#catalog.agents().map(({ id: id2, name, color, status, requested_at }) => ({ id: id2, name, color, status, requested_at }));
+        this.#send(p, { t: "agents", agents, approver: mayApprove(this.#catalog.device(p.device), this.#me.person.id) });
+      }
+      /** Sends a control message to a peer on its active path (for session extensions). */
+      send(p, h) {
+        this.#send(p, h);
+      }
+      /**
+       * Sends on the peer's active path. With `everyPath`, sync messages go over every live path, so
+       * the same change arrives more than once.
+       */
+      #send(p, h, body, priority = "control") {
+        const active = p.paths.active();
+        const to = this.#everyPath && h.t === "sync" ? p.paths.all().map((e) => e.session) : active ? [active] : [];
+        for (const s of to)
+          void s.send(h, body, priority).catch((e) => this.#log(`could not send ${h.t} to ${p.name} over ${s.path.transport}: ${e.message}`));
+      }
+      /** Asks every connected iPad about an Agent waiting for approval. */
+      askAboutAgent(a) {
+        for (const p of this.#peers.values())
+          if (mayApprove(this.#catalog.device(p.device), this.#me.person.id)) this.#send(p, { t: "agent_request", ...a });
+        this.announceAgents();
+      }
+      async #loop(p, s) {
+        const transport = s.path.transport;
+        try {
+          for (; ; ) {
+            const m = await s.next();
+            if (!m) break;
+            const e = p.paths.entry(s);
+            if (e) e.lastHeard = Date.now();
+            this.#handle(p, s, m.h, m.body);
+          }
+        } catch (e) {
+          this.#log(`dropping the ${transport} path to ${p.name} (${p.device}): ${e.message}`);
+          s.close("bad frame");
+        }
+        for (const k of p.incoming.keys()) if (k.startsWith(`${s.path.id}:`)) p.incoming.delete(k);
+        if (this.#peers.get(p.device) !== p) return;
+        const r = p.paths.remove(s);
+        if (p.paths.size === 0) {
+          this.#peers.delete(p.device);
+          this.#log(`disconnected from ${p.name} (${p.device})`);
+          this.onUnbound(p);
+          return;
+        }
+        this.#log(`lost the ${transport} path to ${p.name}; ${p.paths.size} left`);
+        if (r.wasActive && r.active) {
+          this.#log(`now sending to ${p.name} over ${r.active.path.transport} ${r.active.path.remote}`);
+          this.#fresh(p);
+        }
+      }
+      #handle(p, s, h, body) {
+        switch (h.t) {
+          case "send": {
+            const device = this.#catalog.device(p.device);
+            if (device?.kind !== "ipad" || device.person.id !== this.#me.person.id) return;
+            const send = nativeSend(h.send, h.space, device.person.id, p.device);
+            for (const crop of send.crops ?? []) this.#assets.get(crop.asset);
+            this.onSend(send);
+            this.#send(p, { t: "send_ack", send: send.send });
+            return;
+          }
+          case "assets_have": {
+            return;
+          }
+          case "asset": {
+            if (!this.#own(p) || this.#catalog.device(p.device)?.kind !== "ipad") return;
+            const hash = String(h.hash);
+            const off = Number(h.off);
+            const size2 = Number(h.size);
+            if (!/^[a-f0-9]{64}$/.test(hash) || !Number.isSafeInteger(off) || off < 0 || !Number.isSafeInteger(size2) || size2 < 0 || size2 > 64 * 1024 * 1024)
+              return;
+            if (this.#assets.has(hash)) return;
+            const key = `${s.path.id}:${hash}`;
+            let inc = p.incoming.get(key);
+            if (off === 0) {
+              inc = { size: size2, parts: [], got: 0 };
+              p.incoming.set(key, inc);
+            }
+            if (!inc || inc.got !== off || inc.size !== size2 || off + body.length > size2) {
+              p.incoming.delete(key);
+              this.#log(`dropped a malformed part of asset ${hash} from ${p.name}`);
+              return;
+            }
+            inc.parts.push(Buffer.from(body));
+            inc.got += body.length;
+            if (inc.got < size2) return;
+            p.incoming.delete(key);
+            if (!this.#assets.putVerified(hash, Buffer.concat(inc.parts)))
+              this.#log(`rejected asset ${hash} from ${p.name}: bytes do not match the hash`);
+            return;
+          }
+          case "agent_decision": {
+            const d = this.#catalog.device(p.device);
+            const id2 = String(h.id);
+            const status = h.status === "approved" ? "approved" : "denied";
+            const asked = this.#catalog.agent(id2)?.requested_at;
+            if (!mayApprove(d, this.#me.person.id)) {
+              const hint = this.approvalHint();
+              this.#quiet.say(
+                `decision:${p.device}`,
+                `ignored an Agent decision from ${p.name}: it can't approve Agents. ${hint}`
+              );
+              this.#send(p, { t: "agent_decision_refused", id: id2, reason: `This iPad can't approve Agents. ${hint}` });
+            } else if (h.requested_at !== void 0 && asked !== void 0 && Number(h.requested_at) !== asked)
+              this.#quiet.say(
+                `stale:${p.device}|${id2}`,
+                `ignored an earlier answer about Agent ${id2} from ${p.name}: it was asked again since; the iPad asks anew`
+              );
+            else this.onAgentDecision(p.device, id2, status);
+            this.#sendAgents(p);
+            return;
+          }
+          case "approver_decision": {
+            const d = this.#catalog.device(String(h.device ?? ""));
+            if (!mayApprove(this.#catalog.device(p.device), this.#me.person.id)) {
+              this.#quiet.say(
+                `approver:${p.device}`,
+                `ignored "Let \u2026 approve Agents?" from ${p.name}: it can't approve Agents itself`
+              );
+              return;
+            }
+            if (!d?.approver_asked || mayApprove(d, this.#me.person.id)) {
+              this.#sendApproverRequests(p);
+              return;
+            }
+            const allow = h.allow === true;
+            const { approver_asked: _, ...rest2 } = d;
+            this.#catalog.pairDevice({ ...rest2, approves: allow });
+            this.#log(`${p.name} ${allow ? "let" : "did not let"} ${d.name} (${d.device}) approve Agents`);
+            this.#sendApproverRequests();
+            const q2 = this.#peers.get(d.device);
+            if (q2) {
+              this.#sendAgents(q2);
+              if (allow) for (const a of this.pendingAgents()) this.#send(q2, { t: "agent_request", ...a });
+            }
+            return;
+          }
+          case "ping":
+            void s.send({ t: "pong", n: h.n, at: h.at }, void 0, "control").catch(() => {
+            });
+            return;
+          case "pong": {
+            s.path.recordRtt(Date.now() - Number(h.at));
+            const from = p.paths.active();
+            const to = p.paths.evaluate();
+            if (to && from)
+              this.#log(
+                `now sending to ${p.name} over ${to.path.transport} (${to.measurements().rttMs} ms) instead of ${from.path.transport} (${from.measurements().rttMs} ms)`
+              );
+            return;
+          }
+          default:
+            this.onMessage(p, h, body);
+            return;
+        }
+      }
+    };
   }
 });
 
@@ -10294,7 +10709,7 @@ var init_fault = __esm({
       }
       next() {
         if (this.#inbox.length) {
-          const f3 = this.#inbox.shift();
+          const f3 = this.#inbox.shift() ?? null;
           if (f3 === null) this.#inbox.unshift(null);
           return Promise.resolve(f3);
         }
@@ -13633,7 +14048,7 @@ var init_lan = __esm({
     MAX_FRAME = 16 * 1024 * 1024;
     SERVICE_TYPE = "reflex-link";
     TcpPath = class {
-      id = "lan-" + randomBytes9(4).toString("hex");
+      id = `lan-${randomBytes9(4).toString("hex")}`;
       transport = "lan";
       limits = { maxFrameBytes: MAX_FRAME, reliable: true, ordered: true };
       initiator;
@@ -13662,7 +14077,10 @@ var init_lan = __esm({
         this.#buf = this.#buf.length ? Buffer.concat([this.#buf, d]) : d;
         while (this.#buf.length >= 4) {
           const n = this.#buf.readUInt32BE(0);
-          if (n > MAX_FRAME) return this.close(`frame of ${n} bytes is over the limit`);
+          if (n > MAX_FRAME) {
+            this.close(`frame of ${n} bytes is over the limit`);
+            return;
+          }
           if (this.#buf.length < 4 + n) break;
           const f3 = this.#buf.subarray(4, 4 + n);
           this.#buf = this.#buf.subarray(4 + n);
@@ -13731,7 +14149,7 @@ var init_lan = __esm({
         this.#advertise = opts.advertise ?? true;
       }
       listen(onPath) {
-        return new Promise((resolve5, reject) => {
+        return new Promise((resolve4, reject) => {
           const server = createServer2((s) => onPath(new TcpPath(s, false)));
           const start2 = (port) => {
             server.once("error", (e) => {
@@ -13753,7 +14171,7 @@ var init_lan = __esm({
                   // names carry the device ID, so they are unique by construction
                 });
               }
-              resolve5({ port: actual });
+              resolve4({ port: actual });
             });
           };
           start2(this.#port);
@@ -13787,11 +14205,11 @@ var init_lan = __esm({
         t.unref();
       }
       dial(c) {
-        return new Promise((resolve5, reject) => {
+        return new Promise((resolve4, reject) => {
           const s = createConnection({ host: c.host, port: c.port, timeout: 5e3 });
           s.once("connect", () => {
             s.setTimeout(0);
-            resolve5(new TcpPath(s, true));
+            resolve4(new TcpPath(s, true));
           });
           s.once("timeout", () => {
             s.destroy();
@@ -13804,6 +14222,276 @@ var init_lan = __esm({
         await new Promise((r) => this.#bonjour ? this.#bonjour.unpublishAll(() => r()) : r());
         this.#bonjour?.destroy();
         await new Promise((r) => this.#server ? this.#server.close(() => r()) : r());
+      }
+    };
+  }
+});
+
+// link/transports/framed.ts
+import { randomBytes as randomBytes10 } from "node:crypto";
+var MAX_FRAME2, FramedPath;
+var init_framed = __esm({
+  "link/transports/framed.ts"() {
+    "use strict";
+    MAX_FRAME2 = 16 * 1024 * 1024;
+    FramedPath = class {
+      id;
+      transport;
+      limits = { maxFrameBytes: MAX_FRAME2, reliable: true, ordered: true };
+      initiator;
+      remote;
+      closed;
+      #buf = Buffer.alloc(0);
+      #frames = [];
+      #waiters = [];
+      #done = false;
+      m = { rttMs: null, queuedBytes: 0, sentBytes: 0, receivedBytes: 0 };
+      #resolveClosed;
+      constructor(transport, remote, initiator) {
+        this.id = `${transport}-${randomBytes10(4).toString("hex")}`;
+        this.transport = transport;
+        this.remote = remote;
+        this.initiator = initiator;
+        this.closed = new Promise((r) => this.#resolveClosed = r);
+      }
+      onData(d) {
+        this.m.receivedBytes += d.length;
+        this.#buf = this.#buf.length ? Buffer.concat([this.#buf, d]) : d;
+        while (this.#buf.length >= 4) {
+          const n = this.#buf.readUInt32BE(0);
+          if (n > MAX_FRAME2) {
+            this.close(`frame of ${n} bytes is over the limit`);
+            return;
+          }
+          if (this.#buf.length < 4 + n) break;
+          const f3 = this.#buf.subarray(4, 4 + n);
+          this.#buf = this.#buf.subarray(4 + n);
+          const w = this.#waiters.shift();
+          if (w) w(f3);
+          else this.#frames.push(f3);
+        }
+      }
+      finish(reason) {
+        if (this.#done) return;
+        this.#done = true;
+        for (const w of this.#waiters.splice(0)) w(null);
+        this.#resolveClosed(reason);
+      }
+      async send(frame3, _priority) {
+        if (this.#done) throw new Error("path closed");
+        if (frame3.length > MAX_FRAME2) throw new Error(`frame of ${frame3.length} bytes is over the limit`);
+        const head = Buffer.alloc(4);
+        head.writeUInt32BE(frame3.length);
+        this.m.sentBytes += frame3.length + 4;
+        await this.write(Buffer.concat([head, frame3]));
+      }
+      next() {
+        const f3 = this.#frames.shift();
+        if (f3) return Promise.resolve(f3);
+        if (this.#done) return Promise.resolve(null);
+        return new Promise((r) => this.#waiters.push(r));
+      }
+      measurements() {
+        return { ...this.m, queuedBytes: this.queued() };
+      }
+      recordRtt(ms) {
+        this.m.rttMs = this.m.rttMs === null ? ms : Math.round((this.m.rttMs * 0.7 + ms * 0.3) * 10) / 10;
+      }
+      close(reason) {
+        this.destroy();
+        this.finish(reason);
+      }
+    };
+  }
+});
+
+// link/transports/p2p.ts
+import { spawn } from "node:child_process";
+import { existsSync as existsSync5 } from "node:fs";
+import { dirname as dirname2, join as join5 } from "node:path";
+import { fileURLToPath } from "node:url";
+function message(kind, conn, payload = new Uint8Array()) {
+  const head = Buffer.alloc(9);
+  head.writeUInt32BE(5 + payload.length, 0);
+  head.writeUInt8(kind, 4);
+  head.writeUInt32BE(conn, 5);
+  return Buffer.concat([head, payload]);
+}
+var HERE, HELPER, K, HIGH_WATER, HelperPath, Helper, P2pTransport;
+var init_p2p = __esm({
+  "link/transports/p2p.ts"() {
+    "use strict";
+    init_framed();
+    HERE = dirname2(fileURLToPath(import.meta.url));
+    HELPER = process.env.REFLEX_P2P_HELPER ?? (process.env.REFLEX_BIN && existsSync5(join5(dirname2(process.env.REFLEX_BIN), "reflex-p2p")) ? join5(dirname2(process.env.REFLEX_BIN), "reflex-p2p") : join5(HERE, "p2p", ".build", "release", "reflex-p2p"));
+    K = { ready: 1, open: 2, data: 3, closed: 4, log: 5, sent: 6 };
+    HIGH_WATER = 1024 * 1024;
+    HelperPath = class extends FramedPath {
+      #helper;
+      #conn;
+      #inFlight = 0;
+      #drained = [];
+      constructor(helper, conn, remote) {
+        super("p2p", remote, false);
+        this.#helper = helper;
+        this.#conn = conn;
+      }
+      data(d) {
+        this.onData(d);
+      }
+      /** The network took `n` bytes. */
+      sent(n) {
+        this.#inFlight = Math.max(0, this.#inFlight - n);
+        if (this.#inFlight <= HIGH_WATER) for (const r of this.#drained.splice(0)) r();
+      }
+      gone(reason) {
+        for (const r of this.#drained.splice(0)) r();
+        this.finish(reason);
+      }
+      async write(bytes) {
+        this.#inFlight += bytes.length;
+        this.#helper.write(message(K.data, this.#conn, bytes));
+        if (this.#inFlight > HIGH_WATER) await new Promise((r) => this.#drained.push(r));
+      }
+      queued() {
+        return this.#inFlight;
+      }
+      destroy() {
+        this.#helper.write(message(K.closed, this.#conn));
+      }
+    };
+    Helper = class {
+      #child;
+      #buf = Buffer.alloc(0);
+      #paths = /* @__PURE__ */ new Map();
+      #onReady;
+      #onPath;
+      #log;
+      exited;
+      constructor(args2, on) {
+        this.#onReady = on.ready;
+        this.#onPath = on.path;
+        this.#log = on.log;
+        this.#child = spawn(HELPER, args2, {
+          stdio: ["pipe", "pipe", "inherit"],
+          env: { ...process.env, REFLEX_P2P_TXT: JSON.stringify(on.txt ?? {}) }
+        });
+        this.#child.stdout.on("data", (d) => this.#data(d));
+        this.#child.stdin.on("error", () => {
+        });
+        this.exited = new Promise((r) => {
+          this.#child.once("error", (e) => r(e.message));
+          this.#child.once("exit", (code, sig) => r(sig ? `killed by ${sig}` : `exited with ${code}`));
+        }).then((why) => {
+          for (const p of this.#paths.values()) p.gone(`peer-to-peer helper ${why}`);
+          this.#paths.clear();
+          return why;
+        });
+      }
+      write(b) {
+        if (this.#child.stdin?.writable) this.#child.stdin.write(b);
+      }
+      #data(d) {
+        this.#buf = this.#buf.length ? Buffer.concat([this.#buf, d]) : d;
+        while (this.#buf.length >= 4) {
+          const n = this.#buf.readUInt32BE(0);
+          if (this.#buf.length < 4 + n) break;
+          const kind = this.#buf.readUInt8(4);
+          const conn = this.#buf.readUInt32BE(5);
+          const payload = this.#buf.subarray(9, 4 + n);
+          this.#buf = this.#buf.subarray(4 + n);
+          this.#handle(kind, conn, payload);
+        }
+      }
+      #handle(kind, conn, payload) {
+        switch (kind) {
+          case K.ready:
+            this.#onReady(Number(JSON.parse(payload.toString("utf8")).port));
+            return;
+          case K.open: {
+            const { remote, interface: iface } = JSON.parse(payload.toString("utf8"));
+            const p = new HelperPath(this, conn, `${remote} via ${iface}`);
+            this.#paths.set(conn, p);
+            this.#onPath(p);
+            return;
+          }
+          case K.data:
+            this.#paths.get(conn)?.data(Buffer.from(payload));
+            return;
+          case K.sent:
+            this.#paths.get(conn)?.sent(payload.readUInt32BE(0));
+            return;
+          case K.closed:
+            this.#paths.get(conn)?.gone(payload.toString("utf8") || "closed");
+            this.#paths.delete(conn);
+            return;
+          case K.log:
+            this.#log(`peer-to-peer: ${payload.toString("utf8")}`);
+            return;
+        }
+      }
+      kill() {
+        this.#child.kill();
+      }
+    };
+    P2pTransport = class {
+      name = "p2p";
+      #device;
+      #port;
+      #log;
+      #helper = null;
+      #closing = false;
+      #txt;
+      constructor(opts) {
+        this.#device = opts.device;
+        this.#txt = opts.txt ?? {};
+        this.#port = opts.port ?? 0;
+        this.#log = opts.log;
+      }
+      /** Whether peer-to-peer can run here: macOS with the helper built. */
+      static available() {
+        if (process.platform !== "darwin") return { ok: false, why: "Apple peer-to-peer Wi-Fi needs macOS" };
+        if (!existsSync5(HELPER)) return { ok: false, why: `the helper isn't built (npm run build:p2p)` };
+        return { ok: true };
+      }
+      listen(onPath) {
+        return new Promise((resolve4) => {
+          let first = true;
+          const run = () => {
+            const h = new Helper(["--device", this.#device, "--port", String(this.#port)], {
+              ready: (port) => {
+                this.#port = port;
+                if (first) resolve4({ port });
+                else this.#log(`peer-to-peer helper is back on :${port}`);
+                first = false;
+              },
+              path: onPath,
+              log: this.#log,
+              txt: this.#txt
+            });
+            this.#helper = h;
+            void h.exited.then((why) => {
+              if (this.#closing) return;
+              this.#log(`peer-to-peer helper ${why}; starting it again in 2 s`);
+              if (first) {
+                first = false;
+                resolve4({ port: 0 });
+              }
+              setTimeout(() => !this.#closing && run(), 2e3).unref();
+            });
+          };
+          run();
+        });
+      }
+      discover(_onCandidate) {
+      }
+      dial(_c) {
+        return Promise.reject(new Error("the peer-to-peer transport only accepts connections"));
+      }
+      async close() {
+        this.#closing = true;
+        this.#helper?.kill();
+        if (this.#helper) await this.#helper.exited;
       }
     };
   }
@@ -13824,22 +14512,22 @@ function unframe(b) {
   const n = b[0];
   return { device: b.subarray(1, 1 + n).toString(), ch: b.readUInt32BE(1 + n), payload: b.subarray(5 + n) };
 }
-var RELAY_PROTOCOL, MAX_FRAME2, OPENER, HIGH_WATER, roomFor, DEFAULT_RELAY, PAIRING_ROOM, RelayPath, RelayTransport;
+var RELAY_PROTOCOL, MAX_FRAME3, OPENER, HIGH_WATER2, roomFor, DEFAULT_RELAY, PAIRING_ROOM, RelayPath, RelayTransport;
 var init_relay = __esm({
   "link/transports/relay.ts"() {
     "use strict";
     init_crypto();
     RELAY_PROTOCOL = "reflex-relay/v0";
-    MAX_FRAME2 = 4 * 1024 * 1024;
+    MAX_FRAME3 = 4 * 1024 * 1024;
     OPENER = 2147483648;
-    HIGH_WATER = 2 * 1024 * 1024;
+    HIGH_WATER2 = 2 * 1024 * 1024;
     roomFor = (person) => createHash4("sha256").update(`${RELAY_PROTOCOL} room ${person}`).digest("hex").slice(0, 32);
     DEFAULT_RELAY = "wss://reflex.eilmer.si";
     PAIRING_ROOM = createHash4("sha256").update(`${RELAY_PROTOCOL} pairing room`).digest("hex").slice(0, 32);
     RelayPath = class {
       id;
       transport = "relay";
-      limits = { maxFrameBytes: MAX_FRAME2, reliable: true, ordered: true };
+      limits = { maxFrameBytes: MAX_FRAME3, reliable: true, ordered: true };
       initiator;
       remote;
       closed;
@@ -13876,7 +14564,7 @@ var init_relay = __esm({
       }
       async send(f3, _p) {
         if (this.#done) throw new Error("path closed");
-        if (f3.length > MAX_FRAME2) throw new Error(`frame of ${f3.length} bytes is over the limit`);
+        if (f3.length > MAX_FRAME3) throw new Error(`frame of ${f3.length} bytes is over the limit`);
         this.#m.sentBytes += f3.length;
         await this.#t.write(frame(this.device, this.wireCh, f3));
       }
@@ -13973,7 +14661,8 @@ var init_relay = __esm({
           this.#watched = "";
           for (const p of [...this.#paths.values()]) p.finish("relay connection closed");
           this.#online.clear();
-          if (was && this.name === "relay") this.#log(`relay: disconnected from ${this.url} (${ev.code}${ev.reason ? ` ${ev.reason}` : ""})`);
+          if (was && this.name === "relay")
+            this.#log(`relay: disconnected from ${this.url} (${ev.code}${ev.reason ? ` ${ev.reason}` : ""})`);
           if (this.#stopped) return;
           const t = setTimeout(() => this.#connect(), this.#backoff);
           t.unref();
@@ -14049,7 +14738,8 @@ var init_relay = __esm({
         const ws = this.#ws;
         if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error("relay connection closed");
         ws.send(b);
-        while (ws.readyState === WebSocket.OPEN && ws.bufferedAmount > HIGH_WATER) await new Promise((r) => setTimeout(r, 5));
+        while (ws.readyState === WebSocket.OPEN && ws.bufferedAmount > HIGH_WATER2)
+          await new Promise((r) => setTimeout(r, 5));
       }
       buffered() {
         return this.#ws?.bufferedAmount ?? 0;
@@ -14061,278 +14751,19 @@ var init_relay = __esm({
   }
 });
 
-// link/transports/framed.ts
-import { randomBytes as randomBytes10 } from "node:crypto";
-var MAX_FRAME3, FramedPath;
-var init_framed = __esm({
-  "link/transports/framed.ts"() {
-    "use strict";
-    MAX_FRAME3 = 16 * 1024 * 1024;
-    FramedPath = class {
-      id;
-      transport;
-      limits = { maxFrameBytes: MAX_FRAME3, reliable: true, ordered: true };
-      initiator;
-      remote;
-      closed;
-      #buf = Buffer.alloc(0);
-      #frames = [];
-      #waiters = [];
-      #done = false;
-      m = { rttMs: null, queuedBytes: 0, sentBytes: 0, receivedBytes: 0 };
-      #resolveClosed;
-      constructor(transport, remote, initiator) {
-        this.id = `${transport}-${randomBytes10(4).toString("hex")}`;
-        this.transport = transport;
-        this.remote = remote;
-        this.initiator = initiator;
-        this.closed = new Promise((r) => this.#resolveClosed = r);
-      }
-      onData(d) {
-        this.m.receivedBytes += d.length;
-        this.#buf = this.#buf.length ? Buffer.concat([this.#buf, d]) : d;
-        while (this.#buf.length >= 4) {
-          const n = this.#buf.readUInt32BE(0);
-          if (n > MAX_FRAME3) return this.close(`frame of ${n} bytes is over the limit`);
-          if (this.#buf.length < 4 + n) break;
-          const f3 = this.#buf.subarray(4, 4 + n);
-          this.#buf = this.#buf.subarray(4 + n);
-          const w = this.#waiters.shift();
-          if (w) w(f3);
-          else this.#frames.push(f3);
-        }
-      }
-      finish(reason) {
-        if (this.#done) return;
-        this.#done = true;
-        for (const w of this.#waiters.splice(0)) w(null);
-        this.#resolveClosed(reason);
-      }
-      async send(frame3, _priority) {
-        if (this.#done) throw new Error("path closed");
-        if (frame3.length > MAX_FRAME3) throw new Error(`frame of ${frame3.length} bytes is over the limit`);
-        const head = Buffer.alloc(4);
-        head.writeUInt32BE(frame3.length);
-        this.m.sentBytes += frame3.length + 4;
-        await this.write(Buffer.concat([head, frame3]));
-      }
-      next() {
-        const f3 = this.#frames.shift();
-        if (f3) return Promise.resolve(f3);
-        if (this.#done) return Promise.resolve(null);
-        return new Promise((r) => this.#waiters.push(r));
-      }
-      measurements() {
-        return { ...this.m, queuedBytes: this.queued() };
-      }
-      recordRtt(ms) {
-        this.m.rttMs = this.m.rttMs === null ? ms : Math.round((this.m.rttMs * 0.7 + ms * 0.3) * 10) / 10;
-      }
-      close(reason) {
-        this.destroy();
-        this.finish(reason);
-      }
-    };
-  }
-});
-
-// link/transports/p2p.ts
-import { spawn } from "node:child_process";
-import { existsSync as existsSync5 } from "node:fs";
-import { dirname as dirname2, join as join5 } from "node:path";
-import { fileURLToPath } from "node:url";
-function message(kind, conn, payload = new Uint8Array()) {
-  const head = Buffer.alloc(9);
-  head.writeUInt32BE(5 + payload.length, 0);
-  head.writeUInt8(kind, 4);
-  head.writeUInt32BE(conn, 5);
-  return Buffer.concat([head, payload]);
-}
-var HERE, HELPER, K, HIGH_WATER2, HelperPath, Helper, P2pTransport;
-var init_p2p = __esm({
-  "link/transports/p2p.ts"() {
-    "use strict";
-    init_framed();
-    HERE = dirname2(fileURLToPath(import.meta.url));
-    HELPER = process.env.REFLEX_P2P_HELPER ?? (process.env.REFLEX_BIN && existsSync5(join5(dirname2(process.env.REFLEX_BIN), "reflex-p2p")) ? join5(dirname2(process.env.REFLEX_BIN), "reflex-p2p") : join5(HERE, "p2p", ".build", "release", "reflex-p2p"));
-    K = { ready: 1, open: 2, data: 3, closed: 4, log: 5, sent: 6 };
-    HIGH_WATER2 = 1024 * 1024;
-    HelperPath = class extends FramedPath {
-      #helper;
-      #conn;
-      #inFlight = 0;
-      #drained = [];
-      constructor(helper, conn, remote) {
-        super("p2p", remote, false);
-        this.#helper = helper;
-        this.#conn = conn;
-      }
-      data(d) {
-        this.onData(d);
-      }
-      /** The network took `n` bytes. */
-      sent(n) {
-        this.#inFlight = Math.max(0, this.#inFlight - n);
-        if (this.#inFlight <= HIGH_WATER2) for (const r of this.#drained.splice(0)) r();
-      }
-      gone(reason) {
-        for (const r of this.#drained.splice(0)) r();
-        this.finish(reason);
-      }
-      async write(bytes) {
-        this.#inFlight += bytes.length;
-        this.#helper.write(message(K.data, this.#conn, bytes));
-        if (this.#inFlight > HIGH_WATER2) await new Promise((r) => this.#drained.push(r));
-      }
-      queued() {
-        return this.#inFlight;
-      }
-      destroy() {
-        this.#helper.write(message(K.closed, this.#conn));
-      }
-    };
-    Helper = class {
-      #child;
-      #buf = Buffer.alloc(0);
-      #paths = /* @__PURE__ */ new Map();
-      #onReady;
-      #onPath;
-      #log;
-      exited;
-      constructor(args2, on) {
-        this.#onReady = on.ready;
-        this.#onPath = on.path;
-        this.#log = on.log;
-        this.#child = spawn(HELPER, args2, { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, REFLEX_P2P_TXT: JSON.stringify(on.txt ?? {}) } });
-        this.#child.stdout.on("data", (d) => this.#data(d));
-        this.#child.stdin.on("error", () => {
-        });
-        this.exited = new Promise((r) => {
-          this.#child.once("error", (e) => r(e.message));
-          this.#child.once("exit", (code, sig) => r(sig ? `killed by ${sig}` : `exited with ${code}`));
-        }).then((why) => {
-          for (const p of this.#paths.values()) p.gone(`peer-to-peer helper ${why}`);
-          this.#paths.clear();
-          return why;
-        });
-      }
-      write(b) {
-        if (this.#child.stdin?.writable) this.#child.stdin.write(b);
-      }
-      #data(d) {
-        this.#buf = this.#buf.length ? Buffer.concat([this.#buf, d]) : d;
-        while (this.#buf.length >= 4) {
-          const n = this.#buf.readUInt32BE(0);
-          if (this.#buf.length < 4 + n) break;
-          const kind = this.#buf.readUInt8(4);
-          const conn = this.#buf.readUInt32BE(5);
-          const payload = this.#buf.subarray(9, 4 + n);
-          this.#buf = this.#buf.subarray(4 + n);
-          this.#handle(kind, conn, payload);
-        }
-      }
-      #handle(kind, conn, payload) {
-        switch (kind) {
-          case K.ready:
-            return this.#onReady(Number(JSON.parse(payload.toString("utf8")).port));
-          case K.open: {
-            const { remote, interface: iface } = JSON.parse(payload.toString("utf8"));
-            const p = new HelperPath(this, conn, `${remote} via ${iface}`);
-            this.#paths.set(conn, p);
-            return this.#onPath(p);
-          }
-          case K.data:
-            return this.#paths.get(conn)?.data(Buffer.from(payload));
-          case K.sent:
-            return this.#paths.get(conn)?.sent(payload.readUInt32BE(0));
-          case K.closed:
-            this.#paths.get(conn)?.gone(payload.toString("utf8") || "closed");
-            this.#paths.delete(conn);
-            return;
-          case K.log:
-            return this.#log(`peer-to-peer: ${payload.toString("utf8")}`);
-        }
-      }
-      kill() {
-        this.#child.kill();
-      }
-    };
-    P2pTransport = class {
-      name = "p2p";
-      #device;
-      #port;
-      #log;
-      #helper = null;
-      #closing = false;
-      #txt;
-      constructor(opts) {
-        this.#device = opts.device;
-        this.#txt = opts.txt ?? {};
-        this.#port = opts.port ?? 0;
-        this.#log = opts.log;
-      }
-      /** Whether peer-to-peer can run here: macOS with the helper built. */
-      static available() {
-        if (process.platform !== "darwin") return { ok: false, why: "Apple peer-to-peer Wi-Fi needs macOS" };
-        if (!existsSync5(HELPER)) return { ok: false, why: `the helper isn't built (npm run build:p2p)` };
-        return { ok: true };
-      }
-      listen(onPath) {
-        return new Promise((resolve5) => {
-          let first = true;
-          const run = () => {
-            const h = new Helper(["--device", this.#device, "--port", String(this.#port)], {
-              ready: (port) => {
-                this.#port = port;
-                if (first) resolve5({ port });
-                else this.#log(`peer-to-peer helper is back on :${port}`);
-                first = false;
-              },
-              path: onPath,
-              log: this.#log,
-              txt: this.#txt
-            });
-            this.#helper = h;
-            void h.exited.then((why) => {
-              if (this.#closing) return;
-              this.#log(`peer-to-peer helper ${why}; starting it again in 2 s`);
-              if (first) {
-                first = false;
-                resolve5({ port: 0 });
-              }
-              setTimeout(() => !this.#closing && run(), 2e3).unref();
-            });
-          };
-          run();
-        });
-      }
-      discover(_onCandidate) {
-      }
-      dial(_c) {
-        return Promise.reject(new Error("the peer-to-peer transport only accepts connections"));
-      }
-      async close() {
-        this.#closing = true;
-        this.#helper?.kill();
-        if (this.#helper) await this.#helper.exited;
-      }
-    };
-  }
-});
-
 // link/link.ts
-import { existsSync as existsSync6, linkSync, mkdirSync as mkdirSync5, readFileSync as readFileSync5, renameSync as renameSync2, rmSync as rmSync3, statSync, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join6 } from "node:path";
-import { connect, createServer as createServer3 } from "node:net";
-import { createInterface } from "node:readline";
 import { randomBytes as randomBytes11, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+import { existsSync as existsSync6, linkSync, mkdirSync as mkdirSync5, readFileSync as readFileSync5, renameSync as renameSync2, rmSync as rmSync3, statSync, writeFileSync as writeFileSync4 } from "node:fs";
+import { connect, createServer as createServer3 } from "node:net";
+import { join as join6 } from "node:path";
+import { createInterface } from "node:readline";
 function answering(socket, ms = 1e3) {
-  return new Promise((resolve5) => {
+  return new Promise((resolve4) => {
     const s = connect(socket);
     const done = (v) => {
       clearTimeout(t);
       s.destroy();
-      resolve5(v);
+      resolve4(v);
     };
     const t = setTimeout(() => done(false), ms);
     s.once("connect", () => done(true));
@@ -14343,22 +14774,22 @@ var LinkError, APPROVAL_WAIT_S, pairLine, PAIRING_ROOM_LINGER_MS, firstPairMs, L
 var init_link = __esm({
   "link/link.ts"() {
     "use strict";
+    init_rpc();
+    init_agent_host();
     init_home();
     init_catalog();
     init_crypto();
     init_offer();
+    init_routing();
     init_assets();
     init_db();
     init_inbox();
     init_sends();
     init_coordinator();
-    init_agent_host();
-    init_routing();
-    init_rpc();
     init_fault();
     init_lan();
-    init_relay();
     init_p2p();
+    init_relay();
     LinkError = class extends Error {
       reason;
       fix;
@@ -14387,7 +14818,6 @@ var init_link = __esm({
       #server = null;
       #agentServer = null;
       #push = null;
-      #db;
       #questions = [];
       #rl = null;
       #ports = {};
@@ -14428,7 +14858,6 @@ var init_link = __esm({
         this.#me = { key: this.#id.key, person: this.#id.person, name: this.#id.name, kind: "link" };
         this.#keys = { rpc: localKey(this.dir, "rpc.key"), admin: localKey(this.dir, "admin.key") };
         const db = openDb(this.home.db);
-        this.#db = db;
         this.#inbox = new Inbox(db);
         this.#store = new SendStore(db, this.#inbox);
         this.#assets = new AssetStore(this.home.assets);
@@ -14438,14 +14867,20 @@ var init_link = __esm({
         const devices = this.#catalog.devices();
         if (this.#catalog.rejected > 0) this.#log(`ignored ${this.#catalog.rejected} catalog records with bad signatures`);
         const transports = [];
-        const txt = { k: b64(this.#id.key.publicRaw), n: this.#id.name.slice(0, 60), pi: this.#id.person.id, pn: this.#id.person.name.slice(0, 60) };
-        if (this.#opts.lan !== false) transports.push(
-          new LanTransport({
-            device: this.#id.key.device,
-            port: this.#opts.port ?? 7420,
-            txt
-          })
-        );
+        const txt = {
+          k: b64(this.#id.key.publicRaw),
+          n: this.#id.name.slice(0, 60),
+          pi: this.#id.person.id,
+          pn: this.#id.person.name.slice(0, 60)
+        };
+        if (this.#opts.lan !== false)
+          transports.push(
+            new LanTransport({
+              device: this.#id.key.device,
+              port: this.#opts.port ?? 7420,
+              txt
+            })
+          );
         if (this.#opts.p2p !== false) {
           const p2p = P2pTransport.available();
           if (p2p.ok) transports.push(new P2pTransport({ device: this.#id.key.device, log: this.#log, txt }));
@@ -14482,8 +14917,13 @@ Paired with ${d.name} (${d.device}).
 `));
         this.#coord.grantsApproval = (source) => this.#grantsApproval(source);
         this.#coord.onCodePaired = (d, agents) => {
-          this.#log(`${d.name} (${d.device}) typed the pairing code${agents.length ? `; approving ${agents.length} Agent${agents.length === 1 ? "" : "s"} that asked for it` : ""}`);
-          for (const id2 of agents) if (this.#catalog.agent(id2) && this.#catalog.agent(id2).status !== "approved") this.#decide(id2, "approved", d.device);
+          this.#log(
+            `${d.name} (${d.device}) typed the pairing code${agents.length ? `; approving ${agents.length} Agent${agents.length === 1 ? "" : "s"} that asked for it` : ""}`
+          );
+          for (const id2 of agents) {
+            const status = this.#catalog.agent(id2)?.status;
+            if (status && status !== "approved") this.#decide(id2, "approved", d.device);
+          }
         };
         this.#coord.approvalHint = () => this.#approvalHint();
         this.#coord.pendingAgents = () => this.#catalog.agents().filter((a) => a.status === "pending").map(({ id: id2, name, color, requested_at }) => ({ id: id2, name, color, requested_at }));
@@ -14516,7 +14956,17 @@ Paired with ${d.name} (${d.device}).
         await this.#listen();
         writeFileSync4(
           this.home.runtime,
-          JSON.stringify({ pid: process.pid, socket: this.home.socket, lan: this.#ports.lan, p2p: this.#ports.p2p, device: this.#id.key.device }, null, 2)
+          JSON.stringify(
+            {
+              pid: process.pid,
+              socket: this.home.socket,
+              lan: this.#ports.lan,
+              p2p: this.#ports.p2p,
+              device: this.#id.key.device
+            },
+            null,
+            2
+          )
         );
         this.#log(
           `${this.#id.name} (${this.#id.key.device}) for ${this.#id.person.name} \xB7 ${rec.spaces} pages with Sends, ${this.#inbox.all().length} Sends in the Inbox, ${devices.length} paired devices \xB7 ${this.#ports.lan !== void 0 ? `LAN :${this.#ports.lan}` : "no LAN"}${this.#ports.p2p ? ` \xB7 peer-to-peer :${this.#ports.p2p}` : ""}${this.#relayT ? ` \xB7 Relay ${this.#relayT.url}` : ""} \xB7 ${this.home.socket}`
@@ -14537,12 +14987,26 @@ Paired with ${d.name} (${d.device}).
         if (this.#offers.liveCode() !== void 0) {
           this.#pairIdle = 0;
           if (this.#pairRoom) return;
-          const room = new RelayTransport({ url, key: newDeviceKey().key, room: () => PAIRING_ROOM, watch: () => ["*"], log: this.#log, name: "relay-pairing" });
+          const room = new RelayTransport({
+            url,
+            key: newDeviceKey().key,
+            room: () => PAIRING_ROOM,
+            watch: () => ["*"],
+            log: this.#log,
+            name: "relay-pairing"
+          });
           room.onReady = () => this.#log(`relay: waiting in the pairing room on ${url} while the code is live`);
           this.#pairRoom = room;
           void this.#coord.addTransport(room);
           if (url !== DEFAULT_RELAY) {
-            const pointer = new RelayTransport({ url: DEFAULT_RELAY, key: newDeviceKey().key, room: () => PAIRING_ROOM, watch: () => ["*"], log: this.#log, name: "relay-pointer" });
+            const pointer = new RelayTransport({
+              url: DEFAULT_RELAY,
+              key: newDeviceKey().key,
+              room: () => PAIRING_ROOM,
+              watch: () => ["*"],
+              log: this.#log,
+              name: "relay-pointer"
+            });
             pointer.onReady = () => this.#log(`relay: pointing new iPads from ${DEFAULT_RELAY} to ${url} while the code is live`);
             this.#pointer = pointer;
             void pointer.listen((p) => {
@@ -14575,32 +15039,44 @@ Paired with ${d.name} (${d.device}).
           const a = this.#questions[0];
           if (a && this.#catalog.agent(a.id)?.status === "pending" && /^(y(es)?|n(o)?)$/i.test(line.trim())) {
             if (/^y/i.test(line.trim()) && this.#approvers().length)
-              return void process.stdout.write(`Allow it on your iPad (${this.#approvers().map((d) => d.name).join(", ")}): this terminal can only refuse once an iPad approves. Type n to refuse.
-`);
+              return void process.stdout.write(
+                `Allow it on your iPad (${this.#approvers().map((d) => d.name).join(", ")}): this terminal can only refuse once an iPad approves. Type n to refuse.
+`
+              );
             this.#questions.shift();
             this.#decide(a.id, /^y/i.test(line.trim()) ? "approved" : "denied", "terminal");
             return this.#ask();
           }
-          if (this.#ports.lan === void 0 && !this.#relayT) return void process.stdout.write("Pairing needs the LAN or a Relay; this Link was started without either.\n");
+          if (this.#ports.lan === void 0 && !this.#relayT)
+            return void process.stdout.write("Pairing needs the LAN or a Relay; this Link was started without either.\n");
           void this.showPairingCode();
         });
         if (this.#ports.lan !== void 0 || this.#relayT) void this.showPairingCode();
       }
       async showPairingCode() {
         const { code } = this.typedCode();
-        process.stdout.write(`
+        process.stdout.write(
+          `
 Pairing code: ${code.slice(0, 3)} ${code.slice(3)}
 ${pairLine(this.#relayT !== null)}
 Press Enter for a new code.
-`);
+`
+        );
       }
       /** The live 6-digit code (a new one if none is live), with `agent` among the Agents typing it approves. */
       typedCode(agent) {
         if (this.#ports.lan === void 0 && !this.#relayT)
-          throw new LinkError("no_lan", "Pairing an iPad needs the local network or a Relay, and this Link was started with --no-lan and no Relay.", "Restart it without --no-lan, or with a Relay.");
+          throw new LinkError(
+            "no_lan",
+            "Pairing an iPad needs the local network or a Relay, and this Link was started with --no-lan and no Relay.",
+            "Restart it without --no-lan, or with a Relay."
+          );
         const before = this.#offers.liveCode();
         const c = this.#offers.code(agent);
-        if (c.code !== before) this.#log(`made a pairing code (6 digits, single use, 10 minutes)${this.#relayT ? `; it also works through the relay at ${this.#relayT.url}` : ""}`);
+        if (c.code !== before)
+          this.#log(
+            `made a pairing code (6 digits, single use, 10 minutes)${this.#relayT ? `; it also works through the relay at ${this.#relayT.url}` : ""}`
+          );
         this.#syncPairingRoom();
         return { code: c.code, expires: c.expires };
       }
@@ -14636,8 +15112,17 @@ Press Enter for a new code.
       }
       /** A new single-use pairing code, valid 10 minutes. `admin`: made by a command, not shown in this terminal (offer.ts). */
       pairingCode(source = "terminal") {
-        if (this.#ports.lan === void 0) throw new LinkError("no_lan", "Pairing an iPad needs the local network, and this Link was started with --no-lan.", "Restart it without --no-lan.");
-        return this.#offers.create({ device: this.#id.key.device, key: b64(this.#id.key.publicRaw), name: this.#id.name, person: this.#id.person }, this.#ports.lan, source).uri;
+        if (this.#ports.lan === void 0)
+          throw new LinkError(
+            "no_lan",
+            "Pairing an iPad needs the local network, and this Link was started with --no-lan.",
+            "Restart it without --no-lan."
+          );
+        return this.#offers.create(
+          { device: this.#id.key.device, key: b64(this.#id.key.publicRaw), name: this.#id.name, person: this.#id.person },
+          this.#ports.lan,
+          source
+        ).uri;
       }
       #ask() {
         const a = this.#questions.find((q2) => this.#catalog.agent(q2.id)?.status === "pending");
@@ -14661,7 +15146,11 @@ Press Enter for a new code.
        */
       async #lock() {
         const file = join6(this.dir, "link.lock");
-        const busy = (pid) => new LinkError("already_running", `A Link is already running from ${this.dir}${pid ? ` (pid ${pid})` : ""}.`, "Use that one, or pass --home for a second profile.");
+        const busy = (pid) => new LinkError(
+          "already_running",
+          `A Link is already running from ${this.dir}${pid ? ` (pid ${pid})` : ""}.`,
+          "Use that one, or pass --home for a second profile."
+        );
         for (let tries = 0; tries < 3; tries++) {
           const body = JSON.stringify({ pid: process.pid, at: Date.now(), n: randomBytes11(4).toString("hex") });
           const tmp = `${file}.${process.pid}.tmp`;
@@ -14717,7 +15206,11 @@ Press Enter for a new code.
         if (!await answering(this.home.socket)) return;
         const pid = existsSync6(this.home.runtime) ? JSON.parse(readFileSync5(this.home.runtime, "utf8")).pid : 0;
         this.#unlock();
-        throw new LinkError("already_running", `A Link is already running from ${this.dir}${pid ? ` (pid ${pid})` : ""}.`, "Use that one, or pass --home for a second profile.");
+        throw new LinkError(
+          "already_running",
+          `A Link is already running from ${this.dir}${pid ? ` (pid ${pid})` : ""}.`,
+          "Use that one, or pass --home for a second profile."
+        );
       }
       #unlock() {
         const file = join6(this.dir, "link.lock");
@@ -14742,49 +15235,55 @@ Press Enter for a new code.
       // Local RPC
       #listen() {
         rmSync3(this.home.socket, { force: true });
-        return new Promise((resolve5, reject) => {
+        return new Promise((resolve4, reject) => {
           const server = createServer3((s) => this.#serve(s));
           server.once("error", reject);
           server.listen(this.home.socket, () => {
             this.#server = server;
-            resolve5();
+            resolve4();
           });
         });
       }
       #serve(socket) {
         const conn = { role: null, agent: null };
-        let buf = "";
         socket.setEncoding("utf8");
         socket.on("error", () => {
         });
-        socket.on("data", (d) => {
-          buf += d;
-          let i;
-          while ((i = buf.indexOf("\n")) >= 0) {
-            const line = buf.slice(0, i);
-            buf = buf.slice(i + 1);
+        socket.on(
+          "data",
+          lines((line) => {
             let req;
             try {
               req = JSON.parse(line);
             } catch {
               socket.destroy();
-              return;
+              return false;
             }
-            this.#handle(conn, req.method, req.params ?? {}).then((result) => socket.writable && socket.write(JSON.stringify({ id: req.id, ok: true, result }) + "\n")).catch((e) => {
+            this.#handle(conn, req.method, req.params ?? {}).then((result) => socket.writable && socket.write(`${JSON.stringify({ id: req.id, ok: true, result })}
+`)).catch((e) => {
               const err = e instanceof LinkError ? e : new LinkError("internal", e.message);
               if (!(e instanceof LinkError)) this.#log(`error in ${req.method}: ${e.stack ?? e.message}`);
               if (socket.writable)
-                socket.write(JSON.stringify({ id: req.id, ok: false, error: { reason: err.reason, message: err.message, fix: err.fix } }) + "\n");
+                socket.write(
+                  `${JSON.stringify({
+                    id: req.id,
+                    ok: false,
+                    error: { reason: err.reason, message: err.message, fix: err.fix }
+                  })}
+`
+                );
             });
-          }
-        });
+            return true;
+          })
+        );
       }
       async #handle(c, method, p) {
         if (method === "auth") {
           const role = p.role === "admin" ? "admin" : "agent";
           const want2 = Buffer.from(role === "admin" ? this.#keys.admin : this.#keys.rpc);
           const got = Buffer.from(String(p.key ?? ""));
-          if (got.length !== want2.length || !timingSafeEqual3(got, want2)) throw new LinkError("bad_credential", "Wrong local credential.");
+          if (got.length !== want2.length || !timingSafeEqual3(got, want2))
+            throw new LinkError("bad_credential", "Wrong local credential.");
           c.role = role;
           return { device: this.#id.key.device, name: this.#id.name, person: this.#id.person };
         }
@@ -14800,8 +15299,14 @@ Press Enter for a new code.
       async #agentHello(c, p) {
         const name = String(p.name ?? "").trim();
         const credential2 = String(p.credential ?? "");
-        if (!name) throw new LinkError("missing_name", "An Agent must say its name.", 'Pass name, e.g. "Claude Code \xB7 reflex repo".');
-        if (credential2.length < 32) throw new LinkError("missing_credential", "An Agent must present a random credential of at least 32 characters.");
+        if (!name)
+          throw new LinkError(
+            "missing_name",
+            "An Agent must say its name.",
+            'Pass name, e.g. "Claude Code \xB7 reflex repo".'
+          );
+        if (credential2.length < 32)
+          throw new LinkError("missing_credential", "An Agent must present a random credential of at least 32 characters.");
         let a = this.#catalog.byCredential(credential2);
         if (!a) {
           a = this.#catalog.request(name, credential2);
@@ -14810,10 +15315,14 @@ Press Enter for a new code.
         if (a.status === "pending") {
           const wait = Math.min(Number(p.wait_s ?? APPROVAL_WAIT_S), APPROVAL_WAIT_S);
           await this.#waitDecision(a.id, wait * 1e3);
-          a = this.#catalog.agent(a.id);
+          a = this.#catalog.knownAgent(a.id);
         }
         if (a.status === "pending")
-          throw new LinkError("approval_pending", `Waiting for the user to approve ${a.name} (${a.id}).`, "Ask the person to tap Allow on their iPad, then connect again.");
+          throw new LinkError(
+            "approval_pending",
+            `Waiting for the user to approve ${a.name} (${a.id}).`,
+            "Ask the person to tap Allow on their iPad, then connect again."
+          );
         if (a.status !== "approved") throw new LinkError("agent_denied", `The user ${a.status} ${a.name} (${a.id}).`);
         c.agent = a;
         return { agent: a.id, name: a.name, color: a.color };
@@ -14827,12 +15336,12 @@ Press Enter for a new code.
         if (this.#questions.length === 1) this.#ask();
       }
       #waitDecision(id2, ms, signal) {
-        return new Promise((resolve5) => {
+        return new Promise((resolve4) => {
           const list = this.#decisions.get(id2) ?? [];
           const done = () => {
             clearTimeout(t);
             signal?.removeEventListener("abort", done);
-            resolve5();
+            resolve4();
           };
           const t = setTimeout(done, ms);
           signal?.addEventListener("abort", done, { once: true });
@@ -14865,7 +15374,8 @@ Press Enter for a new code.
                 "Approving an Agent needs you, not a command: anything with your shell could run one.",
                 "Tap Allow on your iPad."
               );
-            if (status !== "denied" && status !== "revoked") throw new LinkError("bad_status", `'${status}' is not denied or revoked.`);
+            if (status !== "denied" && status !== "revoked")
+              throw new LinkError("bad_status", `'${status}' is not denied or revoked.`);
             return this.#decide(String(p.id), status, "command");
           }
           case "pair.offer": {
@@ -14878,22 +15388,38 @@ Press Enter for a new code.
             const d = device ? this.#catalog.device(device) : void 0;
             return {
               used: Boolean(device),
-              ...d ? { device: d.device, name: d.name, approves: mayApprove(d, this.#id.person.id), asked: Boolean(d.approver_asked) } : {},
+              ...d ? {
+                device: d.device,
+                name: d.name,
+                approves: mayApprove(d, this.#id.person.id),
+                asked: Boolean(d.approver_asked)
+              } : {},
               ...d && !mayApprove(d, this.#id.person.id) ? { hint: this.#approvalHint() } : {}
             };
           }
           case "forget": {
             const who2 = String(p.device ?? "").trim();
             const hits = this.#catalog.devices().filter((d2) => d2.device === who2 || d2.name.toLowerCase() === who2.toLowerCase());
-            if (!hits.length) throw new LinkError("unknown_device", `No paired device '${who2}'.`, "Run `reflex link status` to see them.");
-            if (hits.length > 1) throw new LinkError("ambiguous", `${hits.length} paired devices are called '${who2}'.`, "Name it by its ID (dev-\u2026), from `reflex link status`.");
+            if (!hits.length)
+              throw new LinkError("unknown_device", `No paired device '${who2}'.`, "Run `reflex link status` to see them.");
+            if (hits.length > 1)
+              throw new LinkError(
+                "ambiguous",
+                `${hits.length} paired devices are called '${who2}'.`,
+                "Name it by its ID (dev-\u2026), from `reflex link status`."
+              );
             const was = mayApprove(hits[0], this.#id.person.id);
-            const d = this.#coord.forgetDevice(hits[0].device);
+            const d = this.#coord.forgetDevice(hits[0].device) ?? hits[0];
             let opens;
             if (was && !this.#approvers().length) {
-              writeFileSync4(join6(this.dir, "first-pair.json"), JSON.stringify({ forgot_at: Date.now() }) + "\n", { mode: 384 });
+              writeFileSync4(join6(this.dir, "first-pair.json"), `${JSON.stringify({ forgot_at: Date.now() })}
+`, {
+                mode: 384
+              });
               opens = this.#windowUntil();
-              this.#log(`forgot the last iPad that approves Agents: for ${firstPairMs() / 6e4} minutes, \`reflex pair\` pairs one that approves`);
+              this.#log(
+                `forgot the last iPad that approves Agents: for ${firstPairMs() / 6e4} minutes, \`reflex pair\` pairs one that approves`
+              );
             }
             return { device: d.device, name: d.name, ...opens ? { window_until: opens } : {} };
           }
@@ -14913,7 +15439,11 @@ Press Enter for a new code.
             return { hash: p.hash, base64: this.#assets.get(String(p.hash)).toString("base64") };
           case "fault": {
             if (!this.#faults.length)
-              throw new LinkError("needs_fault", "Fault injection needs a Link started with --fault.", 'Restart it with `reflex link --fault ""`.');
+              throw new LinkError(
+                "needs_fault",
+                "Fault injection needs a Link started with --fault.",
+                'Restart it with `reflex link --fault ""`.'
+              );
             let faults;
             try {
               faults = parseFaults(String(p.spec ?? ""));
@@ -14937,7 +15467,8 @@ Press Enter for a new code.
         } catch (e) {
           throw new LinkError("bad_pairing_code", e.message);
         }
-        if (offer.device === this.#id.key.device) throw new LinkError("own_code", "That is this Link's own pairing code.", "Scan it from the other device.");
+        if (offer.device === this.#id.key.device)
+          throw new LinkError("own_code", "That is this Link's own pairing code.", "Scan it from the other device.");
         if (offer.person.id !== this.#id.person.id && this.#store.list().length === 0 && this.#catalog.devices().length === 0) {
           adoptPerson(this.dir, offer.person);
           this.#id.person = offer.person;
@@ -14947,7 +15478,11 @@ Press Enter for a new code.
         try {
           return await this.#coord.join(offer);
         } catch (e) {
-          throw new LinkError("pairing_failed", e.message, "Check both devices are on the same network and the code is fresh.");
+          throw new LinkError(
+            "pairing_failed",
+            e.message,
+            "Check both devices are on the same network and the code is fresh."
+          );
         }
       }
       status() {
@@ -14961,10 +15496,19 @@ Press Enter for a new code.
           pages: [...new Set(this.#store.list().map((s) => s.space))],
           assets: this.#assets.list().length,
           inbox: this.#inbox.all().map((e) => ({ space: e.space, send: e.send, via: e.via, receipts: this.#inbox.receipts(e.space, e.send) })),
-          paired: this.#catalog.devices().map((d) => ({ device: d.device, name: d.name, person: d.person, connected: this.#coord.peers().some((p) => p.device === d.device) })),
+          paired: this.#catalog.devices().map((d) => ({
+            device: d.device,
+            name: d.name,
+            person: d.person,
+            connected: this.#coord.peers().some((p) => p.device === d.device)
+          })),
           peers: this.#coord.peers().map((p) => {
             const active = p.paths.active();
-            const path = (s) => ({ transport: s.path.transport, remote: s.path.remote, ...s.measurements() });
+            const path = (s) => ({
+              transport: s.path.transport,
+              remote: s.path.remote,
+              ...s.measurements()
+            });
             return {
               device: p.device,
               name: p.name,
@@ -14987,12 +15531,13 @@ Press Enter for a new code.
 
 // link/rpc/client.ts
 import { existsSync as existsSync7, readFileSync as readFileSync6 } from "node:fs";
-import { join as join7 } from "node:path";
 import { createConnection as createConnection2 } from "node:net";
+import { join as join7 } from "node:path";
 var RpcError, LinkClient;
 var init_client = __esm({
   "link/rpc/client.ts"() {
     "use strict";
+    init_rpc();
     init_home();
     RpcError = class extends Error {
       reason;
@@ -15005,26 +15550,23 @@ var init_client = __esm({
     };
     LinkClient = class _LinkClient {
       #socket;
-      #buf = "";
       #n = 0;
       #pending = /* @__PURE__ */ new Map();
       constructor(socket) {
         this.#socket = socket;
         socket.setEncoding("utf8");
-        socket.on("data", (d) => {
-          this.#buf += d;
-          let i;
-          while ((i = this.#buf.indexOf("\n")) >= 0) {
-            const line = this.#buf.slice(0, i);
-            this.#buf = this.#buf.slice(i + 1);
+        socket.on(
+          "data",
+          lines((line) => {
             const m = JSON.parse(line);
             const p = this.#pending.get(m.id);
-            if (!p) continue;
+            if (!p) return true;
             this.#pending.delete(m.id);
             if (m.ok) p.resolve(m.result);
             else p.reject(new RpcError(m.error.reason, m.error.message, m.error.fix));
-          }
-        });
+            return true;
+          })
+        );
         socket.on("close", () => {
           for (const p of this.#pending.values()) p.reject(new RpcError("link_gone", "The Link closed the connection."));
           this.#pending.clear();
@@ -15039,9 +15581,9 @@ var init_client = __esm({
         if (!existsSync7(keyFile))
           throw new RpcError("no_link", `No Link has run from ${dir3}.`, "Start one with `reflex-link`, or pass --home.");
         const key = readFileSync6(keyFile, "utf8").trim();
-        const socket = await new Promise((resolve5, reject) => {
+        const socket = await new Promise((resolve4, reject) => {
           const s = createConnection2(socketPath2);
-          s.once("connect", () => resolve5(s));
+          s.once("connect", () => resolve4(s));
           s.once(
             "error",
             () => reject(new RpcError("link_not_running", `The Link at ${dir3} is not running.`, "Start it with `reflex-link`."))
@@ -15053,9 +15595,10 @@ var init_client = __esm({
       }
       call(method, params = {}) {
         const id2 = ++this.#n;
-        return new Promise((resolve5, reject) => {
-          this.#pending.set(id2, { resolve: resolve5, reject });
-          this.#socket.write(JSON.stringify({ id: id2, method, params }) + "\n");
+        return new Promise((resolve4, reject) => {
+          this.#pending.set(id2, { resolve: resolve4, reject });
+          this.#socket.write(`${JSON.stringify({ id: id2, method, params })}
+`);
         });
       }
       close() {
@@ -15067,7 +15610,7 @@ var init_client = __esm({
 
 // link/bin/reflex-link.ts
 var reflex_link_exports = {};
-import { mkdirSync as mkdirSync6, readFileSync as readFileSync7, writeFileSync as writeFileSync5, existsSync as existsSync8 } from "node:fs";
+import { existsSync as existsSync8, mkdirSync as mkdirSync6, readFileSync as readFileSync7, writeFileSync as writeFileSync5 } from "node:fs";
 import { join as join8 } from "node:path";
 import { parseArgs } from "node:util";
 async function admin(method, params = {}) {
@@ -15081,7 +15624,12 @@ async function admin(method, params = {}) {
 function relayUrl() {
   const file = join8(dir, "relay.json");
   const check = (url, from) => {
-    if (!/^wss?:\/\/[^/]+/.test(url)) throw new LinkError("usage", `${from} '${url}' is not a ws:// or wss:// URL.`, `For example: wss://relay.example.com (the default is ${DEFAULT_RELAY})`);
+    if (!/^wss?:\/\/[^/]+/.test(url))
+      throw new LinkError(
+        "usage",
+        `${from} '${url}' is not a ws:// or wss:// URL.`,
+        `For example: wss://relay.example.com (the default is ${DEFAULT_RELAY})`
+      );
     return url.replace(/\/+$/, "");
   };
   if (flags.relay === "off") {
@@ -15092,7 +15640,8 @@ function relayUrl() {
   if (flags.relay) {
     const url = check(flags.relay, "--relay");
     mkdirSync6(dir, { recursive: true, mode: 448 });
-    writeFileSync5(file, JSON.stringify({ url }) + "\n");
+    writeFileSync5(file, `${JSON.stringify({ url })}
+`);
     return url;
   }
   const env = process.env.REFLEX_RELAY?.trim();
@@ -15122,30 +15671,42 @@ async function start() {
   process.on("SIGTERM", () => void stop2("SIGTERM"));
 }
 function showStatus(s) {
-  const lines = [`${s.name} (${s.device}) \xB7 ${s.person.name} \xB7 ${s.lan_port === void 0 ? "no LAN" : `LAN :${s.lan_port}`}${s.p2p_port ? ` \xB7 peer-to-peer :${s.p2p_port}` : ""}`, ""];
-  lines.push(`Pages with Sends (${s.pages.length}), ${s.assets} assets`);
-  for (const page of s.pages) lines.push(`  ${page}`);
-  lines.push(`Paired devices (${s.paired.length})`);
+  const lines2 = [
+    `${s.name} (${s.device}) \xB7 ${s.person.name} \xB7 ${s.lan_port === void 0 ? "no LAN" : `LAN :${s.lan_port}`}${s.p2p_port ? ` \xB7 peer-to-peer :${s.p2p_port}` : ""}`,
+    ""
+  ];
+  lines2.push(`Pages with Sends (${s.pages.length}), ${s.assets} assets`);
+  for (const page of s.pages) lines2.push(`  ${page}`);
+  lines2.push(`Paired devices (${s.paired.length})`);
   for (const d of s.paired) {
     const p = s.peers.find((x) => x.device === d.device);
-    lines.push(`  ${d.name.padEnd(20)} ${d.device}  ${p ? `connected over ${p.paths.length} path${p.paths.length === 1 ? "" : "s"}` : "not connected"}`);
+    lines2.push(
+      `  ${d.name.padEnd(20)} ${d.device}  ${p ? `connected over ${p.paths.length} path${p.paths.length === 1 ? "" : "s"}` : "not connected"}`
+    );
     for (const x of p?.paths ?? [])
-      lines.push(
+      lines2.push(
         `    ${x.active ? "\u2192" : " "} ${x.transport.padEnd(4)} ${x.remote}${x.rttMs !== null ? `, ${x.rttMs} ms` : ""}, sent ${x.sentBytes} B, received ${x.receivedBytes} B${x.active ? " (sending here)" : ""}`
       );
   }
-  lines.push(`Agents (${s.agents.length})`);
-  for (const a of s.agents) lines.push(`  ${a.id.padEnd(28)} ${a.status.padEnd(9)} ${a.name}`);
-  lines.push(`Inbox (${s.inbox.length})`);
+  lines2.push(`Agents (${s.agents.length})`);
+  for (const a of s.agents) lines2.push(`  ${a.id.padEnd(28)} ${a.status.padEnd(9)} ${a.name}`);
+  lines2.push(`Inbox (${s.inbox.length})`);
   for (const i of s.inbox)
-    lines.push(`  ${i.space}/${i.send}  via ${i.via}  ${i.receipts.map((r) => `${r.recipient}: ${r.state}`).join(", ") || "not delivered yet"}`);
+    lines2.push(
+      `  ${i.space}/${i.send}  via ${i.via}  ${i.receipts.map((r) => `${r.recipient}: ${r.state}`).join(", ") || "not delivered yet"}`
+    );
   const push = s.push ?? { targets: [], attempts: [] };
-  lines.push(`Push targets (${push.targets.length})`);
-  for (const t of push.targets) lines.push(`  ${t.id}  ${t.adapter.padEnd(15)} ${t.live ? "live   " : "offline"}  agent ${t.agent}  ${JSON.stringify(t.config)}`);
-  if (push.attempts.length) lines.push(`Recent pushes`);
+  lines2.push(`Push targets (${push.targets.length})`);
+  for (const t of push.targets)
+    lines2.push(
+      `  ${t.id}  ${t.adapter.padEnd(15)} ${t.live ? "live   " : "offline"}  agent ${t.agent}  ${JSON.stringify(t.config)}`
+    );
+  if (push.attempts.length) lines2.push(`Recent pushes`);
   for (const a of push.attempts)
-    lines.push(`  ${new Date(a.started_at).toISOString()}  ${a.space}/${a.send} \u2192 ${a.recipient} via ${a.target}: ${a.outcome}${a.reason ? ` (${a.reason})` : ""}`);
-  return lines.join("\n");
+    lines2.push(
+      `  ${new Date(a.started_at).toISOString()}  ${a.space}/${a.send} \u2192 ${a.recipient} via ${a.target}: ${a.outcome}${a.reason ? ` (${a.reason})` : ""}`
+    );
+  return lines2.join("\n");
 }
 async function main() {
   if (flags.help) return void process.stdout.write(HELP);
@@ -15158,7 +15719,12 @@ async function main() {
       return out(showStatus(s), s);
     }
     case "pair": {
-      if (!args[1]) throw new LinkError("usage", "To pair an iPad, run `reflex pair`: it shows a fresh code to scan.", "To pair this Link with another Link, run: reflex link pair '<its code>'");
+      if (!args[1])
+        throw new LinkError(
+          "usage",
+          "To pair an iPad, run `reflex pair`: it shows a fresh code to scan.",
+          "To pair this Link with another Link, run: reflex link pair '<its code>'"
+        );
       const d = await admin("pair.join", { uri: args[1] });
       return out(`Paired with ${d.name} (${d.device}).`, d);
     }
@@ -15176,10 +15742,18 @@ async function main() {
         c.close();
       }
       for (let i = 0; i < 100 && existsSync8(join8(dir, "link.json")); i++) await new Promise((r) => setTimeout(r, 100));
-      return out(`Stopped the Link (pid ${pid}). \`reflex mcp\` and the CLI start it again when they need it.`, { stopped: true, pid });
+      return out(`Stopped the Link (pid ${pid}). \`reflex mcp\` and the CLI start it again when they need it.`, {
+        stopped: true,
+        pid
+      });
     }
     case "forget": {
-      if (!args[1]) throw new LinkError("usage", "Which device? reflex link forget <device>", "Run reflex link status to see them.");
+      if (!args[1])
+        throw new LinkError(
+          "usage",
+          "Which device? reflex link forget <device>",
+          "Run reflex link status to see them."
+        );
       const d = await admin("forget", { device: args[1] });
       return out(
         `Forgot ${d.name} (${d.device}).` + (d.window_until ? ` No iPad approves Agents now: until ${new Date(d.window_until).toLocaleTimeString()}, \`reflex pair\` pairs one that does. Run it and scan the code on your iPad.` : ""),
@@ -15188,20 +15762,28 @@ async function main() {
     }
     case "agents": {
       const list = await admin("agents.list");
-      return out(list.map((a) => `${a.id.padEnd(28)} ${a.status.padEnd(9)} ${a.name}`).join("\n") || "No Agents have connected yet.", list);
+      return out(
+        list.map((a) => `${a.id.padEnd(28)} ${a.status.padEnd(9)} ${a.name}`).join("\n") || "No Agents have connected yet.",
+        list
+      );
     }
     case "approve":
     case "deny":
     case "revoke": {
-      if (!args[1]) throw new LinkError("usage", `Which Agent? reflex link ${cmd3} <agent>`, "Run reflex link agents to see them.");
+      if (!args[1])
+        throw new LinkError("usage", `Which Agent? reflex link ${cmd3} <agent>`, "Run reflex link agents to see them.");
       const status = { approve: "approved", deny: "denied", revoke: "revoked" }[cmd3];
       const a = await admin("agents.decide", { id: args[1], status });
       return out(`${a.name} (${a.id}) ${a.status}.`, a);
     }
     case "fault": {
-      if (args[1] === void 0) throw new LinkError("usage", 'Which faults? reflex link fault "lan:drop=1" (or "" to clear)');
+      if (args[1] === void 0)
+        throw new LinkError("usage", 'Which faults? reflex link fault "lan:drop=1" (or "" to clear)');
       const f3 = await admin("fault", { spec: args[1] });
-      return out(Object.entries(f3).map(([t, v]) => `${t}: ${JSON.stringify(v)}`).join("\n"), f3);
+      return out(
+        Object.entries(f3).map(([t, v]) => `${t}: ${JSON.stringify(v)}`).join("\n"),
+        f3
+      );
     }
     default:
       throw new LinkError("usage", `Unknown command '${cmd3}'.`, "Run reflex link --help.");
@@ -15213,8 +15795,8 @@ var init_reflex_link = __esm({
     "use strict";
     init_home();
     init_link();
-    init_relay();
     init_client();
+    init_relay();
     HELP = `Reflex Link \u2014 receive iPad Sends for local agents
 Usage: reflex link [status|stop|pair|forget <device>|agents|deny <agent>|revoke <agent>]
   --home <path>    Profile folder
@@ -19285,13 +19867,18 @@ var init_sha2 = __esm({
 async function verifyEd25519(publicRaw, msg, sig) {
   try {
     const k = await crypto.subtle.importKey("raw", publicRaw, { name: "Ed25519" }, false, ["verify"]);
-    return await crypto.subtle.verify("Ed25519", k, sig, typeof msg === "string" ? te.encode(msg) : msg);
+    return await crypto.subtle.verify(
+      "Ed25519",
+      k,
+      sig,
+      typeof msg === "string" ? te.encode(msg) : msg
+    );
   } catch {
     return false;
   }
 }
 function deviceIdFor2(publicRaw) {
-  return "dev-" + hex(sha2562(publicRaw)).slice(0, 16);
+  return `dev-${hex(sha2562(publicRaw)).slice(0, 16)}`;
 }
 var te, hex, random, unb64url;
 var init_seal = __esm({
@@ -19383,13 +19970,21 @@ var init_room = __esm({
         const others = this.#sockets().filter((o) => o !== s);
         const lim = this.#limits();
         s.state = { nonce: hex(random(16)), watch: [], address, at: now };
-        if (others.length >= lim.sockets) return s.close(4429, "this room is full");
-        if (address && others.filter((o) => o.state?.address === address).length >= lim.perAddress) return s.close(4429, "too many connections from your address in this room");
+        if (others.length >= lim.sockets) {
+          s.close(4429, "this room is full");
+          return;
+        }
+        if (address && others.filter((o) => o.state?.address === address).length >= lim.perAddress) {
+          s.close(4429, "too many connections from your address in this room");
+          return;
+        }
         s.send(JSON.stringify({ t: "challenge", nonce: s.state.nonce, room: this.id }));
       }
       /** Closes sockets that never said hello in time. Node calls it on a timer; a Durable Object on each event. */
       sweep(now = this.#now()) {
-        for (const o of this.#sockets()) if (!o.state?.device && o.state?.at !== void 0 && now - o.state.at > HELLO_MS) o.close(4408, "no hello in time");
+        for (const o of this.#sockets())
+          if (!o.state?.device && o.state?.at !== void 0 && now - o.state.at > HELLO_MS)
+            o.close(4408, "no hello in time");
       }
       #authed() {
         return this.#sockets().filter((s) => s.state?.device);
@@ -19401,7 +19996,7 @@ var init_room = __esm({
         const st = s.state;
         if (typeof data !== "string") {
           if (!st?.device) return s.close(4401, "say hello first");
-          return this.#forward(s, data);
+          return this.#forward(s, st.device, data);
         }
         if (data.length > 64 * 1024) return s.close(4400, "control message too long");
         let m;
@@ -19417,9 +20012,10 @@ var init_room = __esm({
         }
         if (!this.#spend(s, "controls", LIMITS.controls)) return s.close(4429, "too many messages");
         try {
-          await this.#control(s, m);
+          await this.#control(s, st.device, m);
         } catch (e) {
-          if (m.req !== void 0) s.send(JSON.stringify({ t: "result", req: m.req, ok: false, error: e.message }));
+          if (m.req !== void 0)
+            s.send(JSON.stringify({ t: "result", req: m.req, ok: false, error: e.message }));
         }
       }
       /** Takes one from a socket's per-minute budget; false when it is spent. */
@@ -19436,7 +20032,8 @@ var init_room = __esm({
         const device = String(m.device ?? "");
         const ok2 = key.length === 32 && deviceIdFor2(key) === device && typeof m.sig === "string" && await verifyEd25519(key, helloText(this.id, st.nonce), unb64url(m.sig));
         if (!ok2) return s.close(4403, "the hello's signature or device ID does not check out");
-        for (const old of this.#authed()) if (old.state.device === device && old !== s) old.close(4409, "replaced by a newer connection");
+        for (const old of this.#authed())
+          if (old.state.device === device && old !== s) old.close(4409, "replaced by a newer connection");
         s.state = { ...st, device, watch: [] };
         s.send(JSON.stringify({ t: "welcome", device }));
         this.#log(`${device} joined room ${this.pairing ? "(pairing)" : this.id}`);
@@ -19448,10 +20045,13 @@ var init_room = __esm({
         const msg = JSON.stringify({ t: "presence", device, online: false });
         for (const o of this.#authed()) if (o !== s && watches(o, device) && watches(s, o.state.device)) o.send(msg);
       }
-      #forward(s, data) {
+      /** `me`: the sending socket's device, which said hello. */
+      #forward(s, me, data) {
         const f3 = unframe2(data);
-        if (!f3 || data.length > MAX_FRAME4 + 64) return s.close(4400, "malformed frame");
-        const me = s.state.device;
+        if (!f3 || data.length > MAX_FRAME4 + 64) {
+          s.close(4400, "malformed frame");
+          return;
+        }
         const to = this.#byDevice(f3.device);
         if (!to || !watches(to, me)) {
           s.send(JSON.stringify({ t: "undeliverable", device: f3.device, ch: f3.ch }));
@@ -19463,7 +20063,14 @@ var init_room = __esm({
             const now = this.#now();
             const fromAddress = this.#authed().filter((o) => s.state.address && o.state.address === s.state.address).reduce((n, o) => n + (o.state.opens ?? []).filter((t) => now - t < 6e4).length, 0);
             if (fromAddress >= LIMITS.pairingOpens.perAddress || !this.#spend(s, "opens", LIMITS.pairingOpens.perSocket)) {
-              s.send(JSON.stringify({ t: "undeliverable", device: f3.device, ch: f3.ch, reason: "rate limited: too many pairing tries" }));
+              s.send(
+                JSON.stringify({
+                  t: "undeliverable",
+                  device: f3.device,
+                  ch: f3.ch,
+                  reason: "rate limited: too many pairing tries"
+                })
+              );
               return;
             }
             s.state = { ...s.state, chans: [...s.state.chans ?? [], key].slice(-32) };
@@ -19471,7 +20078,8 @@ var init_room = __esm({
         }
         to.send(frame2(me, f3.ch, f3.payload));
       }
-      async #control(s, m) {
+      /** `me`: the socket's device, which said hello. */
+      async #control(s, me, m) {
         const st = s.state;
         const reply = (body) => s.send(JSON.stringify({ t: "result", req: m.req, ok: true, ...body }));
         switch (m.t) {
@@ -19480,14 +20088,18 @@ var init_room = __esm({
             const before = st.watch;
             const first = !st.announced;
             s.state = { ...st, watch: devices, announced: true };
-            const me = st.device;
-            const here = new Set(this.#authed().filter((o) => o !== s && watches(o, me)).map((o) => o.state.device));
-            for (const d of devices) if (d !== "*" && !here.has(d) && !before.includes(d)) s.send(JSON.stringify({ t: "presence", device: d, online: false }));
+            const here = new Set(
+              this.#authed().filter((o) => o !== s && watches(o, me)).map((o) => o.state.device)
+            );
+            for (const d of devices)
+              if (d !== "*" && !here.has(d) && !before.includes(d))
+                s.send(JSON.stringify({ t: "presence", device: d, online: false }));
             for (const o of this.#authed()) {
               if (o === s) continue;
               const d = o.state.device;
               const mutual = watchList(devices, d) && watches(o, me);
-              if (watchList(devices, d) && !watchList(before, d) && watches(o, me)) s.send(JSON.stringify({ t: "presence", device: d, online: true }));
+              if (watchList(devices, d) && !watchList(before, d) && watches(o, me))
+                s.send(JSON.stringify({ t: "presence", device: d, online: true }));
               const was = watchList(before, d) && watches(o, me) && !first;
               if (mutual && !was) o.send(JSON.stringify({ t: "presence", device: me, online: true, joined: true }));
               else if (!mutual && was) o.send(JSON.stringify({ t: "presence", device: me, online: false }));
@@ -19496,7 +20108,7 @@ var init_room = __esm({
           }
           case "close": {
             const to = this.#byDevice(String(m.device ?? ""));
-            if (to && watches(to, st.device)) to.send(JSON.stringify({ t: "close", device: st.device, ch: Number(m.ch) }));
+            if (to && watches(to, me)) to.send(JSON.stringify({ t: "close", device: me, ch: Number(m.ch) }));
             return;
           }
           case "ping":
@@ -19538,8 +20150,11 @@ async function startRelay(o) {
   const server = createServer4((req, res) => {
     if (req.url === "/" || req.url === "/health") {
       res.writeHead(200, { "content-type": "text/plain" });
-      return res.end(`Reflex relay (${RELAY_PROTOCOL2}). It forwards end-to-end encrypted frames between paired devices and keeps nothing.
-`);
+      res.end(
+        `Reflex relay (${RELAY_PROTOCOL2}). It forwards end-to-end encrypted frames between paired devices and keeps nothing.
+`
+      );
+      return;
     }
     res.writeHead(404);
     res.end("Not found");
@@ -19549,7 +20164,10 @@ async function startRelay(o) {
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", originOf(req));
     const id2 = url.searchParams.get("room") ?? "";
-    if (url.pathname !== "/v0/connect" || !ROOM_ID.test(id2)) return socket.destroy();
+    if (url.pathname !== "/v0/connect" || !ROOM_ID.test(id2)) {
+      socket.destroy();
+      return;
+    }
     const address = addressOf(req);
     const now = Date.now();
     const times = (recent.get(address) ?? []).filter((t) => now - t < 6e4);
@@ -19573,7 +20191,10 @@ async function startRelay(o) {
         }
       };
       r.socks.add(sock);
-      ws.on("message", (data, binary) => void r.room.message(sock, binary ? new Uint8Array(data) : data.toString("utf8")));
+      ws.on(
+        "message",
+        (data, binary) => void r.room.message(sock, binary ? new Uint8Array(data) : data.toString("utf8"))
+      );
       ws.on("close", () => {
         r.socks.delete(sock);
         r.room.closed(sock);
@@ -19593,10 +20214,12 @@ async function startRelay(o) {
     for (const [a, t] of recent) if (!t.some((x) => now - x < 6e4)) recent.delete(a);
   }, 2e3);
   sweep.unref();
-  await new Promise((resolve5) => server.listen(o.port, o.host ?? "0.0.0.0", resolve5));
+  await new Promise((resolve4) => server.listen(o.port, o.host ?? "0.0.0.0", resolve4));
   const addr = server.address();
   const port = typeof addr === "object" && addr ? addr.port : o.port;
-  log(`listening on :${port} (ws://<this machine>:${port}; give devices wss:// through a TLS proxy to reach it from anywhere)`);
+  log(
+    `listening on :${port} (ws://<this machine>:${port}; give devices wss:// through a TLS proxy to reach it from anywhere)`
+  );
   return {
     port,
     close: async () => {
@@ -19658,13 +20281,19 @@ Then, on the Mac, set REFLEX_RELAY=wss://<this relay> (for example in your agent
       process.exit(0);
     }
     relay = await startRelay({ port: Number(f.port ?? process.env.PORT ?? 8787), host: f.host, origin: f.origin });
-    say = (url) => console.log(`relay: reachable from anywhere at ${url}
-relay: on your Mac, set REFLEX_RELAY=${url} (see the README's "Run your own relay")`);
+    say = (url) => console.log(
+      `relay: reachable from anywhere at ${url}
+relay: on your Mac, set REFLEX_RELAY=${url} (see the README's "Run your own relay")`
+    );
     tunnel = null;
     if (f.tunnel) {
-      tunnel = spawn2("cloudflared", ["tunnel", "--no-autoupdate", "--url", `http://localhost:${relay.port}`], { stdio: ["ignore", "pipe", "pipe"] });
+      tunnel = spawn2("cloudflared", ["tunnel", "--no-autoupdate", "--url", `http://localhost:${relay.port}`], {
+        stdio: ["ignore", "pipe", "pipe"]
+      });
       tunnel.on("error", () => {
-        console.error("relay: --tunnel needs cloudflared (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/, or `brew install cloudflared`).");
+        console.error(
+          "relay: --tunnel needs cloudflared (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/, or `brew install cloudflared`)."
+        );
         process.exit(1);
       });
       let told = false;
@@ -19699,20 +20328,23 @@ import { connect as connect2 } from "node:net";
 import { join as join9 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function listening(path = socketPath()) {
-  return new Promise((resolve5) => {
+  return new Promise((resolve4) => {
     const s = connect2(path);
     s.once("connect", () => {
       s.destroy();
-      resolve5(true);
+      resolve4(true);
     });
-    s.once("error", () => resolve5(false));
+    s.once("error", () => resolve4(false));
   });
 }
 async function ensureLink(o = {}) {
   const dir3 = home2();
   const log = logFile(dir3);
   if (await listening()) return { started: false, log };
-  if (process.env.REFLEX_AUTOSTART === "0") throw new Error(`The Reflex Link is not running (profile ${dir3}). Start it with \`reflex link\`, or run \`reflex setup\`.`);
+  if (process.env.REFLEX_AUTOSTART === "0")
+    throw new Error(
+      `The Reflex Link is not running (profile ${dir3}). Start it with \`reflex link\`, or run \`reflex setup\`.`
+    );
   mkdirSync7(dir3, { recursive: true, mode: 448 });
   const out3 = openSync2(log, "a", 384);
   const child = spawn3(process.execPath, [BIN, "link", "--no-prompt"], {
@@ -19761,16 +20393,16 @@ function inlineSet(table, key, value) {
       const rest2 = table.slice(m.index + m[0].length);
       return m[1].startsWith("{") ? `{ ${rest2.replace(/^\s*,\s*/, "").replace(/^\s*/, "")}` : table.slice(0, m.index) + rest2;
     }
-    return table.slice(0, m.index) + `${m[1]}${key} = ${value}` + table.slice(m.index + m[0].length);
+    return `${table.slice(0, m.index)}${m[1]}${key} = ${value}${table.slice(m.index + m[0].length)}`;
   }
   if (value === null) return table;
   const inner = table.replace(/^\{\s*/, "").replace(/\s*\}$/, "");
   return inner ? `{ ${inner}, ${key} = ${value} }` : `{ ${key} = ${value} }`;
 }
-function valueEnd(lines, i) {
+function valueEnd(lines2, i) {
   let depth = 0;
-  for (let j = i; j < lines.length; j++) {
-    for (const ch of lines[j].replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/#.*$/, "")) {
+  for (let j = i; j < lines2.length; j++) {
+    for (const ch of lines2[j].replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/#.*$/, "")) {
       if (ch === "[" || ch === "{") depth++;
       if (ch === "]" || ch === "}") depth--;
     }
@@ -19779,11 +20411,12 @@ function valueEnd(lines, i) {
   return i;
 }
 function unsupported(text) {
-  const lines = text.split("\n");
+  const lines2 = text.split("\n");
   let section = "";
-  for (let i = 0; i < lines.length; i++) {
-    const l = lines[i];
-    if (/^\s*\[\[\s*"?mcp_servers"?\s*\.\s*"?reflex"?\b/.test(l)) return `line ${i + 1} makes it an array of tables ([[\u2026]])`;
+  for (let i = 0; i < lines2.length; i++) {
+    const l = lines2[i];
+    if (/^\s*\[\[\s*"?mcp_servers"?\s*\.\s*"?reflex"?\b/.test(l))
+      return `line ${i + 1} makes it an array of tables ([[\u2026]])`;
     const h = header(l);
     if (h !== void 0) {
       section = h;
@@ -19791,36 +20424,39 @@ function unsupported(text) {
     }
     const mine = section === "mcp_servers.reflex" || section.startsWith("mcp_servers.reflex.");
     const inline = section === "mcp_servers" && /^\s*"?reflex"?\s*=/.test(l);
-    if (section === "" && /^\s*"?mcp_servers"?\s*\.\s*"?reflex"?\s*[.=]/.test(l)) return `line ${i + 1} sets it with dotted keys (mcp_servers.reflex.\u2026)`;
-    if (section === "mcp_servers" && /^\s*"?reflex"?\s*\./.test(l)) return `line ${i + 1} sets it with dotted keys (reflex.\u2026)`;
-    if (inline && /=\s*\{/.test(l) && !/\}\s*(#.*)?$/.test(l)) return `line ${i + 1} spreads its inline table over several lines`;
+    if (section === "" && /^\s*"?mcp_servers"?\s*\.\s*"?reflex"?\s*[.=]/.test(l))
+      return `line ${i + 1} sets it with dotted keys (mcp_servers.reflex.\u2026)`;
+    if (section === "mcp_servers" && /^\s*"?reflex"?\s*\./.test(l))
+      return `line ${i + 1} sets it with dotted keys (reflex.\u2026)`;
+    if (inline && /=\s*\{/.test(l) && !/\}\s*(#.*)?$/.test(l))
+      return `line ${i + 1} spreads its inline table over several lines`;
     if ((mine || inline) && /"""|'''/.test(l)) return `line ${i + 1} has a multi-line string`;
   }
   return null;
 }
 function codexConfig(text, want2) {
-  const lines = text.split("\n");
+  const lines2 = text.split("\n");
   const cmd3 = q(want2.command);
   const args2 = `[${want2.args.map(q).join(", ")}]`;
   const home3 = want2.home === null ? null : q(want2.home);
   let section = "";
-  for (let i = 0; i < lines.length; i++) {
-    const h = header(lines[i]);
+  for (let i = 0; i < lines2.length; i++) {
+    const h = header(lines2[i]);
     if (h !== void 0) {
       section = h;
       continue;
     }
-    const m = section === "mcp_servers" ? /^(\s*"?reflex"?\s*=\s*)(\{.*\})(\s*(#.*)?)$/.exec(lines[i]) : null;
+    const m = section === "mcp_servers" ? /^(\s*"?reflex"?\s*=\s*)(\{.*\})(\s*(#.*)?)$/.exec(lines2[i]) : null;
     if (!m) continue;
     let t = inlineSet(inlineSet(m[2], "command", cmd3), "args", args2);
     if (!/(^\{|,)\s*"?tool_timeout_sec"?\s*=/.test(t)) t = inlineSet(t, "tool_timeout_sec", "300");
-    const env = new RegExp(String.raw`(^\{|,)\s*"?env"?\s*=\s*(\{[^}]*\})`).exec(t);
+    const env = /(^\{|,)\s*"?env"?\s*=\s*(\{[^}]*\})/.exec(t);
     const envNow = env ? inlineSet(env[2], "REFLEX_HOME", home3) : home3 ? `{ REFLEX_HOME = ${home3} }` : null;
     if (envNow !== null) t = inlineSet(t, "env", envNow === "{ }" || envNow === "{}" ? null : envNow);
-    lines[i] = m[1] + t + m[3];
-    return lines.join("\n");
+    lines2[i] = m[1] + t + m[3];
+    return lines2.join("\n");
   }
-  const start2 = lines.findIndex((l) => header(l) === "mcp_servers.reflex");
+  const start2 = lines2.findIndex((l) => header(l) === "mcp_servers.reflex");
   if (start2 < 0) {
     const block = [
       "[mcp_servers.reflex]",
@@ -19833,27 +20469,27 @@ function codexConfig(text, want2) {
     return text + (text && !text.endsWith("\n\n") ? text.endsWith("\n") ? "\n" : "\n\n" : "") + block;
   }
   let end = start2 + 1;
-  while (end < lines.length && !(header(lines[end]) !== void 0 && !header(lines[end]).startsWith("mcp_servers.reflex."))) end++;
-  const sub = lines.findIndex((l, i) => i > start2 && i < end && header(l) !== void 0);
+  while (end < lines2.length && (header(lines2[end])?.startsWith("mcp_servers.reflex.") ?? true)) end++;
+  const sub = lines2.findIndex((l, i) => i > start2 && i < end && header(l) !== void 0);
   const mainEnd = sub < 0 ? end : sub;
-  const envAt = lines.findIndex((l, i) => i > start2 && i < end && header(l) === "mcp_servers.reflex.env");
+  const envAt = lines2.findIndex((l, i) => i > start2 && i < end && header(l) === "mcp_servers.reflex.env");
   const set = (from, to, key, value, onlyIfMissing = false) => {
     for (let i = from; i < to; i++) {
-      if (!new RegExp(String.raw`^\s*"?${key}"?\s*=`).test(lines[i])) continue;
+      if (!new RegExp(String.raw`^\s*"?${key}"?\s*=`).test(lines2[i])) continue;
       if (onlyIfMissing) return 0;
-      const last = valueEnd(lines, i);
-      const comment = /\s+#[^"\]]*$/.exec(lines[last])?.[0] ?? "";
+      const last = valueEnd(lines2, i);
+      const comment = /\s+#[^"\]]*$/.exec(lines2[last])?.[0] ?? "";
       if (value === null) {
-        lines.splice(i, last - i + 1);
+        lines2.splice(i, last - i + 1);
         return -(last - i + 1);
       }
-      lines.splice(i, last - i + 1, `${lines[i].match(/^\s*/)[0]}${key} = ${value}${comment}`);
+      lines2.splice(i, last - i + 1, `${/^\s*/.exec(lines2[i])?.[0] ?? ""}${key} = ${value}${comment}`);
       return -(last - i);
     }
     if (value === null) return 0;
     let at = to;
-    while (at - 1 >= from && lines[at - 1].trim() === "") at--;
-    lines.splice(at, 0, `${key} = ${value}`);
+    while (at - 1 >= from && lines2[at - 1].trim() === "") at--;
+    lines2.splice(at, 0, `${key} = ${value}`);
     return 1;
   };
   let shift = 0;
@@ -19863,18 +20499,18 @@ function codexConfig(text, want2) {
   if (envAt >= 0) {
     const from = envAt + shift + 1;
     let to = from;
-    while (to < lines.length && header(lines[to]) === void 0) to++;
+    while (to < lines2.length && header(lines2[to]) === void 0) to++;
     set(from, to, "REFLEX_HOME", home3);
   } else {
-    const at = lines.findIndex((l, i) => i > start2 && i < mainEnd + shift && /^\s*"?env"?\s*=\s*\{.*\}/.test(l));
-    if (at >= 0) {
-      const m = /^(\s*"?env"?\s*=\s*)(\{[^}]*\})(.*)$/.exec(lines[at]);
+    const at = lines2.findIndex((l, i) => i > start2 && i < mainEnd + shift && /^\s*"?env"?\s*=\s*\{.*\}/.test(l));
+    const m = at >= 0 ? /^(\s*"?env"?\s*=\s*)(\{[^}]*\})(.*)$/.exec(lines2[at]) : null;
+    if (m) {
       const t = inlineSet(m[2], "REFLEX_HOME", home3);
-      if (/^\{\s*\}$/.test(t)) lines.splice(at, 1);
-      else lines[at] = m[1] + t + m[3];
+      if (/^\{\s*\}$/.test(t)) lines2.splice(at, 1);
+      else lines2[at] = m[1] + t + m[3];
     } else if (home3) set(start2 + 1, mainEnd + shift, "env", `{ REFLEX_HOME = ${home3} }`);
   }
-  return lines.join("\n");
+  return lines2.join("\n");
 }
 function claudeEntry(old, want2) {
   const env = { ...old?.env ?? {} };
@@ -19898,7 +20534,16 @@ var init_harness_config = __esm({
 // link/bin/setup.ts
 var setup_exports = {};
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { chmodSync as chmodSync2, existsSync as existsSync10, mkdirSync as mkdirSync8, readFileSync as readFileSync9, writeFileSync as writeFileSync6, appendFileSync, accessSync, constants } from "node:fs";
+import {
+  accessSync,
+  appendFileSync,
+  chmodSync as chmodSync2,
+  constants,
+  existsSync as existsSync10,
+  mkdirSync as mkdirSync8,
+  readFileSync as readFileSync9,
+  writeFileSync as writeFileSync6
+} from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { delimiter, dirname as dirname3, join as join10, resolve as resolve3 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -19930,8 +20575,14 @@ exec "${NODE}" "${BIN2}" "$@"
   if (!same2) writeFileSync6(file, body);
   chmodSync2(file, 493);
   const onPath = (process.env.PATH ?? "").split(delimiter).some((d) => resolve3(d) === binDir);
-  if (onPath) return ok(`reflex is on your PATH (${file})`);
-  if (f2.bin) return note(`${file} is ready; ${binDir} isn't on your PATH, so call it by its full path`);
+  if (onPath) {
+    ok(`reflex is on your PATH (${file})`);
+    return;
+  }
+  if (f2.bin) {
+    note(`${file} is ready; ${binDir} isn't on your PATH, so call it by its full path`);
+    return;
+  }
   const shell = (process.env.SHELL ?? "").endsWith("bash") ? ".bash_profile" : ".zprofile";
   const profile = join10(homedir3(), shell);
   const line = `export PATH="$HOME/.local/bin:$PATH" ${MARK}`;
@@ -19954,15 +20605,25 @@ function claudeEntryNow(scope) {
 }
 function claude() {
   if (f2["no-claude"]) return;
-  if (!which("claude")) return note("Claude Code isn't installed (no `claude` on the PATH); skipped");
+  if (!which("claude")) {
+    note("Claude Code isn't installed (no `claude` on the PATH); skipped");
+    return;
+  }
   const scope = f2.scope ?? "user";
-  if (!["user", "local", "project"].includes(scope)) throw new Error(`--scope is user, local or project, not '${scope}'.`);
+  if (!["user", "local", "project"].includes(scope))
+    throw new Error(`--scope is user, local or project, not '${scope}'.`);
   if (!register("Claude Code")) return;
   const run = (args2) => execFileSync2("claude", args2, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 3e4 });
   const old = claudeEntryNow(scope);
-  if (old && !isReflex(old)) return note(`Claude Code already has a server called reflex (${scope} scope) that isn't Reflex; left it alone`);
+  if (old && !isReflex(old)) {
+    note(`Claude Code already has a server called reflex (${scope} scope) that isn't Reflex; left it alone`);
+    return;
+  }
   const entry = claudeEntry(old, want(true));
-  if (old && sameEntry(old, entry)) return ok(`Claude Code already has Reflex (${scope} scope)`);
+  if (old && sameEntry(old, entry)) {
+    ok(`Claude Code already has Reflex (${scope} scope)`);
+    return;
+  }
   if (old) run(["mcp", "remove", "reflex", "-s", scope]);
   try {
     run(["mcp", "add-json", "-s", scope, "reflex", JSON.stringify(entry)]);
@@ -19970,19 +20631,24 @@ function claude() {
     if (old) run(["mcp", "add-json", "-s", scope, "reflex", JSON.stringify(old)]);
     throw e;
   }
-  ok(old ? `updated Reflex in Claude Code (${scope} scope; your other settings for it kept)` : `added Reflex to Claude Code (${scope} scope)`);
+  ok(
+    old ? `updated Reflex in Claude Code (${scope} scope; your other settings for it kept)` : `added Reflex to Claude Code (${scope} scope)`
+  );
 }
 function codex() {
   if (f2["no-codex"]) return;
   const codexHome = process.env.CODEX_HOME ?? join10(homedir3(), ".codex");
-  if (!which("codex") && !existsSync10(codexHome)) return note("Codex isn't installed; skipped");
+  if (!which("codex") && !existsSync10(codexHome)) {
+    note("Codex isn't installed; skipped");
+    return;
+  }
   if (!register("Codex")) return;
   const file = join10(codexHome, "config.toml");
   const text = existsSync10(file) ? readFileSync9(file, "utf8") : "";
   const odd = unsupported(text);
   if (odd) {
     const w = want(false);
-    return note(
+    note(
       `left ${file} alone: Reflex's server there is in a form setup doesn't edit (${odd}). Replace it by hand with:
       [mcp_servers.reflex]
       command = ${JSON.stringify(w.command)}
@@ -19990,9 +20656,13 @@ function codex() {
       tool_timeout_sec = 300` + (w.home ? `
       env = { REFLEX_HOME = ${JSON.stringify(w.home)} }` : "")
     );
+    return;
   }
   const next = codexConfig(text, want(false));
-  if (next === text) return ok("Codex already has Reflex");
+  if (next === text) {
+    ok("Codex already has Reflex");
+    return;
+  }
   mkdirSync8(codexHome, { recursive: true });
   writeFileSync6(file, next);
   ok(`${/^\s*\[mcp_servers\.reflex\]|^\s*"?reflex"?\s*=/m.test(text) ? "updated" : "added"} Reflex in Codex (${file})`);
@@ -20000,7 +20670,8 @@ function codex() {
 async function link() {
   const r = await ensureLink();
   const pid = existsSync10(join10(dir2, "link.json")) ? JSON.parse(readFileSync9(join10(dir2, "link.json"), "utf8")).pid : "?";
-  if (r.started) ok(`started the Reflex Link in the background (pid ${pid}; log ${r.log}; stop it with \`reflex link stop\`)`);
+  if (r.started)
+    ok(`started the Reflex Link in the background (pid ${pid}; log ${r.log}; stop it with \`reflex link stop\`)`);
   else ok(`the Reflex Link is running (pid ${pid})`);
 }
 async function pair() {
@@ -20016,10 +20687,15 @@ async function pair() {
     say2("Waiting for your iPad\u2026 (Ctrl-C stops waiting; the Link keeps running.)");
     while (Date.now() < o.expires) {
       await new Promise((r) => setTimeout(r, 1e3));
-      const u = await c.call("pair.check", { offer: o.offer });
+      const u = await c.call(
+        "pair.check",
+        { offer: o.offer }
+      );
       if (!u.used) continue;
-      say2(`
-Paired with ${u.name ?? "your iPad"}. Done: start Claude Code (\`claude\`) or Codex and say "connect my iPad".`);
+      say2(
+        `
+Paired with ${u.name ?? "your iPad"}. Done: start Claude Code (\`claude\`) or Codex and say "connect my iPad".`
+      );
       return;
     }
     say2("The code expired. Run `reflex pair` for a new one.");
@@ -20040,16 +20716,18 @@ async function main2() {
   codex();
   await link();
   if (which("claude") && !f2["no-claude"] && (!customHome || f2.register))
-    note("optional: to have Sends pushed into Claude Code as new turns, start it with: claude --dangerously-load-development-channels server:reflex");
+    note(
+      "optional: to have Sends pushed into Claude Code as new turns, start it with: claude --dangerously-load-development-channels server:reflex"
+    );
   await pair();
 }
 var REPO, BIN2, NODE, MARK, HELP3, f2, positionals, cmd, dir2, customHome, say2, ok, note, want, register;
 var init_setup = __esm({
   "link/bin/setup.ts"() {
     "use strict";
+    init_start();
     init_home();
     init_client();
-    init_start();
     init_harness_config();
     REPO = resolve3(dirname3(fileURLToPath3(import.meta.url)), "../..");
     BIN2 = join10(REPO, "agent/bin/reflex.mjs");
@@ -20090,14 +20768,19 @@ Options
     dir2 = homeDir(f2.home);
     customHome = dir2 !== resolve3(homedir3(), ".reflex", "link");
     process.env.REFLEX_HOME = dir2;
-    say2 = (s = "") => void process.stdout.write(s + "\n");
+    say2 = (s = "") => void process.stdout.write(`${s}
+`);
     ok = (s) => say2(`  \u2713 ${s}`);
     note = (s) => say2(`  \xB7 ${s}`);
     {
       const onPath = which("node");
       if (onPath) NODE = onPath;
     }
-    want = (channel) => ({ command: NODE, args: [BIN2, "mcp", ...channel ? ["--channel"] : []], home: customHome ? dir2 : null });
+    want = (channel) => ({
+      command: NODE,
+      args: [BIN2, "mcp", ...channel ? ["--channel"] : []],
+      home: customHome ? dir2 : null
+    });
     register = (who2) => {
       if (!customHome || f2.register) return true;
       note(`left ${who2} alone: --home ${dir2} isn't your default profile (pass --register to point ${who2} at it)`);
@@ -20115,9 +20798,9 @@ ${fix}` : ""}`);
 // agent/src/host/client.ts
 import { connect as connect3 } from "node:net";
 function dial(path) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve4, reject) => {
     const s = connect3(path);
-    s.once("connect", () => resolve5(s));
+    s.once("connect", () => resolve4(s));
     s.once("error", reject);
   });
 }
@@ -20125,8 +20808,8 @@ var Client;
 var init_client2 = __esm({
   "agent/src/host/client.ts"() {
     "use strict";
-    init_start();
     init_rpc();
+    init_start();
     Client = class _Client {
       #sock;
       #next = 1;
@@ -20141,23 +20824,26 @@ var init_client2 = __esm({
           ready = r;
           sock.once("close", () => reject(new NoLink("The Link refused this connection: its credential did not match.")));
         });
-        sock.on("data", frames((f3) => {
-          if (f3.t === "ready") return ready();
-          if (f3.t === "push") {
-            const on = this.#onPush.get(f3.id);
-            const answer = (r) => this.#send({ t: "pushed", push: f3.push, ...r });
-            if (!on) return answer({ ok: false, reason: "not listening" });
-            if (Date.now() > f3.deadline) return answer({ ok: false, reason: "arrived after its deadline" });
-            void on(f3).then(answer, (e) => answer({ ok: false, reason: String(e.message) }));
-            return;
-          }
-          const w = this.#waiting.get(f3.id);
-          if (!w) return;
-          if (f3.t === "progress") return w.progress?.(f3);
-          this.#waiting.delete(f3.id);
-          if (f3.t === "failed") w.reject(new Error(f3.message));
-          else w.resolve(f3);
-        }));
+        sock.on(
+          "data",
+          frames((f3) => {
+            if (f3.t === "ready") return ready();
+            if (f3.t === "push") {
+              const on = this.#onPush.get(f3.id);
+              const answer = (r) => this.#send({ t: "pushed", push: f3.push, ...r });
+              if (!on) return answer({ ok: false, reason: "not listening" });
+              if (Date.now() > f3.deadline) return answer({ ok: false, reason: "arrived after its deadline" });
+              void on(f3).then(answer, (e) => answer({ ok: false, reason: String(e.message) }));
+              return;
+            }
+            const w = this.#waiting.get(f3.id);
+            if (!w) return;
+            if (f3.t === "progress") return w.progress?.(f3);
+            this.#waiting.delete(f3.id);
+            if (f3.t === "failed") w.reject(new Error(f3.message));
+            else w.resolve(f3);
+          })
+        );
         sock.on("close", () => {
           for (const w of this.#waiting.values()) w.reject(new Error("The Reflex Link closed the connection."));
           this.#waiting.clear();
@@ -20177,7 +20863,9 @@ var init_client2 = __esm({
             await ensureLink();
             sock = await dial(socketPath());
           } catch (e) {
-            throw new NoLink(e.message || `The Reflex Link is not running (profile ${home2()}). Start it with \`reflex link\`.`);
+            throw new NoLink(
+              e.message || `The Reflex Link is not running (profile ${home2()}). Start it with \`reflex link\`.`
+            );
           }
         }
         const key = token();
@@ -20186,12 +20874,13 @@ var init_client2 = __esm({
         return c;
       }
       #send(f3) {
-        this.#sock.write(JSON.stringify(f3) + "\n");
+        this.#sock.write(`${JSON.stringify(f3)}
+`);
       }
       #request(frame3, o = {}) {
         const id2 = this.#next++;
-        return new Promise((resolve5, reject) => {
-          this.#waiting.set(id2, { resolve: resolve5, reject, progress: o.progress });
+        return new Promise((resolve4, reject) => {
+          this.#waiting.set(id2, { resolve: resolve4, reject, progress: o.progress });
           o.signal?.addEventListener("abort", () => this.#send({ t: "cancel", id: id2 }), { once: true });
           this.#send(frame3(id2));
         });
@@ -20233,7 +20922,15 @@ var init_protocol = __esm({
     TOOLS = ["connect", "wait_for_user"];
     instructions = "Receive the person's marks, words and screen from their iPad. The person reads only your reply text, never tool results. When they ask to connect, pair or set up their iPad (or Reflex), call connect, then write its 6-digit code and tell_the_person in your reply, and only then call wait_for_user. When wait_for_user returns a Send, do what it asks and write your answer in your reply, then call wait_for_user again with after set to that Send's ID, so you keep hearing from them without being asked. You cannot write to the canvas.";
     description = (tool) => tool === "connect" ? "Reflex: connect the person's iPad (the Reflex app) to you, so you receive what they draw, write and say. Returns a 6-digit code for them to type on the iPad, or says it's connected already. Use it whenever they ask to connect, pair, link or set up their iPad, even if they don't say Reflex." : "Wait for a Send from the paired iPad. after acknowledges a previous Send. timeout_s: 0 checks the Inbox immediately.";
-    inputSchema = (tool) => tool === "connect" ? { type: "object", properties: {}, additionalProperties: false } : { type: "object", properties: { space: { type: "string" }, after: { type: "string" }, timeout_s: { type: "number", minimum: 0, maximum: 3600 } }, additionalProperties: false };
+    inputSchema = (tool) => tool === "connect" ? { type: "object", properties: {}, additionalProperties: false } : {
+      type: "object",
+      properties: {
+        space: { type: "string" },
+        after: { type: "string" },
+        timeout_s: { type: "number", minimum: 0, maximum: 3600 }
+      },
+      additionalProperties: false
+    };
   }
 });
 
@@ -21919,9 +22616,9 @@ var init_doc = __esm({
           return;
         }
         const content = arg;
-        const lines = content.split("\n").filter((x) => x);
-        const minIndent = Math.min(...lines.map((x) => x.length - x.trimStart().length));
-        const dedented = lines.map((x) => x.slice(minIndent)).map((x) => " ".repeat(this.indent * 2) + x);
+        const lines2 = content.split("\n").filter((x) => x);
+        const minIndent = Math.min(...lines2.map((x) => x.length - x.trimStart().length));
+        const dedented = lines2.map((x) => x.slice(minIndent)).map((x) => " ".repeat(this.indent * 2) + x);
         for (const line of dedented) {
           this.content.push(line);
         }
@@ -23636,7 +24333,7 @@ function isRef(value) {
 function cloneIssues(issues) {
   return issues.map((iss) => iss.path ? { ...iss, path: iss.path.slice() } : { ...iss });
 }
-function isRecursive(inst, stack, resolve5) {
+function isRecursive(inst, stack, resolve4) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE2;
@@ -23646,7 +24343,7 @@ function isRecursive(inst, stack, resolve5) {
   let result = NONE2;
   const check = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve5);
+      const answer = isRecursive(child, stack, resolve4);
       if (answer > result)
         result = answer;
     }
@@ -23657,7 +24354,7 @@ function isRecursive(inst, stack, resolve5) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve5) : NONE2;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve4) : NONE2;
       if (child > answer)
         answer = child;
     }
@@ -23721,7 +24418,7 @@ function isRecursive(inst, stack, resolve5) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve5 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve4 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -29437,7 +30134,7 @@ var init_protocol2 = __esm({
               return;
             }
             const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-            await new Promise((resolve5) => setTimeout(resolve5, pollInterval));
+            await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
             options?.signal?.throwIfAborted();
           }
         } catch (error2) {
@@ -29454,7 +30151,7 @@ var init_protocol2 = __esm({
        */
       request(request, resultSchema, options) {
         const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-        return new Promise((resolve5, reject) => {
+        return new Promise((resolve4, reject) => {
           const earlyReject = (error2) => {
             reject(error2);
           };
@@ -29532,7 +30229,7 @@ var init_protocol2 = __esm({
               if (!parseResult.success) {
                 reject(parseResult.error);
               } else {
-                resolve5(parseResult.data);
+                resolve4(parseResult.data);
               }
             } catch (error2) {
               reject(error2);
@@ -29794,12 +30491,12 @@ var init_protocol2 = __esm({
           }
         } catch {
         }
-        return new Promise((resolve5, reject) => {
+        return new Promise((resolve4, reject) => {
           if (signal.aborted) {
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
             return;
           }
-          const timeoutId = setTimeout(resolve5, interval);
+          const timeoutId = setTimeout(resolve4, interval);
           signal.addEventListener("abort", () => {
             clearTimeout(timeoutId);
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -31258,12 +31955,12 @@ var init_stdio2 = __esm({
         this.onclose?.();
       }
       send(message2) {
-        return new Promise((resolve5) => {
+        return new Promise((resolve4) => {
           const json = serializeMessage(message2);
           if (this._stdout.write(json)) {
-            resolve5();
+            resolve4();
           } else {
-            this._stdout.once("drain", resolve5);
+            this._stdout.once("drain", resolve4);
           }
         });
       }
@@ -31285,7 +31982,10 @@ function sessionHasChannels() {
   let pid = process.ppid;
   try {
     for (let depth = 0; depth < 4 && pid > 1; depth++) {
-      const line = execFileSync3("ps", ["-o", "ppid=,args=", "-p", String(pid)], { encoding: "utf8", timeout: 2e3 }).trim();
+      const line = execFileSync3("ps", ["-o", "ppid=,args=", "-p", String(pid)], {
+        encoding: "utf8",
+        timeout: 2e3
+      }).trim();
       const m = /^(\d+)\s+(.*)$/s.exec(line);
       if (!m) break;
       if (flag.test(` ${m[2]} `)) return { on: true, why: "the session was started with a channels flag" };
@@ -31298,7 +31998,17 @@ function sessionHasChannels() {
 }
 async function runMcp(o = {}) {
   const started = Date.now();
-  const log = (event, data = {}) => appendFileSync2(logPath("mcp"), JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), pid: process.pid, t_s: Math.round((Date.now() - started) / 100) / 10, event, ...data }) + "\n");
+  const log = (event, data = {}) => appendFileSync2(
+    logPath("mcp"),
+    `${JSON.stringify({
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      pid: process.pid,
+      t_s: Math.round((Date.now() - started) / 100) / 10,
+      event,
+      ...data
+    })}
+`
+  );
   let host2;
   const link2 = () => host2 ??= Client.open(`mcp:${process.pid}`).then(
     (c) => {
@@ -31316,7 +32026,10 @@ async function runMcp(o = {}) {
   const session = o.channel ? sessionHasChannels() : { on: false, why: "" };
   const server = new Server(
     { name: "reflex", version: "0.1.0" },
-    { capabilities: { tools: {}, ...o.channel ? { experimental: { [CHANNEL]: {} } } : {} }, instructions: instructions + (session.on ? CHANNEL_INSTRUCTIONS : "") }
+    {
+      capabilities: { tools: {}, ...o.channel ? { experimental: { [CHANNEL]: {} } } : {} },
+      instructions: instructions + (session.on ? CHANNEL_INSTRUCTIONS : "")
+    }
   );
   const who2 = () => {
     const c = server.getClientVersion();
@@ -31331,8 +32044,17 @@ async function runMcp(o = {}) {
     const progressToken = req.params._meta?.progressToken;
     const callStarted = Date.now();
     let progressSent = 0;
-    log("call_start", { tool, request: extra.requestId, progressToken: progressToken ?? null, args_bytes: JSON.stringify(req.params.arguments ?? {}).length });
-    extra.signal.addEventListener("abort", () => log("call_aborted", { tool, request: extra.requestId, after_s: (Date.now() - callStarted) / 1e3 }), { once: true });
+    log("call_start", {
+      tool,
+      request: extra.requestId,
+      progressToken: progressToken ?? null,
+      args_bytes: JSON.stringify(req.params.arguments ?? {}).length
+    });
+    extra.signal.addEventListener(
+      "abort",
+      () => log("call_aborted", { tool, request: extra.requestId, after_s: (Date.now() - callStarted) / 1e3 }),
+      { once: true }
+    );
     let args2 = req.params.arguments ?? {};
     const cap = Number(process.env.REFLEX_MAX_WAIT_S) || MAX_WAIT_S[KNOWN[server.getClientVersion()?.name ?? ""] ?? ""];
     if (tool === "wait_for_user" && cap && typeof args2.timeout_s === "number" && args2.timeout_s > cap) {
@@ -31346,7 +32068,17 @@ async function runMcp(o = {}) {
       } catch (e) {
         if (!(e instanceof NoLink)) throw e;
         log("no_link", { tool, error: e.message });
-        const json = { ok: false, reason: "unavailable", errors: [{ code: "unavailable", msg: e.message, fix: "Ask the person to run `reflex setup` in a terminal (it starts the Reflex Link), then call again." }] };
+        const json = {
+          ok: false,
+          reason: "unavailable",
+          errors: [
+            {
+              code: "unavailable",
+              msg: e.message,
+              fix: "Ask the person to run `reflex setup` in a terminal (it starts the Reflex Link), then call again."
+            }
+          ]
+        };
         return { content: [{ type: "text", text: JSON.stringify(json) }], isError: true };
       }
       const r = await client2.call(tool, args2, who2(), {
@@ -31356,19 +32088,39 @@ async function runMcp(o = {}) {
           progressSent++;
           void extra.sendNotification({
             method: "notifications/progress",
-            params: { progressToken, progress: p.elapsed_s, total: p.timeout_s, message: `${p.message ?? "Waiting for the person to press Send"} (${p.elapsed_s}s)` }
+            params: {
+              progressToken,
+              progress: p.elapsed_s,
+              total: p.timeout_s,
+              message: `${p.message ?? "Waiting for the person to press Send"} (${p.elapsed_s}s)`
+            }
           });
         }
       });
-      log("call_end", { tool, request: extra.requestId, s: (Date.now() - callStarted) / 1e3, isError: r.isError, progressSent, status: r.json.status ?? r.json.kind ?? (r.json.ok === false ? r.json.reason : "ok") });
+      log("call_end", {
+        tool,
+        request: extra.requestId,
+        s: (Date.now() - callStarted) / 1e3,
+        isError: r.isError,
+        progressSent,
+        status: r.json.status ?? r.json.kind ?? (r.json.ok === false ? r.json.reason : "ok")
+      });
       const content = [{ type: "text", text: JSON.stringify(r.json) }];
       for (const data of r.images) content.push({ type: "image", data, mimeType: "image/png" });
       for (const f3 of r.files ?? []) {
         const entry = (r.json.files ?? []).find((x) => x.id === f3.id);
-        if (entry?.text === void 0) content.push({ type: "resource", resource: { uri: `reflex://${r.json.space}/files/${f3.id}`, mimeType: f3.mime, blob: f3.data } });
+        if (entry?.text === void 0)
+          content.push({
+            type: "resource",
+            resource: { uri: `reflex://${r.json.space}/files/${f3.id}`, mimeType: f3.mime, blob: f3.data }
+          });
       }
       const pending = r.json.pending_sends ?? r.json.pending_after;
-      if (pending > 0 && tool !== "wait_for_user") content.push({ type: "text", text: `\u{1F4E5} ${pending} pending Send${pending === 1 ? "" : "s"}. Read with wait_for_user(timeout_s: 0).` });
+      if (pending > 0 && tool !== "wait_for_user")
+        content.push({
+          type: "text",
+          text: `\u{1F4E5} ${pending} pending Send${pending === 1 ? "" : "s"}. Read with wait_for_user(timeout_s: 0).`
+        });
       return { content, isError: r.isError };
     } catch (e) {
       log("call_failed", { tool, error: String(e.message) });
@@ -31379,7 +32131,8 @@ async function runMcp(o = {}) {
   let asked = "";
   await server.connect(transport);
   const handle = transport.onmessage;
-  transport.onmessage = (msg) => {
+  transport.onmessage = (message2) => {
+    const msg = message2;
     const p = msg.params ?? {};
     if (msg.method === "initialize") asked = String(p.protocolVersion ?? "");
     log("recv", {
@@ -31389,22 +32142,34 @@ async function runMcp(o = {}) {
       ...msg.method === "tools/call" ? { tool: p.name, meta: p._meta ?? null } : {},
       ...msg.method === "notifications/cancelled" ? { cancelled: p } : {}
     });
-    handle(msg);
+    handle?.(message2);
   };
   server.oninitialized = () => {
-    log("initialized", { negotiated: transport._protocolVersion ?? null, client: server.getClientVersion(), capabilities: server.getClientCapabilities() });
+    log("initialized", {
+      negotiated: transport._protocolVersion ?? null,
+      client: server.getClientVersion(),
+      capabilities: server.getClientCapabilities()
+    });
     const harness = KNOWN[server.getClientVersion()?.name ?? ""] ?? server.getClientVersion()?.name ?? "MCP client";
     if (!o.channel) return;
     if (!CHANNEL_HARNESSES.has(harness)) return log("channel_unsupported", { harness });
     if (!session.on) return log("channel_off", { harness, why: session.why });
-    void openTarget("channel", "claude-channel", () => ({ harness, version: server.getClientVersion()?.version ?? "", protocol: asked, pid: process.pid }), push);
+    void openTarget(
+      "channel",
+      "claude-channel",
+      () => ({ harness, version: server.getClientVersion()?.version ?? "", protocol: asked, pid: process.pid }),
+      push
+    );
   };
   async function openTarget(event, adapter, config2, onPush) {
     for (; ; ) {
       let c;
       try {
-        c = await Client.open(`mcp-${event}:${process.pid}`);
-        const closed2 = new Promise((r) => c.onClose = r);
+        const client2 = await Client.open(`mcp-${event}:${process.pid}`);
+        c = client2;
+        const closed2 = new Promise((r) => {
+          client2.onClose = r;
+        });
         const { target, agent } = await c.listen(who2(), adapter, config2(), onPush);
         log(`${event}_open`, { target, agent });
         await closed2;
@@ -31413,7 +32178,8 @@ async function runMcp(o = {}) {
         const error2 = String(e.message);
         log(`${event}_failed`, { error: error2 });
         c?.close();
-        if (/^(rate_limited|not_approved)/.test(error2) && !/Still waiting/.test(error2)) return log(`${event}_stopped`, { error: error2 });
+        if (/^(rate_limited|not_approved)/.test(error2) && !/Still waiting/.test(error2))
+          return log(`${event}_stopped`, { error: error2 });
       }
       await new Promise((r) => setTimeout(r, 3e3));
     }
@@ -31429,20 +32195,40 @@ async function runMcp(o = {}) {
       const entry = bundle.images?.[i];
       if (entry) entry.file = file;
     });
-    const meta2 = { space: String(bundle.space), send: String(bundle.send), kind: String(bundle.kind) };
+    const meta2 = {
+      space: String(bundle.space),
+      send: String(bundle.send),
+      kind: String(bundle.kind)
+    };
     if (bundle.from?.name) meta2.from = String(bundle.from.name);
     if (Date.now() > p.deadline) return { ok: false, reason: "arrived after its deadline" };
-    await server.notification({ method: "notifications/claude/channel", params: { content: JSON.stringify(bundle), meta: meta2 } });
-    log("channel_push", { send: bundle.send, space: bundle.space, kind: bundle.kind, bytes: JSON.stringify(bundle).length, images: p.images.length });
+    await server.notification({
+      method: "notifications/claude/channel",
+      params: { content: JSON.stringify(bundle), meta: meta2 }
+    });
+    log("channel_push", {
+      send: bundle.send,
+      space: bundle.space,
+      kind: bundle.kind,
+      bytes: JSON.stringify(bundle).length,
+      images: p.images.length
+    });
     return { ok: true };
   }
   process.stdin.on("end", () => {
     log("stdin_closed");
-    void host2?.then((c) => c.close(), () => {
-    });
+    void host2?.then(
+      (c) => c.close(),
+      () => {
+      }
+    );
     process.exit(0);
   });
-  log("mcp_started", { cwd: process.cwd(), env_agent: process.env.REFLEX_AGENT_NAME ?? null, channel: Boolean(o.channel) });
+  log("mcp_started", {
+    cwd: process.cwd(),
+    env_agent: process.env.REFLEX_AGENT_NAME ?? null,
+    channel: Boolean(o.channel)
+  });
 }
 var KNOWN, MAX_WAIT_S, CHANNEL, CHANNEL_HARNESSES, CHANNEL_INSTRUCTIONS;
 var init_mcp = __esm({
@@ -31451,9 +32237,9 @@ var init_mcp = __esm({
     init_server4();
     init_stdio2();
     init_types();
-    init_protocol();
     init_client2();
     init_rpc();
+    init_protocol();
     KNOWN = { "claude-code": "Claude Code", "codex-mcp-client": "Codex", codex: "Codex" };
     MAX_WAIT_S = { Codex: 280 };
     CHANNEL = "claude/channel";
@@ -31494,13 +32280,20 @@ function imageDir() {
 async function call(tool, args2, f3, human, o = {}) {
   const r = await (await host()).call(tool, args2, who(f3), { signal: o.signal });
   if (r.isError) {
-    process.stderr.write(JSON.stringify(r.json) + "\n");
+    process.stderr.write(`${JSON.stringify(r.json)}
+`);
     return 1;
   }
-  const files = (o.files?.(r) ?? r.images.map((_, i) => join12(imageDir(), `${tool}-${Date.now()}-${i + 1}.png`))).slice(0, r.images.length);
-  r.images.forEach((b642, i) => writeFileSync8(files[i], Buffer.from(b642, "base64")));
+  const files = (o.files?.(r) ?? r.images.map((_, i) => join12(imageDir(), `${tool}-${Date.now()}-${i + 1}.png`))).slice(
+    0,
+    r.images.length
+  );
+  for (const [i, b642] of r.images.entries()) writeFileSync8(files[i], Buffer.from(b642, "base64"));
   for (const fb of r.files ?? []) {
-    const path = join12(imageDir(), `${fb.id.replace(/[^A-Za-z0-9_.-]/g, "_")}-${basename2(fb.name).replace(/[^A-Za-z0-9_. -]/g, "_")}`);
+    const path = join12(
+      imageDir(),
+      `${fb.id.replace(/[^A-Za-z0-9_.-]/g, "_")}-${basename2(fb.name).replace(/[^A-Za-z0-9_. -]/g, "_")}`
+    );
     writeFileSync8(path, Buffer.from(fb.data, "base64"));
     const entry = (r.json.files ?? []).find((x) => x.id === fb.id);
     if (entry) entry.file = path;
@@ -31512,7 +32305,8 @@ async function call(tool, args2, f3, human, o = {}) {
 async function adapters(action, args2, f3, human) {
   const r = await (await host()).adapters(who(f3), action, args2);
   if (r.isError) {
-    process.stderr.write(JSON.stringify(r.json) + "\n");
+    process.stderr.write(`${JSON.stringify(r.json)}
+`);
     return 1;
   }
   if (f3.json) out2(JSON.stringify(r.json));
@@ -31520,7 +32314,11 @@ async function adapters(action, args2, f3, human) {
   return 0;
 }
 function help() {
-  return ["Reflex \u2014 receive Sends from your iPad", "reflex setup \xB7 reflex pair \xB7 reflex link", ...Object.values(COMMANDS).map((c) => c.usage)].join("\n");
+  return [
+    "Reflex \u2014 receive Sends from your iPad",
+    "reflex setup \xB7 reflex pair \xB7 reflex link",
+    ...Object.values(COMMANDS).map((c) => c.usage)
+  ].join("\n");
 }
 function parse3(argv) {
   const pos = [];
@@ -31542,20 +32340,33 @@ function closest(word, options) {
   const d = (a, b) => {
     const m = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
     for (let j = 1; j <= b.length; j++) m[0][j] = j;
-    for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) m[i][j] = Math.min(m[i - 1][j] + 1, m[i][j - 1] + 1, m[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    for (let i = 1; i <= a.length; i++)
+      for (let j = 1; j <= b.length; j++)
+        m[i][j] = Math.min(m[i - 1][j] + 1, m[i][j - 1] + 1, m[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
     return m[a.length][b.length];
   };
   return options.map((o) => [d(word, o), o]).sort((a, b) => a[0] - b[0])[0];
 }
 async function main3(argv) {
   const { pos, f: f3 } = parse3(argv);
-  if (f3.version) return out2(VERSION), 0;
+  if (f3.version) {
+    out2(VERSION);
+    return 0;
+  }
   const two = pos.slice(0, 2).join(" ");
   const key = COMMANDS[two] ? two : COMMANDS[pos[0] ?? ""] ? pos[0] : void 0;
   if (!key) {
-    if (!pos.length || f3.help) return out2(help()), pos.length ? 0 : f3.help ? 0 : 2;
+    if (!pos.length || f3.help) {
+      out2(help());
+      return pos.length ? 0 : f3.help ? 0 : 2;
+    }
     const [dist, near] = closest(two || pos[0], Object.keys(COMMANDS));
-    errLine("invalid_input", `Unknown command 'reflex ${pos.join(" ")}'.`, dist <= 4 ? `Did you mean 'reflex ${near}'?` : "Run reflex --help for the commands.", dist <= 4 ? [`reflex ${near} --help`] : ["reflex --help"]);
+    errLine(
+      "invalid_input",
+      `Unknown command 'reflex ${pos.join(" ")}'.`,
+      dist <= 4 ? `Did you mean 'reflex ${near}'?` : "Run reflex --help for the commands.",
+      dist <= 4 ? [`reflex ${near} --help`] : ["reflex --help"]
+    );
     return 2;
   }
   const cmd3 = COMMANDS[key];
@@ -31574,15 +32385,34 @@ Also: --json, --agent <name>${guide}`);
   const known = /* @__PURE__ */ new Set([...cmd3.flags ?? [], "json", "agent", "help"]);
   const unknown2 = Object.keys(f3).filter((k) => !known.has(k));
   try {
-    if (unknown2.length) throw new Usage(`Unknown flag --${unknown2[0]} for 'reflex ${key}'. Usage: ${cmd3.usage}`, [`reflex ${key} --help`]);
+    if (unknown2.length)
+      throw new Usage(`Unknown flag --${unknown2[0]} for 'reflex ${key}'. Usage: ${cmd3.usage}`, [
+        `reflex ${key} --help`
+      ]);
     return await cmd3.run(pos.slice(key.split(" ").length), f3);
   } catch (e) {
     if (e instanceof Usage) {
-      errLine("invalid_input", e.message, `See: reflex ${key} --help`, e.next.length ? e.next : [`reflex ${key} --help`]);
+      errLine(
+        "invalid_input",
+        e.message,
+        `See: reflex ${key} --help`,
+        e.next.length ? e.next : [`reflex ${key} --help`]
+      );
       return 2;
     }
-    if (e instanceof NoLink) errLine("unavailable", e.message, "Ask the person to run `reflex setup` (or `reflex link`), then run this again.", ["reflex setup"]);
-    else errLine("unavailable", e.message, "Check the Link's log (~/.reflex/link/link.log) or its terminal for errors.");
+    if (e instanceof NoLink)
+      errLine(
+        "unavailable",
+        e.message,
+        "Ask the person to run `reflex setup` (or `reflex link`), then run this again.",
+        ["reflex setup"]
+      );
+    else
+      errLine(
+        "unavailable",
+        e.message,
+        "Check the Link's log (~/.reflex/link/link.log) or its terminal for errors."
+      );
     return 1;
   } finally {
     if (key !== "mcp") client?.close();
@@ -31596,8 +32426,11 @@ var init_cli = __esm({
     init_rpc();
     init_protocol();
     VERSION = "0.1.0";
-    out2 = (s) => process.stdout.write(s + "\n");
-    errLine = (reason, msg, fix, next = []) => process.stderr.write(JSON.stringify({ ok: false, reason, errors: [{ code: reason, msg, fix }], ...next.length ? { next } : {} }) + "\n");
+    out2 = (s) => process.stdout.write(`${s}
+`);
+    errLine = (reason, msg, fix, next = []) => process.stderr.write(
+      JSON.stringify({ ok: false, reason, errors: [{ code: reason, msg, fix }], ...next.length ? { next } : {} }) + "\n"
+    );
     Usage = class extends Error {
       next;
       constructor(msg, next = []) {
@@ -31646,7 +32479,9 @@ var init_cli = __esm({
                 ...j.marks.map(
                   (m) => `  ${m.id} ${m.kind}${m.on ? ` on ${m.on.join(", ")}` : ""}${m.from || m.to ? ` from ${m.from ?? "?"} to ${m.to ?? "?"}` : ""}${m.text_guess ? ` "${m.text_guess}" (${m.confidence})` : ""}${m.near ? ` near ${m.near}` : ""}${m.moved_since_marked ? " (moved since)" : ""}${m.image ? ` (image ${m.image})` : ""}`
                 ),
-                ...j.changes.map((c) => `  ${c.kind} ${c.id}${c.file ? ` ${c.file} (${c.mime})` : ""}${c.values ? ` ${JSON.stringify(c.values)}` : ""}${c.image ? ` (image ${c.image})` : ""}`),
+                ...j.changes.map(
+                  (c) => `  ${c.kind} ${c.id}${c.file ? ` ${c.file} (${c.mime})` : ""}${c.values ? ` ${JSON.stringify(c.values)}` : ""}${c.image ? ` (image ${c.image})` : ""}`
+                ),
                 ...j.element ? [`  on ${j.element}${j.payload ? ` ${JSON.stringify(j.payload)}` : ""}`] : [],
                 ...files.map((p, i) => `  image ${i + 1}: ${p}`),
                 j.next
@@ -31671,7 +32506,8 @@ var init_cli = __esm({
         run: async (p, f3) => {
           const usage = "reflex adapters add webhook --url <url>";
           const adapter = need(p, 0, "adapter", usage);
-          if (adapter !== "webhook") throw new Usage(`Only a webhook can be added by hand, not '${adapter}'. Usage: ${usage}`);
+          if (adapter !== "webhook")
+            throw new Usage(`Only a webhook can be added by hand, not '${adapter}'. Usage: ${usage}`);
           if (typeof f3.url !== "string") throw new Usage(`Missing --url. Usage: ${usage}`);
           return adapters("add", { adapter, config: { url: f3.url } }, f3, (j) => [
             `Added ${j.target}: Sends for you are POSTed to ${j.config.url}.`,
@@ -31687,13 +32523,17 @@ var init_cli = __esm({
           "list",
           {},
           f3,
-          (j) => j.targets.length ? j.targets.map((t) => `${t.target}  ${t.adapter.padEnd(15)} ${t.live ? "live   " : "offline"}  ${t.config.url ?? t.config.harness ?? t.config.host ?? ""}`) : ["No push targets. Add a webhook: reflex adapters add webhook --url <url>"]
+          (j) => j.targets.length ? j.targets.map(
+            (t) => `${t.target}  ${t.adapter.padEnd(15)} ${t.live ? "live   " : "offline"}  ${t.config.url ?? t.config.harness ?? t.config.host ?? ""}`
+          ) : ["No push targets. Add a webhook: reflex adapters add webhook --url <url>"]
         )
       },
       "adapters remove": {
         usage: "reflex adapters remove <target>",
         summary: "Remove one of your push targets and its secret",
-        run: (p, f3) => adapters("remove", { target: need(p, 0, "target", "reflex adapters remove <target>") }, f3, (j) => [`Removed ${j.removed}.`])
+        run: (p, f3) => adapters("remove", { target: need(p, 0, "target", "reflex adapters remove <target>") }, f3, (j) => [
+          `Removed ${j.removed}.`
+        ])
       },
       mcp: {
         usage: "reflex mcp [--channel]",
@@ -31736,17 +32576,28 @@ async function prepare() {
     try {
       execFileSync4(file, args2, { cwd: at("."), stdio: "inherit" });
     } catch {
-      console.error(`Error: ${what} failed. Run \`${[file, ...args2].join(" ")}\` in ${at(".")} to see why, then \`reflex setup\` again.`);
+      console.error(
+        `Error: ${what} failed. Run \`${[file, ...args2].join(" ")}\` in ${at(".")} to see why, then \`reflex setup\` again.`
+      );
       process.exit(1);
     }
   };
-  if (!existsSync11(at("node_modules/bonjour-service"))) run("installing packages (npm install)", "npm", ["install", "--no-audit", "--no-fund"]);
+  if (!existsSync11(at("node_modules/bonjour-service")))
+    run("installing packages (npm install)", "npm", ["install", "--no-audit", "--no-fund"]);
   if (process.platform === "darwin" && !existsSync11(at("link/transports/p2p/.build/release/reflex-p2p"))) {
     try {
       execFileSync4("swift", ["--version"], { stdio: "ignore" });
-      run("building the peer-to-peer Wi-Fi helper (once)", "swift", ["build", "-c", "release", "--package-path", "link/transports/p2p"]);
+      run("building the peer-to-peer Wi-Fi helper (once)", "swift", [
+        "build",
+        "-c",
+        "release",
+        "--package-path",
+        "link/transports/p2p"
+      ]);
     } catch {
-      console.log("Setting up Reflex: no Swift (Xcode's command-line tools), so peer-to-peer Wi-Fi stays off; the iPad needs the same network.");
+      console.log(
+        "Setting up Reflex: no Swift (Xcode's command-line tools), so peer-to-peer Wi-Fi stays off; the iPad needs the same network."
+      );
     }
   }
 }
