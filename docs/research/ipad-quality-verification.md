@@ -53,7 +53,7 @@ and ran the existing test successfully, as recorded in its xcresult.
 | --- | --- |
 | Linked research for all nine practices and Reflex comparison | Written in ipad-quality.md, with pinned source links |
 | Every-PR free-runner build/checks | Implemented in ipad.yml; GitHub run status recorded with the PR |
-| Fresh-clone README | Commands documented; isolated clone build evidence to be recorded with final validation |
+| Fresh-clone README | Isolated local clone at 71b8abb: XcodeGen and the README unsigned Simulator build passed; generated files remained clean. Interactive Run remains blocked |
 | Make board, write/draw, restart, compare screens to main | **Not checked**: device discovery blocker; no screenshots/video claimed |
 | Fresh-agent code, Send and wait_for_user | **Not checked**: same blocker |
 | Correct/wrong/consumed code and five failed tries on iPad | **Not checked**: same blocker |
@@ -65,3 +65,20 @@ and ran the existing test successfully, as recorded in its xcresult.
 
 These limits mean T31's full hands-on acceptance is still open. A green build
 and source-equivalent cleanup cannot establish the missing end-to-end evidence.
+
+## Independent Sol review
+
+One round with **gpt-6.1-sol**, reasoning effort **medium**, through T3 Code:
+**APPROVE**, no implementation findings and no tests added. Ledger: no blocker,
+should or nit items. The reviewer independently checked formatter equivalence,
+byte-for-byte regeneration of the project/scheme/plist, strict lint, shell
+syntax, diff whitespace, source links and runner/toolchain availability. It
+kept the missing manual acceptance evidence separate from implementation
+approval. Usage was not exposed.
+
+Diff at review and after review: 44 files, 3,110 insertions and 1,094 deletions
+before this documentation-only evidence update. No product code changed after
+review. No findings were declined or fixes requested. The branch is pushed
+only after approval. No new TestFlight binary is needed for a user-visible fix;
+shipping this source cleanup would require a separately authorized new build
+number, upload and Beta App Review.
