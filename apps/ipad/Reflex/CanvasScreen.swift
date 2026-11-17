@@ -13,6 +13,7 @@ struct CanvasScreen: View {
     @State private var open: BoardSession?
     @State private var pairing = false
     @State private var voice = VoiceCapture()
+    @State private var recordings = RecordingStore.shared
     /// The Agent question on screen: the first one the Link lists as waiting. Kept in view state so the alert
     /// is shown again for each new question, also while a board is open.
     @State private var asking: AgentRequest?
@@ -30,7 +31,8 @@ struct CanvasScreen: View {
                     .accessibilityHidden(open != nil)
                 if let open {
                     BoardScreen(
-                        session: open, link: link, voice: voice, library: library, onBack: closeBoard,
+                        session: open, link: link, voice: voice, recordings: recordings, library: library,
+                        onBack: closeBoard,
                         onStatus: { pairing = true }
                     )
                     .id(open.id)

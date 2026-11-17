@@ -5,15 +5,29 @@ import SwiftUI
 
 private let log = Logger(subsystem: "si.eilmer.reflex", category: "voice")
 
-/// Hold-to-talk speech, transcribed on this iPad with Apple's on-device
-/// recognition (SPEC §10). Audio never leaves the iPad; only the transcript and
-/// its word timings go into the Send.
+/// Hold-to-talk speech, transcribed on this iPad with Apple's on-device SpeechAnalyzer (SPEC §10). Each hold is
+/// also written to an audio file on this iPad, for Recordings. Audio never leaves the iPad; only the transcript and
+/// its word timings go into a Send.
+///
+/// SpeechAnalyzer is made for long, natural speech: it keeps every finished sentence, through pauses and past a
+/// minute, where SFSpeechRecognizer's live task started over after a pause (keeping only the last part) and ended
+/// on its own after about a minute.
 @MainActor @Observable
 final class VoiceCapture {
     enum State: Equatable {
         case idle
         case listening
         case finishing
+    }
+
+    /// One hold, once it has ended: its words and where its audio is.
+    struct Take {
+        var started: Date
+        var duration: TimeInterval
+        var said: String
+        var words: [Recording.Word]
+        var levels: [Float]
+        var audio: URL
     }
 
     private(set) var state: State = .idle
@@ -23,13 +37,31 @@ final class VoiceCapture {
     private(set) var level: Float = 0
     /// The person is holding the button (shown at once, before the mic is ready).
     var holding = false
+    /// The system took the mic mid-hold (a call, another app, the route changed): the hold ends as cut off.
+    @ObservationIgnored var onInterrupted: (() -> Void)?
 
     @ObservationIgnored private let engine = AVAudioEngine()
-    @ObservationIgnored private var request: SFSpeechAudioBufferRecognitionRequest?
-    @ObservationIgnored private var task: SFSpeechRecognitionTask?
+    @ObservationIgnored private var tape: Tape?
+    @ObservationIgnored private var listener: Listener?
+    @ObservationIgnored private var audio: URL?
     @ObservationIgnored private var started = Date()
-    @ObservationIgnored private var latest: SFTranscription?
-    @ObservationIgnored private var finished: CheckedContinuation<Void, Never>?
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+
+    init() {
+        // Have this language's speech model ready before the first hold.
+        if !Self.needsPermission { Task { _ = try? await SpeechModel.module(installing: true) } }
+        let center = NotificationCenter.default
+        for name in [AVAudioSession.interruptionNotification, .AVAudioEngineConfigurationChange] {
+            observers.append(
+                center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, self.state == .listening else { return }
+                        log.info("The mic was taken mid-hold")
+                        self.onInterrupted?()
+                    }
+                })
+        }
+    }
 
     /// True when the mic or speech recognition hasn't been allowed yet (or was refused).
     static var needsPermission: Bool {
@@ -37,184 +69,111 @@ final class VoiceCapture {
             || AVAudioApplication.shared.recordPermission != .granted
     }
 
-    /// Asks for the mic and speech recognition, outside a hold. True if both are allowed.
-    func requestPermission() async -> Bool { await Self.allowed() }
+    /// Asks for the mic and speech recognition, outside a hold. True if both are allowed. Then fetches this
+    /// language's on-device speech model if the iPad doesn't have it yet, so the first hold can use it.
+    func requestPermission() async -> Bool {
+        let ok = await Self.allowed()
+        if ok { Task { _ = try? await SpeechModel.module(installing: true) } }
+        return ok
+    }
 
-    /// Starts listening. Throws a message the person can read if it can't.
-    func start() async throws {
+    /// Starts listening and recording to `file`. Throws a message the person can read if it can't.
+    func start(recordingTo file: URL) async throws {
         guard state == .idle else { return }
-        let recognizer = try Self.recognizer()
         guard await Self.allowed() else {
             throw VoiceError("Reflex needs the microphone and speech recognition. Allow them in Settings.")
         }
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+        try session.setCategory(.record, mode: .spokenAudio, options: .duckOthers)
         try session.setActive(true, options: .notifyOthersOnDeactivation)
-
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.requiresOnDeviceRecognition = true
-        request.shouldReportPartialResults = true
-        request.addsPunctuation = true
-        self.request = request
-        latest = nil
-        partial = ""
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else { throw VoiceError("No microphone is available.") }
+        let tape = try Tape(file: file, format: format)
+        self.tape = tape
+        audio = file
+        partial = ""
         input.removeTap(onBus: 0)
-        Self.tap(input, format: format, into: request) { [weak self] l in self?.level = l }
+        Self.tap(input, format: format, into: tape) { [weak self] l in self?.level = l }
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            input.removeTap(onBus: 0)
+            tape.close()
+            self.tape = nil
+            throw error
+        }
         started = Date()
         state = .listening
-        task = Self.listen(recognizer, request) { [weak self] heard, done in
-            guard let self else { return }
-            if let heard {
-                self.latest = heard
-                self.partial = heard.formattedString
-            }
-            if done { self.finish() }
-        }
+        // The recognizer gets ready while the mic already records: what's said meanwhile waits in the tape.
+        let listener = Listener(input: format, audio: tape.stream) { [weak self] heard in self?.partial = heard }
+        self.listener = listener
         log.info("Listening, on-device")
     }
 
-    /// Stops listening and returns the transcript with each word's timing, in
-    /// milliseconds since 1970 (the clock strokes use).
-    func stop() async -> (said: String, words: [[String: Any]]) {
-        guard state == .listening else { return ("", []) }
+    /// Stops listening and recording. The take's audio is complete on disk when this returns.
+    func stop() async -> Take? {
+        guard state == .listening, let tape, let audio else { return nil }
         state = .finishing
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
-        request?.endAudio()
-        // The final result follows endAudio; don't wait on it forever.
-        await withCheckedContinuation { c in
-            finished = c
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(2.5))
-                self.finish()
-            }
-        }
-        task?.cancel()
-        task = nil
-        request = nil
+        tape.close()
+        let duration = Date().timeIntervalSince(started)
+        let heard = await listener?.finish() ?? Heard(text: "", words: [])
+        listener = nil
+        self.tape = nil
+        self.audio = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         state = .idle
         level = 0
-        let t = latest
         partial = ""
-        let base = started.timeIntervalSince1970
-        let words: [[String: Any]] = (t?.segments ?? []).map { s in
-            [
-                "text": s.substring,
-                "start_ms": Int(((base + s.timestamp) * 1000).rounded()),
-                "end_ms": Int(((base + s.timestamp + s.duration) * 1000).rounded()),
-            ]
-        }
-        log.info("Heard \(t?.formattedString ?? "", privacy: .public) (\(words.count) words)")
-        return (t?.formattedString ?? "", words)
+        log.info("Heard \(heard.text, privacy: .public) (\(heard.words.count) words, \(Int(duration)) s)")
+        return Take(
+            started: started, duration: duration, said: heard.text, words: heard.words,
+            levels: tape.waveform(), audio: audio)
     }
 
-    /// The on-device recognizer for the person's language. Audio never goes to a server, so
-    /// without on-device recognition there is no voice.
-    private nonisolated static func recognizer() throws -> SFSpeechRecognizer {
-        guard
-            let r = SFSpeechRecognizer(locale: Locale.current)
-                ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")), r.isAvailable
-        else {
-            throw VoiceError("Speech recognition isn't available right now.")
+    /// Transcribes a saved recording again, from its audio on this iPad.
+    /// The audio goes through the same path as the mic's, in the format the recognizer asks for.
+    static func transcribe(_ url: URL) async throws -> Heard {
+        _ = try await SpeechModel.module(installing: true)
+        let file = try AVAudioFile(forReading: url)
+        let format = file.processingFormat
+        let seconds = Double(file.length) / format.sampleRate
+        let (audio, input) = AsyncStream<Tape.Chunk>.makeStream()
+        let listener = Listener(input: format, audio: audio) { _ in }
+        // Decoded off the main actor.
+        Task.detached {
+            defer { input.finish() }
+            guard let file = try? AVAudioFile(forReading: url) else { return }
+            while let b = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 16_384),
+                (try? file.read(into: b)) != nil, b.frameLength > 0
+            {
+                input.yield(Tape.Chunk(buffer: b))
+            }
         }
-        guard r.supportsOnDeviceRecognition else {
-            throw VoiceError("On-device speech recognition isn't available on this iPad for \(r.locale.identifier).")
-        }
-        return r
+        let heard = await listener.finish(patience: max(20, seconds))
+        if heard.text.isEmpty, let failure = listener.failure { throw failure }
+        return heard
     }
 
-    #if DEBUG
-        /// Transcribes an audio file through the same on-device path as the mic, for
-        /// the Simulator (`reflex://debug/voice?file=`): its timings start when the file does.
-        func debugTranscribe(_ url: URL) async throws -> (said: String, words: [[String: Any]]) {
-            _ = try Self.recognizer()
-            guard await Self.speechAllowed() else { throw VoiceError("Speech recognition isn't allowed.") }
-            let started = Date()
-            let heard = try await Self.transcribe(url)
-            let base = started.timeIntervalSince1970
-            let words: [[String: Any]] = heard.segments.map { s in
-                [
-                    "text": s.text, "start_ms": Int(((base + s.at) * 1000).rounded()),
-                    "end_ms": Int(((base + s.at + s.duration) * 1000).rounded()),
-                ]
-            }
-            log.info("Heard from file: \(heard.text, privacy: .public) (\(words.count) words)")
-            return (heard.text, words)
-        }
-
-        private nonisolated static func transcribe(_ url: URL) async throws -> (text: String, segments: [Heard]) {
-            let recognizer = try recognizer()
-            let request = SFSpeechAudioBufferRecognitionRequest()
-            request.requiresOnDeviceRecognition = true
-            request.addsPunctuation = true
-            let file = try AVAudioFile(forReading: url)
-            return try await withCheckedThrowingContinuation { c in
-                let once = Once()
-                let task = recognizer.recognitionTask(with: request) { result, error in
-                    guard result?.isFinal == true || error != nil, once.first() else { return }
-                    let t = result?.bestTranscription
-                    if let error, t == nil {
-                        c.resume(throwing: VoiceError("Speech recognition failed: \(error.localizedDescription)"))
-                        return
-                    }
-                    c.resume(
-                        returning: (
-                            t?.formattedString ?? "",
-                            (t?.segments ?? []).map {
-                                Heard(text: $0.substring, at: $0.timestamp, duration: $0.duration)
-                            }
-                        ))
-                }
-                _ = task
-                while let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096),
-                    (try? file.read(into: buffer)) != nil, buffer.frameLength > 0
-                {
-                    request.append(buffer)
-                }
-                request.endAudio()
-            }
-        }
-    #endif
-
-    // The audio tap and the recognizer call back on their own queues, so their
-    // closures are made here, outside the main actor, and hop back to it.
+    // The tap calls back on its own queue, so its closure is made here, outside the main actor.
     private nonisolated static func tap(
-        _ input: AVAudioInputNode, format: AVAudioFormat, into request: SFSpeechAudioBufferRecognitionRequest,
+        _ input: AVAudioInputNode, format: AVAudioFormat, into tape: Tape,
         level: @escaping @MainActor @Sendable (Float) -> Void
     ) {
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            request.append(buffer)
+        input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
             guard let data = buffer.floatChannelData?[0] else { return }
             let n = Int(buffer.frameLength)
             var sum: Float = 0
             for i in 0..<n { sum += data[i] * data[i] }
             let rms = sqrt(sum / Float(max(n, 1)))
             let l = min(1, max(0, (20 * log10(max(rms, 0.000_01)) + 50) / 45))
+            tape.write(buffer, level: l)
             Task { @MainActor in level(l) }
         }
-    }
-
-    private nonisolated static func listen(
-        _ recognizer: SFSpeechRecognizer,
-        _ request: SFSpeechAudioBufferRecognitionRequest,
-        update: @escaping @MainActor @Sendable (SFTranscription?, Bool) -> Void
-    ) -> SFSpeechRecognitionTask {
-        recognizer.recognitionTask(with: request) { result, error in
-            nonisolated(unsafe) let heard = result?.bestTranscription
-            let done = result?.isFinal ?? false || error != nil
-            Task { @MainActor in update(heard, done) }
-        }
-    }
-
-    private func finish() {
-        finished?.resume()
-        finished = nil
     }
 
     private nonisolated static func allowed() async -> Bool {
@@ -229,25 +188,284 @@ final class VoiceCapture {
     }
 }
 
-#if DEBUG
-    /// True the first time only; the recognizer can report more than once.
-    private final class Once: @unchecked Sendable {
-        private let lock = NSLock()
-        private var done = false
-        func first() -> Bool {
-            lock.withLock {
-                defer { done = true }
-                return !done
+/// What was heard: the whole transcript, and each word's time from the start of the audio.
+struct Heard: Sendable {
+    var text: String
+    var words: [Recording.Word]
+
+    /// One result from the recognizer: finished (it won't change), or a guess at what's being said now.
+    struct Piece: Sendable {
+        var text: AttributedString
+        var isFinal: Bool
+    }
+
+    /// Every finished piece, in order, until the recognizer ends.
+    static func collect(_ pieces: AsyncThrowingStream<Piece, Error>) async throws -> Heard {
+        var done: [AttributedString] = []
+        for try await p in pieces where p.isFinal { done.append(p.text) }
+        return Heard(done)
+    }
+
+    init(text: String, words: [Recording.Word]) {
+        self.text = text
+        self.words = words
+    }
+
+    /// Joins finished pieces, and any guess still pending at the end, into one transcript with word timings.
+    init(_ pieces: [AttributedString]) {
+        var parts: [String] = []
+        var words: [Recording.Word] = []
+        for piece in pieces {
+            let s = String(piece.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !s.isEmpty { parts.append(s) }
+            for run in piece.runs {
+                guard let range = run[AttributeScopes.SpeechAttributes.TimeRangeAttribute.self] else { continue }
+                let w = String(piece[run.range].characters).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !w.isEmpty, range.start.isNumeric, range.duration.isNumeric else { continue }
+                words.append(.init(text: w, start: range.start.seconds, end: range.end.seconds))
             }
+        }
+        self.init(text: parts.joined(separator: " "), words: words)
+    }
+}
+
+/// The on-device speech model for the person's language, and its results as plain pieces.
+enum SpeechModel {
+    static func module(installing: Bool) async throws -> (any SpeechModule, AsyncThrowingStream<Heard.Piece, Error>) {
+        let locale = Locale.current
+        let module: any SpeechModule
+        let pieces: AsyncThrowingStream<Heard.Piece, Error>
+        if SpeechTranscriber.isAvailable, let l = await SpeechTranscriber.supportedLocale(equivalentTo: locale) {
+            let t = SpeechTranscriber(
+                locale: l, transcriptionOptions: [], reportingOptions: [.volatileResults],
+                attributeOptions: [.audioTimeRange])
+            module = t
+            pieces = relay(t.results) { Heard.Piece(text: $0.text, isFinal: $0.isFinal) }
+        } else if let l = await DictationTranscriber.supportedLocale(equivalentTo: locale) {
+            // Where the long-form model isn't offered (some iPads and languages): dictation, still on this iPad.
+            let t = DictationTranscriber(
+                locale: l, contentHints: [], transcriptionOptions: [.punctuation], reportingOptions: [.volatileResults],
+                attributeOptions: [.audioTimeRange])
+            module = t
+            pieces = relay(t.results) { Heard.Piece(text: $0.text, isFinal: $0.isFinal) }
+        } else {
+            throw VoiceError("On-device speech recognition isn't available on this iPad for \(locale.identifier).")
+        }
+        let status = await AssetInventory.status(forModules: [module])
+        log.info(
+            "Speech model \(String(describing: type(of: module)), privacy: .public): \(String(describing: status), privacy: .public)"
+        )
+        switch status {
+        case .installed: break
+        case .unsupported:
+            throw VoiceError("On-device speech recognition isn't available on this iPad for \(locale.identifier).")
+        case .supported, .downloading:
+            guard installing else { throw VoiceError("This iPad is still getting speech recognition ready.") }
+            if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
+                log.info("Downloading the on-device speech model")
+                try await request.downloadAndInstall()
+            }
+        @unknown default: break
+        }
+        return (module, pieces)
+    }
+
+    private static func relay<S: AsyncSequence & Sendable>(
+        _ results: S, _ piece: @escaping @Sendable (S.Element) -> Heard.Piece
+    ) -> AsyncThrowingStream<Heard.Piece, Error> where S.Failure == any Error {
+        AsyncThrowingStream { c in
+            let task = Task {
+                do {
+                    for try await r in results { c.yield(piece(r)) }
+                    c.finish()
+                } catch { c.finish(throwing: error) }
+            }
+            c.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+/// Feeds one hold's audio to SpeechAnalyzer and gathers what it hears, piece by piece.
+@MainActor
+private final class Listener {
+    private var finished: [AttributedString] = []
+    private var guess: AttributedString?
+    private var analyzer: SpeechAnalyzer?
+    private var input: AsyncStream<AnalyzerInput>.Continuation?
+    private var work: Task<Void, Never>?
+    private var results: Task<Void, Never>?
+    private let heard: (String) -> Void
+    /// Why the recognizer stopped early, if it did.
+    private(set) var failure: Error?
+
+    init(input format: AVAudioFormat, audio: AsyncStream<Tape.Chunk>, heard: @escaping (String) -> Void) {
+        self.heard = heard
+        work = Task { [weak self] in await self?.run(format, audio) }
+    }
+
+    private func run(_ format: AVAudioFormat, _ audio: AsyncStream<Tape.Chunk>) async {
+        do {
+            let (module, pieces) = try await SpeechModel.module(installing: false)
+            let target = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module], considering: format)
+            let analyzer = SpeechAnalyzer(modules: [module])
+            self.analyzer = analyzer
+            results = Task { [weak self] in
+                do {
+                    for try await p in pieces { self?.got(p) }
+                } catch {
+                    log.error("Speech results ended: \(error.localizedDescription, privacy: .public)")
+                    self?.failure = error
+                }
+            }
+            let (stream, input) = AsyncStream<AnalyzerInput>.makeStream()
+            self.input = input
+            try await analyzer.start(inputSequence: stream)
+            let convert = Converter(from: format, to: target ?? format)
+            for await chunk in audio {
+                guard let b = convert(chunk.buffer) else { continue }
+                input.yield(AnalyzerInput(buffer: b))
+            }
+            input.finish()
+        } catch {
+            log.error("Speech recognition didn't start: \(error.localizedDescription, privacy: .public)")
+            failure = error
+            // Recording goes on: the audio is saved, and Transcribe again can try later.
+            for await _ in audio {}
         }
     }
 
-    struct Heard: Sendable {
-        var text: String
-        var at: TimeInterval
-        var duration: TimeInterval
+    private func got(_ p: Heard.Piece) {
+        if p.isFinal {
+            finished.append(p.text)
+            guess = nil
+        } else {
+            guess = p.text
+        }
+        heard(Heard(finished + (guess.map { [$0] } ?? [])).text)
     }
-#endif
+
+    /// Waits until everything recorded is transcribed, then returns all of it. Gives up after `patience`
+    /// seconds: what's heard by then is kept, and the audio is saved either way.
+    func finish(patience: Double = 20) async -> Heard {
+        // All audio has gone in once the tape's stream is drained.
+        await work?.value
+        if let analyzer {
+            let done = Task { try? await analyzer.finalizeAndFinishThroughEndOfInput() }
+            let timeout = Task {
+                try? await Task.sleep(for: .seconds(patience))
+                await analyzer.cancelAndFinishNow()
+            }
+            await done.value
+            timeout.cancel()
+            // The results end with the analyzer; stop listening for them if they don't.
+            let results = results
+            let stop = Task {
+                try? await Task.sleep(for: .seconds(5))
+                results?.cancel()
+            }
+            await results?.value
+            stop.cancel()
+        }
+        return Heard(finished + (guess.map { [$0] } ?? []))
+    }
+}
+
+/// Converts the mic's buffers to the format the analyzer wants.
+private final class Converter {
+    private let converter: AVAudioConverter?
+    private let target: AVAudioFormat
+
+    init(from: AVAudioFormat, to: AVAudioFormat) {
+        target = to
+        converter = from == to ? nil : AVAudioConverter(from: from, to: to)
+    }
+
+    func callAsFunction(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let converter else { return buffer }
+        let ratio = target.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 16
+        guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
+        nonisolated(unsafe) var fed = false
+        nonisolated(unsafe) let buffer = buffer
+        var error: NSError?
+        let status = converter.convert(to: out, error: &error) { _, outStatus in
+            if fed {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            fed = true
+            outStatus.pointee = .haveData
+            return buffer
+        }
+        guard status != .error, out.frameLength > 0 else { return nil }
+        return out
+    }
+}
+
+/// One hold's audio as it's recorded: written to a file on this iPad, and handed on for transcription.
+/// Called from the audio tap's queue, so it guards itself.
+final class Tape: @unchecked Sendable {
+    struct Chunk: @unchecked Sendable { let buffer: AVAudioPCMBuffer }
+
+    let stream: AsyncStream<Chunk>
+    private let continuation: AsyncStream<Chunk>.Continuation
+    private let lock = NSLock()
+    private var file: AVAudioFile?
+    private var levels: [Float] = []
+
+    init(file url: URL, format: AVAudioFormat) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // AAC as an ADTS stream (.aac): small, and each frame stands alone, so what was recorded is still
+        // readable if the app stops mid-hold (an AAC .caf or .m4a needs its index written at the end).
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: format.sampleRate,
+            AVNumberOfChannelsKey: format.channelCount, AVEncoderBitRateKey: 64_000,
+        ]
+        file = try AVAudioFile(
+            forWriting: url, settings: settings, commonFormat: format.commonFormat, interleaved: format.isInterleaved)
+        (stream, continuation) = AsyncStream<Chunk>.makeStream()
+    }
+
+    func write(_ buffer: AVAudioPCMBuffer, level: Float) {
+        // The tap reuses its buffer: keep a copy for the recognizer.
+        guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return }
+        copy.frameLength = buffer.frameLength
+        let channels = Int(buffer.format.channelCount)
+        if let src = buffer.floatChannelData, let dst = copy.floatChannelData {
+            for c in 0..<(buffer.format.isInterleaved ? 1 : channels) {
+                dst[c].update(
+                    from: src[c], count: Int(buffer.frameLength) * (buffer.format.isInterleaved ? channels : 1))
+            }
+        }
+        lock.withLock {
+            guard let file else { return }
+            do { try file.write(from: buffer) } catch {
+                log.error("Could not write the recording: \(error.localizedDescription, privacy: .public)")
+            }
+            levels.append(level)
+        }
+        continuation.yield(Chunk(buffer: copy))
+    }
+
+    func close() {
+        lock.withLock {
+            file?.close()
+            file = nil
+        }
+        continuation.finish()
+    }
+
+    /// The recording's loudness as 48 bars, for its row in Recordings.
+    func waveform(bars: Int = 48) -> [Float] {
+        let all = lock.withLock { levels }
+        guard !all.isEmpty else { return [] }
+        return (0..<bars).map { i in
+            let lo = i * all.count / bars
+            let hi = max(lo + 1, (i + 1) * all.count / bars)
+            return all[lo..<min(hi, all.count)].max() ?? 0
+        }
+    }
+}
 
 struct VoiceError: LocalizedError {
     let message: String
@@ -265,7 +483,10 @@ struct VoiceSendDock: View {
     /// Not paired yet: Send still works (it says how to pair) but looks quieter.
     var paired = true
     let onFail: (String) -> Void
-    let onRelease: (_ said: String, _ words: [[String: Any]]) -> Void
+    /// Where a new hold's audio is saved.
+    let recordTo: () -> URL
+    /// A hold ended with something recorded: released, or cut off (a cancelled touch, the mic taken away).
+    let onTake: (_ take: VoiceCapture.Take, _ cutOff: Bool) -> Void
     let send: () -> Void
     @State private var starting: Task<Bool, Never>?
     @State private var started = Date()
@@ -282,6 +503,7 @@ struct VoiceSendDock: View {
             }
         }
         .animation(.spring(duration: 0.35, bounce: 0.25), value: live)
+        .onAppear { voice.onInterrupted = { pressEnded(cancelled: true) } }
         .onChange(of: lastSend) { _, _ in
             sentPulse = true
             UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -321,8 +543,8 @@ struct VoiceSendDock: View {
         // The touch is tracked by UIKit on a view that stays put while the button changes shape:
         // a SwiftUI gesture is lost when the view is rebuilt mid-touch, and then release never ends it.
         .overlay {
-            PressTracker { down in
-                if down { pressBegan() } else { pressEnded() }
+            PressTracker { down, cancelled in
+                if down { pressBegan() } else { pressEnded(cancelled: cancelled) }
             }
         }
         .accessibilityElement()
@@ -350,9 +572,10 @@ struct VoiceSendDock: View {
         voice.holding = true
         started = Date()
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        let file = recordTo()
         starting = Task {
             do {
-                try await voice.start()
+                try await voice.start(recordingTo: file)
                 return true
             } catch {
                 voice.holding = false
@@ -362,10 +585,12 @@ struct VoiceSendDock: View {
         }
     }
 
-    /// Release, or a touch the system cancelled (an alert, a palm): either way recording ends.
-    private func pressEnded() {
+    /// Release, or a touch the system cancelled (an alert, a palm): either way recording ends, and the
+    /// recording is kept. Only a release Sends.
+    private func pressEnded(cancelled: Bool = false) {
         log.info(
-            "Mic press ended (holding \(voice.holding), state \(String(describing: voice.state), privacy: .public))")
+            "Mic press ended (holding \(voice.holding), state \(String(describing: voice.state), privacy: .public), cancelled \(cancelled))"
+        )
         pressed = false
         if permissionTouch {
             permissionTouch = false
@@ -381,13 +606,8 @@ struct VoiceSendDock: View {
                 _ = await voice.stop()
                 return
             }
-            let (said, words) = await voice.stop()
-            // Nothing heard: no Send.
-            guard !said.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                onFail("Didn't catch that. Hold the mic and talk, then let go.")
-                return
-            }
-            onRelease(said, words)
+            guard let take = await voice.stop() else { return }
+            onTake(take, cancelled)
         }
     }
 
@@ -456,7 +676,8 @@ struct LevelMeter: View {
 /// Reports a finger going down and coming up (or being cancelled) on a view that SwiftUI
 /// doesn't rebuild while the button around it changes.
 struct PressTracker: UIViewRepresentable {
-    let changed: (Bool) -> Void
+    /// Down, or up; up says whether the system cancelled the touch.
+    let changed: (_ down: Bool, _ cancelled: Bool) -> Void
 
     func makeUIView(context: Context) -> UIView {
         let v = UIView()
@@ -473,21 +694,21 @@ struct PressTracker: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(changed: changed) }
 
     final class Coordinator: NSObject {
-        var changed: (Bool) -> Void
+        var changed: (Bool, Bool) -> Void
         private var down = false
-        init(changed: @escaping (Bool) -> Void) { self.changed = changed }
+        init(changed: @escaping (Bool, Bool) -> Void) { self.changed = changed }
 
         @MainActor @objc func handle(_ g: UILongPressGestureRecognizer) {
             switch g.state {
             case .began:
                 log.info("Press tracker began")
                 down = true
-                changed(true)
+                changed(true, false)
             case .ended, .cancelled, .failed:
                 log.info("Press tracker ended \(g.state.rawValue)")
                 guard down else { return }
                 down = false
-                changed(false)
+                changed(false, g.state != .ended)
             default: break
             }
         }
