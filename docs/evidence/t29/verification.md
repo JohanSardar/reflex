@@ -30,6 +30,12 @@ No new test suite was added or needed for Markdown/SVG/community templates. This
 
 Opened Happy, Immich and LocalSend on public GitHub. The T3 preview browser could read pages, but screenshot capture failed twice: **“The browser is not producing screenshot frames. For a desktop tab, show or restore the T3 Code window and try again.”** Switched to an isolated agent-browser session as permitted by the browser fallback rule. Captured Happy’s front page and Reflex’s baseline while logged out. No competing project’s screenshot was added to this repository.
 
+The pushed branch was then checked while logged out. The arrow logo, TestFlight SVG and app screenshot all loaded. The page had no horizontal overflow at 390 pixels (`scrollWidth = innerWidth = 390`). Opened all 22 distinct non-fragment README destinations in the browser; each loaded, with GitHub sign-in required for issue creation and private reporting. See the [destination results](readme-link-results.json). The license contents are available on this branch, but the GitHub license-detection endpoint still returns 404 until default-branch detection can occur.
+
+![Reflex README on the pushed branch, desktop](front-page-desktop.png)
+
+[390-pixel rendering](front-page-narrow.png). These are GitHub page captures, not fresh iPad-app captures.
+
 The root README uses [the actual T25 iPad Simulator screenshot](../t25/restored-native-page.png), with an explicit earlier-capture caption and [provenance](../t25/verification.md). It shows native strokes, the connected Link and Send controls. It is not a new capture from T29. No drawing, product UI or screenshot was fabricated or retouched.
 
 ## Link and repository settings checks
