@@ -19349,7 +19349,7 @@ var init_room = __esm({
     init_wire();
     HELLO_MS = 1e4;
     LIMITS = {
-      room: { sockets: 64, perAddress: 16 },
+      room: { sockets: Infinity, perAddress: 16 },
       pairing: { sockets: 1024, perAddress: 8 },
       /** New channels a minute in the pairing room: per socket, and summed over one address's sockets. */
       pairingOpens: { perSocket: 6, perAddress: 12 },

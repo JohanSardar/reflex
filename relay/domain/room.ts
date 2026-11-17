@@ -8,7 +8,7 @@
 //     One socket per device: only that key can replace it.
 //   - Frames reach a device only if it watches the sender. Presence is told only between two devices that
 //     watch each other, so a stranger in a room learns nothing about who else is there.
-//   - Limits per room and per address keep anyone from filling a room, and in the pairing room each address
+//   - Limits per address keep any one address from filling a room, and in the pairing room each address
 //     may open only a few channels a minute: every channel there is one try at someone's code.
 //
 // All its state lives on the sockets (`Sock.state`), so a Durable Object that hibernates between messages
@@ -21,9 +21,12 @@ type Msg = Record<string, unknown> & { t?: string; req?: unknown };
 
 /** How long a socket may take to say hello. */
 export const HELLO_MS = 10_000;
-/** Sockets in a room, and from one address in a room. The pairing room is everyone's, so it holds more. */
+/**
+ * Sockets from one address in a room, and in the pairing room in all. A person's room has no total: strangers
+ * who learned its ID could fill one and shut the person's own devices out.
+ */
 export const LIMITS = {
-  room: { sockets: 64, perAddress: 16 },
+  room: { sockets: Infinity, perAddress: 16 },
   pairing: { sockets: 1024, perAddress: 8 },
   /** New channels a minute in the pairing room: per socket, and summed over one address's sockets. */
   pairingOpens: { perSocket: 6, perAddress: 12 },

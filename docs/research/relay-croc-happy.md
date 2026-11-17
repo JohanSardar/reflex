@@ -32,7 +32,7 @@ How two well-known tools let two devices find each other through a server they d
 - **Reflex.** Each device has its own Ed25519 key, and its device ID comes from that key.
   - Pairing binds the two device keys through the CPace transcript, and each side signs the transcript. The Link then sends a sealed `who` (person and name), and so does the iPad.
   - Later sessions accept only the paired key.
-  - In the pairing room, both sides use throwaway relay identities, so the relay never sees the iPad's device ID there. Names are blanked on any relay path.
+  - In the pairing room, both sides connect to the relay under throwaway identities, so the relay can't tie the wait to a device's usual connections. The device keys inside the handshake are public keys and do cross it; names are blanked on any relay path, and the person and names travel only in the sealed `who`.
 
 ## How the relay checks who connects
 
@@ -49,7 +49,7 @@ How two well-known tools let two devices find each other through a server they d
 - **Happy.** No general rate limiter. Abuse is held back by the account requirement.
 - **Reflex** (`relay/domain/room.ts`, `relay/node/server.ts`):
   - **Hello deadline:** a socket must say hello within 10 seconds.
-  - **Room caps:** 64 sockets per room, 16 from one address. The pairing room holds 1024, with 8 from one address.
+  - **Room caps:** 16 sockets from one address in a person's room, and no total, so strangers can't fill it and shut the person's devices out. The pairing room holds 1024, with 8 from one address.
   - **Pairing tries:** in the pairing room, each socket may open 6 new channels a minute, and each address 12. Every channel there is one try at someone's code, and the Link also allows only 5 wrong tries per code.
   - **Control messages:** 120 a minute, each at most 64 KiB.
   - **Node connections:** 60 a minute and 64 open from one address. Proxy headers are trusted only from loopback.

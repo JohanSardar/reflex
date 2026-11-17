@@ -38,7 +38,7 @@ When the iPad and the Mac aren't on the same network, they meet through a relay.
 **Why the relay can't read anything.**
 - **Content.** Everything between the iPad and the Mac is sealed with keys only those two devices have. The relay passes on bytes it can't open. If it changed one, the device would refuse the frame.
 - **The code.** It never crosses the relay. Only CPace values do, and they show nothing about it.
-- **Names.** Device and person names never cross the relay in the open. In the pairing room both sides use identities made just for that pairing, so the relay doesn't even see which devices they are.
+- **Names.** Device and person names never cross the relay in the open. The relay does see device public keys, which are not secret: the key exchange needs them.
 - **Impostors.** Nobody can pose as your Mac or iPad. Every connection must sign a fresh challenge with its device key, and your devices accept only each other's keys.
 - **Strangers in your room.** Someone who joins your room hears nothing about who is there and can't reach anyone. Devices hear only from devices they chose to hear from.
 

@@ -31,7 +31,7 @@ Pairing from anywhere uses one fixed **pairing room**, `PAIRING_ROOM` in `relay/
 - After pairing, sessions use the person's room as before.
 - A Link on its own relay (`REFLEX_RELAY`, or `--relay`, remembered) also waits on the default relay, only to answer `moved` with its relay's URL.
 
-The Room caps sockets per room and per address, limits new pairing-room channels per socket and per address, rate-limits control messages, and closes sockets that don't say hello within 10 s. The Node server also limits connections per address. See docs/research/relay-croc-happy.md for how this compares with croc and Happy.
+The Room caps sockets per address (and the pairing room in all), limits new pairing-room channels per socket and per address, rate-limits control messages, and closes sockets that don't say hello within 10 s. The Node server also limits connections per address. See docs/research/relay-croc-happy.md for how this compares with croc and Happy.
 
 Node and Cloudflare share the Room implementation. The Cloudflare migration retires LogDO and AuthDO, deleting their stored data when applied. Deployment requires explicit approval; this change does not deploy. Today's deployed Relay can still forward connections from the reduced Link.
 

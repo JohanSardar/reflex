@@ -3,8 +3,8 @@ import Foundation
 
 /// A Relay's pairing room (`link/transports/relay.ts`, `PAIRING_ROOM`): where a Link with a live typed code
 /// waits, and where this iPad tries the code when it finds no Mac nearby. One WebSocket, under a relay
-/// identity made for this pairing only (the room never sees this iPad's device ID), and one channel per Link
-/// tried. The Relay sees only who opened a channel to whom: the code is checked with CPace inside
+/// identity made for this pairing only (its relay hello isn't this iPad's device ID), and one channel per Link
+/// tried. The Relay sees who opened a channel to whom and the handshake's public values: the code is checked with CPace inside
 /// (Cpace.swift), and a stranger in the room learns nothing from it.
 final class RelayLobby: @unchecked Sendable {
     /// SHA-256("reflex-relay/v0 pairing room"), its first 32 hex digits.
