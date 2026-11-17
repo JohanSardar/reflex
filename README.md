@@ -50,7 +50,7 @@ Start a new Codex session and say **“connect my iPad to Reflex”**. Your agen
 
 ### On your iPad
 
-1. Open Reflex, tap **Pair with Mac**, and enter the code from your agent. Allow Local Network access when iPadOS asks.
+1. Open Reflex, tap the connection button at the top right (a laptop), and enter the code from your agent. Allow Local Network access when iPadOS asks.
 2. Draw or write on the board, then tap **Send**. You can also hold the mic to speak; releasing it sends your words.
 3. Read the answer in Claude Code or Codex. Your agent waits for the next Send through `wait_for_user`.
 

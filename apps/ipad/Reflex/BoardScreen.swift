@@ -210,7 +210,7 @@ struct BoardScreen: View {
             if foldInsertTools { plusMenu } else { insertCapsule }
             Spacer(minLength: 8)
             undoCapsule
-            StatusCapsule(link: link, compact: screen.width < 1150, action: onStatus)
+            StatusCapsule(link: link, action: onStatus)
         }
         .padding(.horizontal, 16)
         .padding(.top, 6)

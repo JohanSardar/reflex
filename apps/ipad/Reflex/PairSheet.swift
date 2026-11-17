@@ -1,15 +1,24 @@
 import ReflexLink
 import SwiftUI
 
-/// What the status capsule says about the Mac and the approved Agents.
+/// What the connection button says about the Mac and the approved Agents.
 @MainActor struct LinkStatus {
     let link: LinkSync
 
     var paired: Bool { if case .unpaired = link.state { false } else { true } }
     var approved: [AgentInfo] { link.agents.values.filter { $0.status == "approved" }.sorted { $0.name < $1.name } }
     var macName: String {
-        let raw = link.pairedName ?? { if case .connected(let n) = link.state { n } else { "your Mac" } }()
-        return raw.split(separator: ".").first.map(String.init) ?? raw
+        let live: String? = if case .connected(let n) = link.state { n } else { nil }
+        return Self.shown(live) ?? Self.shown(link.pairedName) ?? "Your Mac"
+    }
+
+    /// The Mac's name as set in its System Settings ("Johan's MacBook Pro"). A network host name
+    /// ("wirelessprv-10-195-187-74.near.illinois.edu", "Johans-MBP.local"), sent by Links from before the computer
+    /// name was used, means nothing to the person and is never shown.
+    static func shown(_ name: String?) -> String? {
+        guard let n = name?.trimmingCharacters(in: .whitespaces), !n.isEmpty else { return nil }
+        if n.wholeMatch(of: /[\w-]+(\.[\w-]+)+/) != nil || n.contains(/\d+-\d+-\d+-\d+/) { return nil }
+        return n
     }
 
     var color: Color {
@@ -31,53 +40,192 @@ import SwiftUI
         case .linkChanged: "Pair again with a new code"
         }
     }
+
+    /// One line under the Mac's name: how it's connected, or why it isn't.
+    var detail: String {
+        switch link.state {
+        case .connected:
+            let path =
+                link.activeTransport.map { $0 == "p2p" ? "peer-to-peer Wi-Fi" : $0 == "relay" ? "the Relay" : "Wi-Fi" }
+                ?? "Wi-Fi"
+            return "Connected over \(path)"
+        case .connecting: return "Connecting…"
+        case .offline: return "Not reachable right now. Sends wait here until it's back."
+        case .linkChanged: return "Its pairing was reset. Ask your agent for a new code and type it below."
+        case .unpaired: return "Not paired"
+        }
+    }
+
+    /// What VoiceOver says for the connection button.
+    var spoken: String {
+        var parts = [headline]
+        if case .connected = link.state { parts.append("connected") }
+        if !approved.isEmpty { parts.append("agents \(approved.map(\.name).joined(separator: ", "))") }
+        if link.pendingSends > 0 { parts.append("\(link.pendingSends) Sends waiting") }
+        return parts.joined(separator: ", ")
+    }
 }
 
-/// The small status capsule: the Mac's state, and which Agents are approved.
+/// The connection button at the top right: a round glass button with a laptop and a status dot, like the other
+/// top-bar buttons. Tapping it shows the Mac, its state and the Agents, with the full Connection sheet one tap on.
+/// Before pairing it opens the pairing sheet straight away.
 struct StatusCapsule: View {
     let link: LinkSync
-    let compact: Bool
     let action: () -> Void
+    @State private var showing = false
+    @State private var openSheet = false
 
     var body: some View {
         let s = LinkStatus(link: link)
-        Button(action: action) {
-            HStack(spacing: 7) {
-                Circle().fill(s.color.gradient).frame(width: 9, height: 9)
-                    .overlay {
+        Button {
+            if s.paired { showing = true } else { action() }
+        } label: {
+            LaptopGlyph()
+                .frame(width: 44, height: 44)
+                .overlay(alignment: .topTrailing) {
+                    ZStack {
                         if case .connecting = link.state {
-                            Circle().stroke(s.color.opacity(0.4), lineWidth: 4).scaleEffect(1.6)
+                            Circle().stroke(s.color.opacity(0.35), lineWidth: 3).frame(width: 15, height: 15)
                         }
+                        Circle().fill(s.color.gradient).frame(width: 9, height: 9)
+                            .overlay { Circle().stroke(.background, lineWidth: 2) }
                     }
-                Text(shortHeadline(s)).lineLimit(1)
-                if link.pendingSends > 0 {
-                    Text("·").foregroundStyle(.secondary)
-                    Text("\(link.pendingSends) waiting")
-                        .foregroundStyle(.orange)
-                        .lineLimit(1)
+                    .padding(.top, 9).padding(.trailing, 9)
                 }
-            }
-            .font(.system(size: 15, weight: .medium))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 14).frame(height: 44)
-            .contentShape(Capsule())
+                .overlay(alignment: .bottomTrailing) {
+                    // Sends saved here that the Mac hasn't taken yet, as the old capsule's "2 waiting" said.
+                    if link.pendingSends > 0 {
+                        Text("\(link.pendingSends)")
+                            .font(.system(size: 11, weight: .bold)).monospacedDigit().foregroundStyle(.white)
+                            .padding(.horizontal, 4).frame(minWidth: 16, minHeight: 16)
+                            .background(.orange, in: Capsule())
+                            .offset(x: 4, y: 4)
+                    }
+                }
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: Capsule())
+        .foregroundStyle(.primary)
+        .glassEffect(.regular.interactive(), in: Circle())
         .accessibilityIdentifier("connect-button")
-        .accessibilityLabel(
-            "Connection: \(s.headline)\(s.approved.isEmpty ? "" : ", agents \(s.approved.map(\.name).joined(separator: ", "))")\(link.pendingSends > 0 ? ", \(link.pendingSends) Sends waiting" : "")"
-        )
+        .accessibilityLabel("Mac connection")
+        .accessibilityValue(s.spoken)
+        .accessibilityHint(s.paired ? "Shows the Mac and its Agents" : "Pairs with your Mac")
+        .popover(isPresented: $showing, arrowEdge: .top) {
+            ConnectionPopover(link: link) {
+                openSheet = true
+                showing = false
+            }
+        }
+        .onChange(of: showing) { _, now in
+            // The sheet comes up once the popover is gone: one presentation at a time.
+            if !now, openSheet {
+                openSheet = false
+                action()
+            }
+        }
+    }
+}
+
+/// The button's laptop, drawn as an outline like the other top-bar icons (SF Symbols' laptop fills its screen).
+private struct LaptopGlyph: View {
+    var body: some View {
+        VStack(spacing: 2.8) {
+            RoundedRectangle(cornerRadius: 2.2, style: .continuous)
+                .strokeBorder(lineWidth: 1.9)
+                .frame(width: 17, height: 12)
+            Capsule().frame(width: 22, height: 1.9)
+        }
+        .padding(.top, 1)
+        .accessibilityHidden(true)
+    }
+}
+
+/// What tapping the connection button shows: the Mac by its name, whether it's connected, and the Agents.
+private struct ConnectionPopover: View {
+    let link: LinkSync
+    let manage: () -> Void
+    @AppStorage("agentNicknames") private var nicknamesData = Data()
+
+    var body: some View {
+        let s = LinkStatus(link: link)
+        let nicknames = (try? JSONDecoder().decode([String: String].self, from: nicknamesData)) ?? [:]
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "laptopcomputer").font(.title3).foregroundStyle(s.color)
+                    .frame(width: 40, height: 40)
+                    .background(s.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(s.macName).font(.headline).lineLimit(1)
+                    Text(s.detail).font(.subheadline).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("connection-mac")
+            .padding(.bottom, 10)
+            if link.pendingSends > 0 {
+                Label(
+                    link.pendingSends == 1 ? "1 Send waiting" : "\(link.pendingSends) Sends waiting",
+                    systemImage: "tray.full"
+                )
+                .font(.subheadline).foregroundStyle(.orange)
+                .padding(.bottom, 10)
+            }
+            Text("Agents").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                .padding(.top, 4).padding(.bottom, 6)
+            if s.approved.isEmpty && link.agentRequests.isEmpty {
+                Text("No Agents yet.").font(.subheadline).foregroundStyle(.secondary).padding(.bottom, 6)
+            }
+            ForEach(link.agentRequests) { a in
+                agentRow(nicknames[a.id] ?? a.name, color: a.color, note: "Asking")
+            }
+            ForEach(s.approved) { a in agentRow(nicknames[a.id] ?? a.name, color: a.color, note: nil) }
+            Divider().padding(.vertical, 8)
+            Button(action: manage) {
+                HStack {
+                    Text("Connection Settings")
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+            .padding(.vertical, 4)
+            .accessibilityHint("Rename or revoke Agents, or pair a Mac")
+            .accessibilityIdentifier("connection-settings")
+        }
+        .padding(16)
+        .frame(width: 320)
+        .presentationCompactAdaptation(.popover)
     }
 
-    private func shortHeadline(_ s: LinkStatus) -> String {
-        switch link.state {
-        case .unpaired: "Pair with Mac"
-        case .offline: compact ? "Offline" : "\(s.macName) offline"
-        case .connecting: "Connecting…"
-        case .linkChanged: "Pair again"
-        case .connected: s.macName
+    private func agentRow(_ name: String, color: String, note: String?) -> some View {
+        HStack(spacing: 10) {
+            Text(String(name.prefix(1)).uppercased())
+                .font(.subheadline.weight(.bold)).foregroundStyle(.white)
+                .frame(width: 28, height: 28)
+                .background(agentColor(color).gradient, in: Circle())
+            Text(name).lineLimit(1)
+            Spacer(minLength: 0)
+            if let note { Text(note).font(.caption.weight(.semibold)).foregroundStyle(.orange) }
         }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+func agentColor(_ name: String) -> Color {
+    switch name {
+    case "red": .red
+    case "orange": .orange
+    case "yellow": .yellow
+    case "green": .green
+    case "teal": .teal
+    case "blue": .blue
+    case "pink": .pink
+    default: .purple
     }
 }
 
@@ -105,7 +253,7 @@ struct PairSheet: View {
                                     s.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(s.macName).font(.headline)
-                                Text(stateDetail).font(.subheadline).foregroundStyle(.secondary)
+                                Text(s.detail).font(.subheadline).foregroundStyle(.secondary)
                             }
                             Spacer()
                             Circle().fill(s.color).frame(width: 10, height: 10)
@@ -255,20 +403,6 @@ struct PairSheet: View {
         .presentationSizing(.form)
     }
 
-    private var stateDetail: String {
-        switch link.state {
-        case .connected:
-            let path =
-                link.activeTransport.map { $0 == "p2p" ? "peer-to-peer Wi-Fi" : $0 == "relay" ? "the Relay" : "Wi-Fi" }
-                ?? "Wi-Fi"
-            return "Connected over \(path)"
-        case .connecting: return "Connecting…"
-        case .offline: return "Not reachable right now. Sends wait here until it's back."
-        case .linkChanged: return "Its pairing was reset. Ask your agent for a new code and type it below."
-        case .unpaired: return "Not paired"
-        }
-    }
-
     private var nicknames: [String: String] {
         (try? JSONDecoder().decode([String: String].self, from: nicknamesData)) ?? [:]
     }
@@ -312,19 +446,6 @@ struct PairSheet: View {
             .font(.headline).foregroundStyle(.white)
             .frame(width: 36, height: 36)
             .background(agentColor(color).gradient, in: Circle())
-    }
-
-    private func agentColor(_ name: String) -> Color {
-        switch name {
-        case "red": .red
-        case "orange": .orange
-        case "yellow": .yellow
-        case "green": .green
-        case "teal": .teal
-        case "blue": .blue
-        case "pink": .pink
-        default: .purple
-        }
     }
 
     private func pair(_ text: String) async {
