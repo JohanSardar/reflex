@@ -40,7 +40,8 @@ final class PeerToPeerBrowser {
             guard case .failed(let e) = state else { return }
             Task { @MainActor in
                 guard let self, self.browser === b else { return }
-                linkLog.error("Peer-to-peer browsing failed: \(e.localizedDescription, privacy: .public); browsing again")
+                linkLog.error(
+                    "Peer-to-peer browsing failed: \(e.localizedDescription, privacy: .public); browsing again")
                 b.cancel()
                 self.browser = nil
                 try? await Task.sleep(for: .seconds(1))
@@ -55,13 +56,16 @@ final class PeerToPeerBrowser {
         var next: Found?
         for r in results {
             guard case .bonjour(let txt) = r.metadata, txt["dev"] == device,
-                  let i = r.interfaces.first(where: Self.isPeerToPeer) else { continue }
+                let i = r.interfaces.first(where: Self.isPeerToPeer)
+            else { continue }
             next = Found(endpoint: r.endpoint, interface: i)
         }
         let changed = (next == nil) != (found == nil) || next.map { "\($0.endpoint)" } != found.map { "\($0.endpoint)" }
         found = next
         if changed {
-            linkLog.info("Peer-to-peer: \(next.map { "found the Link on \($0.interface.name)" } ?? "the Link is out of range", privacy: .public)")
+            linkLog.info(
+                "Peer-to-peer: \(next.map { "found the Link on \($0.interface.name)" } ?? "the Link is out of range", privacy: .public)"
+            )
             onChange(next)
         }
     }

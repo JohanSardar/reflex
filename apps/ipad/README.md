@@ -39,7 +39,42 @@ connection. The Link acknowledges only after durable ingestion. Acknowledging
 receipt on the Link is separate from the Agent acknowledging the Send with
 `wait_for_user(after: ...)`.
 
-## Build
+## Install
+
+[Join the Reflex TestFlight beta](https://testflight.apple.com/join/R81n88Re).
+External testers can install once Apple approves Beta App Review. No separate
+Mac app install is needed: use the repository's npx command and ask your agent
+“connect my iPad”. The app stays useful for local boards without a Mac.
+
+## Build and run from a fresh clone
+
+Use macOS with **Xcode 26.4.1** (Swift 6.3, iOS 26.4 Simulator runtime) and
+[XcodeGen](https://github.com/yonaskolb/XcodeGen). The minimum supported device
+OS is iPadOS 26. CI uses the same Xcode version on GitHub's free public-repository
+`macos-26` runner. Install Xcode and its iOS Simulator runtime first, complete
+Xcode's first-launch setup, and install XcodeGen (`brew install xcodegen`).
+A Simulator build needs no Apple Developer membership, signing key, Node,
+server, Rust or paid service.
+
+```sh
+git clone https://github.com/JohanSardar/reflex.git
+cd reflex
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+xcodebuild -version  # should report Xcode 26.4.1
+xcodegen generate --spec apps/ipad/project.yml
+open apps/ipad/Reflex.xcodeproj
+```
+
+Select the **Reflex** scheme and an **iPad** Simulator, then Product → Run.
+The app is iPad-only. Create a board with +, add text or draw, and use Send.
+For a real pairing, allow Local Network access and enter the six-digit code
+from a fresh agent's `connect` tool; nearby discovery happens before relay
+fallback. Simulator drawing uses the mouse; Pencil pressure and on-device
+speech recognition require a physical iPad. Select an iPad Simulator, not
+“My Mac” or a physical device, to avoid signing setup.
+
+To build without opening Xcode:
+
 
 Run `xcodegen generate --spec apps/ipad/project.yml`, then:
 
@@ -48,6 +83,53 @@ xcodebuild -project apps/ipad/Reflex.xcodeproj -scheme Reflex \
   -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 ```
 
-No Rust build, Automerge, renderer, Embed host, 3D runtime or math layout is
-part of the iPad app. `ReflexInput` owns local ink and `ReflexLink` owns pairing,
-approval and Send delivery. The deployment target remains iPadOS 26.
+## Checks and navigation
+
+From the repository root, list installed destinations with
+`xcodebuild -project apps/ipad/Reflex.xcodeproj -scheme Reflex -showdestinations`.
+Then run the same check as CI (use an available iPad destination):
+
+```sh
+DESTINATION='platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=26.4.1' \
+  apps/ipad/scripts/check.sh
+```
+
+This runs strict `swift-format` lint, generates the project, builds Release,
+and runs the complete existing `ReflexInputTests` suite on the Simulator.
+Each run keeps its `.xcresult` under `apps/ipad/build/check/TestResults/`;
+set `DERIVED_DATA` to use another build directory.
+The [iPad workflow](../../.github/workflows/ipad.yml) runs on every PR (forks
+included, without secrets), pushes to main, and manual dispatch. Test results
+are retained for seven days. Swift 6 complete concurrency checking is enabled.
+Existing compiler warnings are visible in the logs; they are not suppressed.
+
+Format Swift changes before committing:
+
+```sh
+xcrun swift-format format --in-place --recursive \
+  --configuration apps/ipad/.swift-format apps/ipad/Reflex apps/ipad/Packages
+```
+
+| Location | Responsibility |
+| --- | --- |
+| `Reflex/ReflexApp.swift` | App composition and lifetime |
+| `Reflex/BrowserView.swift`, `BoardScreen.swift`, `CanvasScreen.swift` | Library and board screens |
+| `Reflex/BoardModel.swift`, `BoardSession.swift` | Board objects, history, selection and Send snapshots |
+| `Reflex/BoardFiles.swift`, `BoardLibrary.swift` | Local persistence and library/folder operations |
+| `Reflex/InteractionLayer.swift`, `MiniToolbar.swift`, `ObjectRendering.swift` | Interaction, tools and rendering |
+| `Reflex/PairSheet.swift` | Pairing UI |
+| `Packages/ReflexInput` | PencilKit canvas, durable ink and stable stroke identities; existing XCTest regression |
+| `Packages/ReflexLink` | Pairing crypto, LAN/peer-to-peer/relay transports, approvals and durable delivery |
+| `project.yml` | Source of truth for targets, shared scheme, version and build settings |
+| `Reflex.xcodeproj`, `Reflex/Info.plist` | Checked-in generated files; regenerate after changing `project.yml` |
+
+The Swift packages have no third-party dependencies and do not import the app.
+The app links their products. The MCP server/CLI (`../../agent`), Mac service
+(`../../link`) and relay (`../../relay`) are separate processes; none is built
+into the app. No Rust, Automerge, Embed host, 3D runtime or math layout is part
+of the iPad app. This ticket does not change the npx build or install path.
+
+See [RELEASING.md](RELEASING.md) for signing, version/build numbers, export,
+upload and the Public TestFlight group; see the
+[reference comparison](../../docs/research/ipad-quality.md) for the standards
+and remaining verification limits.

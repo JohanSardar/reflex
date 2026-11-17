@@ -5,7 +5,7 @@ let package = Package(
     name: "ReflexInput",
     platforms: [.iOS(.v26)],
     products: [
-        .library(name: "ReflexInput", targets: ["ReflexInput"]),
+        .library(name: "ReflexInput", targets: ["ReflexInput"])
     ],
     targets: [
         .target(name: "ReflexInput"),

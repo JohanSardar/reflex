@@ -36,12 +36,18 @@ struct BrowserView: View {
             Button("Cancel", role: .cancel) {}
             Button("Rename") { if let id = renaming { library.rename(id, draftName) } }
         }
-        .alert("Rename Folder", isPresented: Binding(get: { renamingFolder != nil }, set: { if !$0 { renamingFolder = nil } })) {
+        .alert(
+            "Rename Folder",
+            isPresented: Binding(get: { renamingFolder != nil }, set: { if !$0 { renamingFolder = nil } })
+        ) {
             TextField("Name", text: $draftName).accessibilityIdentifier("rename-folder-field")
             Button("Cancel", role: .cancel) {}
             Button("Rename") { if let id = renamingFolder { library.renameFolder(id, draftName) } }
         }
-        .alert("New Folder", isPresented: Binding(get: { newFolderParent != nil }, set: { if !$0 { newFolderParent = nil } })) {
+        .alert(
+            "New Folder",
+            isPresented: Binding(get: { newFolderParent != nil }, set: { if !$0 { newFolderParent = nil } })
+        ) {
             TextField("Name", text: $draftName).accessibilityIdentifier("folder-name-field")
             Button("Cancel", role: .cancel) {}
             Button("Create") {
@@ -50,13 +56,23 @@ struct BrowserView: View {
                     section = .folder(f.id)
                 }
             }
-        } message: { Text("Enter a name for this folder.") }
-        .confirmationDialog(confirmDelete?.count == 1 ? "Delete this board?" : "Delete \(confirmDelete?.count ?? 0) boards?",
-                            isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }), titleVisibility: .visible) {
+        } message: {
+            Text("Enter a name for this folder.")
+        }
+        .confirmationDialog(
+            confirmDelete?.count == 1 ? "Delete this board?" : "Delete \(confirmDelete?.count ?? 0) boards?",
+            isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
+            titleVisibility: .visible
+        ) {
             Button("Delete", role: .destructive) {
-                if let ids = confirmDelete { library.delete(ids); picked.subtract(ids) }
+                if let ids = confirmDelete {
+                    library.delete(ids)
+                    picked.subtract(ids)
+                }
             }
-        } message: { Text("It is moved out of your boards and kept in Reflex's Trash on this iPad.") }
+        } message: {
+            Text("It is moved out of your boards and kept in Reflex's Trash on this iPad.")
+        }
     }
 
     // MARK: Sidebar
@@ -68,7 +84,10 @@ struct BrowserView: View {
             row("Favorites", "heart.fill", .pink, .favorites)
             Section("Folders") {
                 ForEach(library.children(of: nil)) { f in folderRows(f, depth: 0) }
-                Button { draftName = ""; newFolderParent = .some(nil) } label: {
+                Button {
+                    draftName = ""
+                    newFolderParent = .some(nil)
+                } label: {
                     Label("New Folder", systemImage: "folder.badge.plus")
                 }
                 .accessibilityIdentifier("new-folder")
@@ -93,28 +112,38 @@ struct BrowserView: View {
     }
 
     private func folderRows(_ f: BoardFolder, depth: Int) -> AnyView {
-        AnyView(Group {
-            Label {
-                HStack {
-                    Text(f.name)
-                    Spacer()
-                    Text("\(library.count(.folder(f.id)))").foregroundStyle(.secondary).monospacedDigit()
+        AnyView(
+            Group {
+                Label {
+                    HStack {
+                        Text(f.name)
+                        Spacer()
+                        Text("\(library.count(.folder(f.id)))").foregroundStyle(.secondary).monospacedDigit()
+                    }
+                } icon: {
+                    Image(systemName: "folder").foregroundStyle(Color.accentColor)
                 }
-            } icon: { Image(systemName: "folder").foregroundStyle(Color.accentColor) }
                 .padding(.leading, CGFloat(depth) * 18)
                 .tag(BoardSection.folder(f.id))
                 .contextMenu { folderMenu(f) }
                 .accessibilityIdentifier("folder-\(f.name)")
-            ForEach(library.children(of: f.id)) { child in folderRows(child, depth: depth + 1) }
-        })
+                ForEach(library.children(of: f.id)) { child in folderRows(child, depth: depth + 1) }
+            })
     }
 
     @ViewBuilder private func folderMenu(_ f: BoardFolder) -> some View {
-        Button("Rename", systemImage: "pencil") { draftName = f.name; renamingFolder = f.id }
-        Button("New Folder", systemImage: "folder.badge.plus") { draftName = ""; newFolderParent = .some(f.id) }
+        Button("Rename", systemImage: "pencil") {
+            draftName = f.name
+            renamingFolder = f.id
+        }
+        Button("New Folder", systemImage: "folder.badge.plus") {
+            draftName = ""
+            newFolderParent = .some(f.id)
+        }
         Menu("Move to", systemImage: "folder") {
             Button("Top Level") { library.moveFolder(f.id, to: nil) }
-            ForEach(library.folders.filter { $0.id != f.id && !library.descendants(of: f.id).contains($0.id) }) { other in
+            ForEach(library.folders.filter { $0.id != f.id && !library.descendants(of: f.id).contains($0.id) }) {
+                other in
                 Button(library.path(other.id)) { library.moveFolder(f.id, to: other.id) }
             }
         }
@@ -140,7 +169,9 @@ struct BrowserView: View {
     private var shown: [BoardMeta] {
         var list = library.boards(in: current)
         if !query.isEmpty {
-            list = library.all.filter { $0.title.localizedCaseInsensitiveContains(query) || $0.text.localizedCaseInsensitiveContains(query) }
+            list = library.all.filter {
+                $0.title.localizedCaseInsensitiveContains(query) || $0.text.localizedCaseInsensitiveContains(query)
+            }
         }
         if current == .recents && query.isEmpty { return list }
         switch sort {
@@ -158,11 +189,17 @@ struct BrowserView: View {
         for b in list {
             let d = current == .recents ? (b.opened ?? b.modified) : b.modified
             let name: String
-            if cal.isDateInToday(d) { name = "Today" }
-            else if cal.isDateInYesterday(d) { name = "Yesterday" }
-            else if let days = cal.dateComponents([.day], from: d, to: Date()).day, days < 7 { name = "Previous 7 Days" }
-            else if let days = cal.dateComponents([.day], from: d, to: Date()).day, days < 30 { name = "Previous 30 Days" }
-            else { name = d.formatted(.dateTime.month(.wide).year()) }
+            if cal.isDateInToday(d) {
+                name = "Today"
+            } else if cal.isDateInYesterday(d) {
+                name = "Yesterday"
+            } else if let days = cal.dateComponents([.day], from: d, to: Date()).day, days < 7 {
+                name = "Previous 7 Days"
+            } else if let days = cal.dateComponents([.day], from: d, to: Date()).day, days < 30 {
+                name = "Previous 30 Days"
+            } else {
+                name = d.formatted(.dateTime.month(.wide).year())
+            }
             if out.last?.0 == name { out[out.count - 1].1.append(b) } else { out.append((name, [b])) }
         }
         return out
@@ -202,9 +239,11 @@ struct BrowserView: View {
             } else {
                 switch current {
                 case .favorites:
-                    ContentUnavailableView("No Favorites", systemImage: "heart", description: Text("Boards you favorite show up here."))
+                    ContentUnavailableView(
+                        "No Favorites", systemImage: "heart", description: Text("Boards you favorite show up here."))
                 case .recents:
-                    ContentUnavailableView("No Recent Boards", systemImage: "clock", description: Text("Boards you open show up here."))
+                    ContentUnavailableView(
+                        "No Recent Boards", systemImage: "clock", description: Text("Boards you open show up here."))
                 default:
                     ContentUnavailableView {
                         Label("No Boards", systemImage: "square.on.square")
@@ -224,19 +263,28 @@ struct BrowserView: View {
                 Button(picked.count == shown.count ? "Deselect All" : "Select All") {
                     picked = picked.count == shown.count ? [] : Set(shown.map(\.id))
                 }
-                Button("Done") { selecting = false; picked = [] }.fontWeight(.semibold)
+                Button("Done") {
+                    selecting = false
+                    picked = []
+                }.fontWeight(.semibold)
             } else {
-                Button { newBoard() } label: { Image(systemName: "square.and.pencil") }
-                    .accessibilityLabel("New Board")
-                    .accessibilityIdentifier("new-board")
+                Button {
+                    newBoard()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .accessibilityLabel("New Board")
+                .accessibilityIdentifier("new-board")
                 Menu {
                     Picker("Layout", selection: $listLayout) {
                         Label("Icons", systemImage: "square.grid.2x2").tag(false)
                         Label("List", systemImage: "list.bullet").tag(true)
                     }
-                } label: { Image(systemName: listLayout ? "list.bullet" : "square.grid.2x2") }
-                    .accessibilityLabel("Layout")
-                    .accessibilityIdentifier("layout-menu")
+                } label: {
+                    Image(systemName: listLayout ? "list.bullet" : "square.grid.2x2")
+                }
+                .accessibilityLabel("Layout")
+                .accessibilityIdentifier("layout-menu")
                 Menu {
                     Button("Select", systemImage: "checkmark.circle") { selecting = true }
                     Divider()
@@ -246,9 +294,11 @@ struct BrowserView: View {
                     }
                     Toggle(isOn: $useGroups) { Label("Use Groups", systemImage: "rectangle.grid.1x2") }
                         .disabled(sort != .date)
-                } label: { Image(systemName: "ellipsis") }
-                    .accessibilityLabel("More")
-                    .accessibilityIdentifier("browser-more")
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .accessibilityLabel("More")
+                .accessibilityIdentifier("browser-more")
             }
         }
         // The connection lives in the top-right corner, as it does on a board.
@@ -260,7 +310,12 @@ struct BrowserView: View {
 
     private func sortButton(_ s: BoardSort, _ title: String) -> some View {
         Button {
-            if sort == s { ascending.toggle() } else { sortRaw = s.rawValue; ascending = s == .name }
+            if sort == s {
+                ascending.toggle()
+            } else {
+                sortRaw = s.rawValue
+                ascending = s == .name
+            }
         } label: {
             if sort == s { Label(title, systemImage: ascending ? "chevron.up" : "chevron.down") } else { Text(title) }
         }
@@ -273,13 +328,23 @@ struct BrowserView: View {
             Menu {
                 Button("No Folder") { library.move(Array(picked), to: nil) }
                 ForEach(library.folders) { f in Button(library.path(f.id)) { library.move(Array(picked), to: f.id) } }
-            } label: { Label("Move", systemImage: "folder") }
-                .disabled(picked.isEmpty)
-            Button { for id in picked { library.duplicate(id) } } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
-                .disabled(picked.isEmpty)
-            Button(role: .destructive) { confirmDelete = Array(picked) } label: { Label("Delete", systemImage: "trash") }
-                .disabled(picked.isEmpty)
-                .accessibilityIdentifier("select-delete")
+            } label: {
+                Label("Move", systemImage: "folder")
+            }
+            .disabled(picked.isEmpty)
+            Button {
+                for id in picked { library.duplicate(id) }
+            } label: {
+                Label("Duplicate", systemImage: "plus.square.on.square")
+            }
+            .disabled(picked.isEmpty)
+            Button(role: .destructive) {
+                confirmDelete = Array(picked)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .disabled(picked.isEmpty)
+            .accessibilityIdentifier("select-delete")
         }
         .padding(.horizontal, 24).padding(.vertical, 14)
         .glassEffect(.regular, in: Capsule())
@@ -298,23 +363,29 @@ struct BrowserView: View {
     /// the title alone doesn't.
     private func matchLine(_ b: BoardMeta) -> String? {
         guard !query.isEmpty, !b.title.localizedCaseInsensitiveContains(query) else { return nil }
-        guard let line = b.text.split(separator: "\n").first(where: { $0.localizedCaseInsensitiveContains(query) }) else { return nil }
+        guard let line = b.text.split(separator: "\n").first(where: { $0.localizedCaseInsensitiveContains(query) })
+        else { return nil }
         let s = String(line).trimmingCharacters(in: .whitespaces)
         guard s.count > 42, let r = s.range(of: query, options: .caseInsensitive) else { return "“\(s)”" }
         let start = s.index(r.lowerBound, offsetBy: -14, limitedBy: s.startIndex) ?? s.startIndex
         let end = s.index(start, offsetBy: 42, limitedBy: s.endIndex) ?? s.endIndex
-        return "“" + (start > s.startIndex ? "…" : "") + s[start ..< end] + (end < s.endIndex ? "…" : "") + "”"
+        return "“" + (start > s.startIndex ? "…" : "") + s[start..<end] + (end < s.endIndex ? "…" : "") + "”"
     }
 
     private func grid(_ boards: [BoardMeta]) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 400), spacing: 20)], spacing: 22) {
             ForEach(boards) { b in
-                BoardCard(meta: b, library: library, folderName: library.folder(b.folder)?.name, selecting: selecting, picked: picked.contains(b.id),
-                          match: matchLine(b))
-                    .onTapGesture { tapped(b.id) }
-                    .contextMenu { boardMenu(b) } preview: {
-                        BoardThumbnail(id: b.id, library: library).frame(width: 420, height: 300)
-                    }
+                BoardCard(
+                    meta: b, library: library, folderName: library.folder(b.folder)?.name, selecting: selecting,
+                    picked: picked.contains(b.id),
+                    match: matchLine(b)
+                )
+                .onTapGesture { tapped(b.id) }
+                .contextMenu {
+                    boardMenu(b)
+                } preview: {
+                    BoardThumbnail(id: b.id, library: library).frame(width: 420, height: 300)
+                }
             }
         }
         .padding(.horizontal, 24)
@@ -339,11 +410,14 @@ struct BrowserView: View {
                             if b.favorite { Image(systemName: "heart.fill").font(.caption).foregroundStyle(.pink) }
                         }
                         if let m = matchLine(b) {
-                            Label(m, systemImage: "text.magnifyingglass").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                            Label(m, systemImage: "text.magnifyingglass").font(.subheadline).foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
                         HStack(spacing: 8) {
                             Text(b.modified.formatted(date: .abbreviated, time: .shortened))
-                            if let f = library.folder(b.folder) { Label(f.name, systemImage: "folder").labelStyle(.titleAndIcon) }
+                            if let f = library.folder(b.folder) {
+                                Label(f.name, systemImage: "folder").labelStyle(.titleAndIcon)
+                            }
                             if b.id.hasPrefix("local-only:") { Text("This iPad only") }
                         }
                         .font(.subheadline).foregroundStyle(.secondary)
@@ -372,16 +446,26 @@ struct BrowserView: View {
 
     @ViewBuilder private func boardMenu(_ b: BoardMeta) -> some View {
         Button("Open", systemImage: "arrow.up.forward.square") { open(b.id) }
-        Button(b.favorite ? "Unfavorite" : "Favorite", systemImage: b.favorite ? "heart.slash" : "heart") { library.toggleFavorite(b.id) }
-        Button("Rename", systemImage: "pencil") { draftName = b.title; renaming = b.id }
+        Button(b.favorite ? "Unfavorite" : "Favorite", systemImage: b.favorite ? "heart.slash" : "heart") {
+            library.toggleFavorite(b.id)
+        }
+        Button("Rename", systemImage: "pencil") {
+            draftName = b.title
+            renaming = b.id
+        }
         Button("Duplicate", systemImage: "plus.square.on.square") { library.duplicate(b.id) }
         Menu("Move to", systemImage: "folder") {
             Button("No Folder", systemImage: b.folder == nil ? "checkmark" : "") { library.move([b.id], to: nil) }
             ForEach(library.folders) { f in
-                Button(library.path(f.id), systemImage: b.folder == f.id ? "checkmark" : "folder") { library.move([b.id], to: f.id) }
+                Button(library.path(f.id), systemImage: b.folder == f.id ? "checkmark" : "folder") {
+                    library.move([b.id], to: f.id)
+                }
             }
             Divider()
-            Button("New Folder…", systemImage: "folder.badge.plus") { draftName = ""; newFolderParent = .some(nil) }
+            Button("New Folder…", systemImage: "folder.badge.plus") {
+                draftName = ""
+                newFolderParent = .some(nil)
+            }
         }
         Divider()
         Button("Delete", systemImage: "trash", role: .destructive) { confirmDelete = [b.id] }
@@ -404,9 +488,11 @@ struct BoardCard: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(meta.title).font(.headline).lineLimit(1)
                 if let match {
-                    Label(match, systemImage: "text.magnifyingglass").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    Label(match, systemImage: "text.magnifyingglass").font(.subheadline).foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                Text(meta.modified.formatted(date: .numeric, time: .shortened)).font(.subheadline).foregroundStyle(.secondary)
+                Text(meta.modified.formatted(date: .numeric, time: .shortened)).font(.subheadline).foregroundStyle(
+                    .secondary)
                 if let folderName {
                     Label(folderName, systemImage: "folder").font(.caption).foregroundStyle(.secondary)
                 } else if meta.id.hasPrefix("local-only:") {
@@ -418,7 +504,10 @@ struct BoardCard: View {
             .background(Color(.secondarySystemBackground))
         }
         .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(picked ? Color.accentColor : Color(.separator), lineWidth: picked ? 3 : 0.5))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16).stroke(
+                picked ? Color.accentColor : Color(.separator), lineWidth: picked ? 3 : 0.5)
+        )
         .overlay(alignment: .topTrailing) {
             if meta.favorite {
                 Image(systemName: "heart.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
@@ -429,7 +518,10 @@ struct BoardCard: View {
             if selecting {
                 Image(systemName: picked ? "checkmark.circle.fill" : "circle")
                     .font(.title2).symbolRenderingMode(.palette)
-                    .foregroundStyle(picked ? Color.white : Color.secondary, picked ? Color.accentColor : Color(.systemBackground).opacity(0.8))
+                    .foregroundStyle(
+                        picked ? Color.white : Color.secondary,
+                        picked ? Color.accentColor : Color(.systemBackground).opacity(0.8)
+                    )
                     .padding(10)
             }
         }

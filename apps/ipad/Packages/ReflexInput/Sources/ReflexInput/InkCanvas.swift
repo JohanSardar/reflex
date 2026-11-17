@@ -33,7 +33,10 @@ public final class BoardUndoManager: UndoManager {
 
     /// Tells listeners (the palette's undo and redo buttons) that canUndo or canRedo changed.
     public func refresh() {
-        for name: Notification.Name in [.NSUndoManagerCheckpoint, .NSUndoManagerDidCloseUndoGroup, .NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
+        for name: Notification.Name in [
+            .NSUndoManagerCheckpoint, .NSUndoManagerDidCloseUndoGroup, .NSUndoManagerDidUndoChange,
+            .NSUndoManagerDidRedoChange,
+        ] {
             NotificationCenter.default.post(name: name, object: self)
         }
     }
@@ -56,7 +59,10 @@ public final class ReflexCanvasView: PKCanvasView {
 
     private func removeEditMenus(_ view: UIView) {
         for i in view.interactions where i is UIEditMenuInteraction { view.removeInteraction(i) }
-        for g in view.gestureRecognizers ?? [] where String(describing: type(of: g)).contains("EditMenu") || String(describing: type(of: g)).contains("InsertSpace") {
+        for g in view.gestureRecognizers ?? []
+        where String(describing: type(of: g)).contains("EditMenu")
+            || String(describing: type(of: g)).contains("InsertSpace")
+        {
             g.isEnabled = false
         }
         for v in view.subviews { removeEditMenus(v) }
@@ -248,9 +254,9 @@ public final class InkCanvasController: NSObject {
         // pans and selects and only the Pencil draws, as in Freeform.
         let drawsWithFinger = pickerVisible && fingerDraws
         #if targetEnvironment(simulator)
-        canvasView.drawingPolicy = drawsWithFinger ? .anyInput : .pencilOnly
+            canvasView.drawingPolicy = drawsWithFinger ? .anyInput : .pencilOnly
         #else
-        canvasView.drawingPolicy = drawsWithFinger ? .anyInput : .pencilOnly
+            canvasView.drawingPolicy = drawsWithFinger ? .anyInput : .pencilOnly
         #endif
         let item = toolPicker.selectedToolItem
         if item is PKToolPickerInkingItem { lastInkItem = item }
@@ -324,23 +330,29 @@ public final class InkCanvasController: NSObject {
 
     /// A point on screen (the canvas's superview) in Space points.
     public func space(_ screen: CGPoint) -> CGPoint {
-        CGPoint(x: (screen.x + canvasView.contentOffset.x) / canvasView.zoomScale,
-                y: (screen.y + canvasView.contentOffset.y) / canvasView.zoomScale)
+        CGPoint(
+            x: (screen.x + canvasView.contentOffset.x) / canvasView.zoomScale,
+            y: (screen.y + canvasView.contentOffset.y) / canvasView.zoomScale)
     }
 
     /// The Space rectangle on screen now.
     public var visibleRect: CGRect {
-        let z = canvasView.zoomScale, o = canvasView.contentOffset, s = canvasView.bounds.size
+        let z = canvasView.zoomScale
+        let o = canvasView.contentOffset
+        let s = canvasView.bounds.size
         return CGRect(x: o.x / z, y: o.y / z, width: s.width / z, height: s.height / z)
     }
 
     /// Scrolls the view by screen points (keeps text being typed above the keyboard).
     public func scroll(by delta: CGPoint) {
         let o = canvasView.contentOffset
-        let target = clamp(CGPoint(x: o.x + delta.x, y: o.y + delta.y), zoom: canvasView.zoomScale, size: canvasView.bounds.size)
+        let target = clamp(
+            CGPoint(x: o.x + delta.x, y: o.y + delta.y), zoom: canvasView.zoomScale, size: canvasView.bounds.size)
         UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
             self.canvasView.contentOffset = target
-        } completion: { _ in self.syncViewport() }
+        } completion: { _ in
+            self.syncViewport()
+        }
     }
 
     /// Centers the view on a Space point at a zoom.
@@ -353,7 +365,9 @@ public final class InkCanvasController: NSObject {
             self.canvasView.contentOffset = self.clamp(offset, zoom: z, size: size)
         }
         if animated {
-            UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseInOut, .allowUserInteraction], animations: apply) { _ in
+            UIView.animate(
+                withDuration: 0.35, delay: 0, options: [.curveEaseInOut, .allowUserInteraction], animations: apply
+            ) { _ in
                 self.syncViewport()
             }
         } else {
@@ -366,7 +380,9 @@ public final class InkCanvasController: NSObject {
     public func show(rect: CGRect, animated: Bool, margin: CGFloat = 60, maxZoom: CGFloat = 2) {
         guard !rect.isNull, rect.width > 0 || rect.height > 0 else { return }
         let size = canvasView.bounds.size == .zero ? UIScreen.main.bounds.size : canvasView.bounds.size
-        let z = min((size.width - margin * 2) / max(rect.width, 1), (size.height - margin * 2 - 120) / max(rect.height, 1), maxZoom)
+        let z = min(
+            (size.width - margin * 2) / max(rect.width, 1), (size.height - margin * 2 - 120) / max(rect.height, 1),
+            maxZoom)
         show(center: CGPoint(x: rect.midX, y: rect.midY), zoom: z, animated: animated)
     }
 
@@ -379,8 +395,9 @@ public final class InkCanvasController: NSObject {
     static let edgeInset = UIEdgeInsets(top: 110, left: 40, bottom: 0, right: 0)
 
     private func clamp(_ offset: CGPoint, zoom: CGFloat, size: CGSize) -> CGPoint {
-        CGPoint(x: min(max(offset.x, -Self.edgeInset.left), Self.spaceSize.width * zoom - size.width),
-                y: min(max(offset.y, -Self.edgeInset.top), Self.spaceSize.height * zoom - size.height))
+        CGPoint(
+            x: min(max(offset.x, -Self.edgeInset.left), Self.spaceSize.width * zoom - size.width),
+            y: min(max(offset.y, -Self.edgeInset.top), Self.spaceSize.height * zoom - size.height))
     }
 
     private func syncViewport() {
@@ -395,23 +412,24 @@ public final class InkCanvasController: NSObject {
     }
 
     #if DEBUG
-    /// Draws one pen stroke through `screen` points, as if the person drew it:
-    /// the change goes through the same delegate path as a real stroke. For
-    /// driving the Simulator, whose automation has no freeform path gesture.
-    public func debugDraw(screen: [CGPoint]) {
-        let zoom = canvasView.zoomScale, offset = canvasView.contentOffset
-        let points = screen.enumerated().map { i, p in
-            PKStrokePoint(
-                location: CGPoint(x: (p.x + offset.x) / zoom, y: (p.y + offset.y) / zoom),
-                timeOffset: Double(i) * 0.012, size: CGSize(width: 3, height: 3),
-                opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2
-            )
+        /// Draws one pen stroke through `screen` points, as if the person drew it:
+        /// the change goes through the same delegate path as a real stroke. For
+        /// driving the Simulator, whose automation has no freeform path gesture.
+        public func debugDraw(screen: [CGPoint]) {
+            let zoom = canvasView.zoomScale
+            let offset = canvasView.contentOffset
+            let points = screen.enumerated().map { i, p in
+                PKStrokePoint(
+                    location: CGPoint(x: (p.x + offset.x) / zoom, y: (p.y + offset.y) / zoom),
+                    timeOffset: Double(i) * 0.012, size: CGSize(width: 3, height: 3),
+                    opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2
+                )
+            }
+            let stroke = PKStroke(ink: currentInk, path: PKStrokePath(controlPoints: points, creationDate: Date()))
+            var drawing = canvasView.drawing
+            drawing.strokes.append(stroke)
+            canvasView.drawing = drawing
         }
-        let stroke = PKStroke(ink: currentInk, path: PKStrokePath(controlPoints: points, creationDate: Date()))
-        var drawing = canvasView.drawing
-        drawing.strokes.append(stroke)
-        canvasView.drawing = drawing
-    }
     #endif
 
     // MARK: Moving strokes with a Reflex selection
@@ -544,7 +562,8 @@ public final class InkCanvasController: NSObject {
         let drawing = canvasView.drawing
         let change = ledger.reconcile(drawing.strokes)
         guard !change.isEmpty else { return }
-        inkLog.debug("""
+        inkLog.debug(
+            """
             Ink change: +\(change.added.map(\.id), privacy: .public) \
             -\(change.removed, privacy: .public) \
             restored \(change.restored, privacy: .public) moved \(change.moved, privacy: .public)

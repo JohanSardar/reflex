@@ -51,7 +51,9 @@ public struct PortableStroke: Codable, Equatable, Sendable {
     public var namedColor: String {
         let hex = color.dropFirst()
         guard hex.count >= 6, let v = UInt32(hex.prefix(6), radix: 16) else { return "black" }
-        let r = Int(v >> 16 & 0xff), g = Int(v >> 8 & 0xff), b = Int(v & 0xff)
+        let r = Int(v >> 16 & 0xff)
+        let g = Int(v >> 8 & 0xff)
+        let b = Int(v & 0xff)
         if r > 150 && g < 100 { return "red" }
         if b > 150 && r < 100 { return "blue" }
         return "black"

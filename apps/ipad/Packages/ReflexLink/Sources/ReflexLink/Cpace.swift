@@ -32,8 +32,9 @@ struct Cpace {
 
     /// The generator: try-and-increment, keeping the first u with u³ + Au² + u a square mod p.
     static func generator(code: String, transcript: Data) throws -> Data {
-        for i in 0 ..< 1000 {
-            var h = sha256(Data("\(linkProtocol) cpace generator \(i) ".utf8), Data(code.utf8), Data(" ".utf8), transcript)
+        for i in 0..<1000 {
+            var h = sha256(
+                Data("\(linkProtocol) cpace generator \(i) ".utf8), Data(code.utf8), Data(" ".utf8), transcript)
             h[h.startIndex + 31] &= 0x7f
             let u = Fe(h)
             guard !u.isZero, !u.isOne, u.lessThanP else { continue }
@@ -49,11 +50,15 @@ struct Cpace {
 struct Fe {
     var l: [UInt64]
 
-    static let p = Fe(limbs: [0xffff_ffff_ffff_ffed, 0xffff_ffff_ffff_ffff, 0xffff_ffff_ffff_ffff, 0x7fff_ffff_ffff_ffff])
+    static let p = Fe(limbs: [
+        0xffff_ffff_ffff_ffed, 0xffff_ffff_ffff_ffff, 0xffff_ffff_ffff_ffff, 0x7fff_ffff_ffff_ffff,
+    ])
     static let one = Fe(limbs: [1, 0, 0, 0])
     static let a = Fe(limbs: [486_662, 0, 0, 0])
     /// (p − 1) / 2 = 2²⁵⁴ − 10.
-    static let halfPMinusOne = Fe(limbs: [0xffff_ffff_ffff_fff6, 0xffff_ffff_ffff_ffff, 0xffff_ffff_ffff_ffff, 0x3fff_ffff_ffff_ffff])
+    static let halfPMinusOne = Fe(limbs: [
+        0xffff_ffff_ffff_fff6, 0xffff_ffff_ffff_ffff, 0xffff_ffff_ffff_ffff, 0x3fff_ffff_ffff_ffff,
+    ])
 
     init(limbs: [UInt64]) { l = limbs }
 
@@ -61,12 +66,12 @@ struct Fe {
     init(_ d: Data) {
         let b = [UInt8](d)
         var limbs = [UInt64](repeating: 0, count: 4)
-        for i in 0 ..< 32 { limbs[i / 8] |= UInt64(b[i]) << UInt64(8 * (i % 8)) }
+        for i in 0..<32 { limbs[i / 8] |= UInt64(b[i]) << UInt64(8 * (i % 8)) }
         l = limbs
     }
 
     var lessThanP: Bool {
-        for i in (0 ..< 4).reversed() where l[i] != Fe.p.l[i] { return l[i] < Fe.p.l[i] }
+        for i in (0..<4).reversed() where l[i] != Fe.p.l[i] { return l[i] < Fe.p.l[i] }
         return false
     }
 
@@ -75,7 +80,7 @@ struct Fe {
         var r = self
         while !r.lessThanP {
             var borrow = false
-            for i in 0 ..< 4 {
+            for i in 0..<4 {
                 let (d1, o1) = r.l[i].subtractingReportingOverflow(Fe.p.l[i])
                 let (d2, o2) = d1.subtractingReportingOverflow(borrow ? 1 : 0)
                 r.l[i] = d2
@@ -95,7 +100,7 @@ struct Fe {
             let (hi, lo) = c.multipliedFullWidth(by: 38)
             var add = lo
             var next = hi
-            for i in 0 ..< 4 {
+            for i in 0..<4 {
                 let (s, o) = r[i].addingReportingOverflow(add)
                 r[i] = s
                 add = o ? 1 : 0
@@ -109,7 +114,7 @@ struct Fe {
     func add(_ b: Fe) -> Fe {
         var r = [UInt64](repeating: 0, count: 4)
         var carry: UInt64 = 0
-        for i in 0 ..< 4 {
+        for i in 0..<4 {
             let (s1, o1) = l[i].addingReportingOverflow(b.l[i])
             let (s2, o2) = s1.addingReportingOverflow(carry)
             r[i] = s2
@@ -121,9 +126,9 @@ struct Fe {
 
     func mul(_ b: Fe) -> Fe {
         var t = [UInt64](repeating: 0, count: 8)
-        for i in 0 ..< 4 {
+        for i in 0..<4 {
             var carry: UInt64 = 0
-            for j in 0 ..< 4 {
+            for j in 0..<4 {
                 let (hi, lo) = l[i].multipliedFullWidth(by: b.l[j])
                 let (s1, o1) = t[i + j].addingReportingOverflow(lo)
                 let (s2, o2) = s1.addingReportingOverflow(carry)
@@ -135,7 +140,7 @@ struct Fe {
         // low + 38 · high
         var r = [UInt64](repeating: 0, count: 4)
         var carry: UInt64 = 0
-        for i in 0 ..< 4 {
+        for i in 0..<4 {
             let (hi, lo) = t[i + 4].multipliedFullWidth(by: 38)
             let (s1, o1) = t[i].addingReportingOverflow(lo)
             let (s2, o2) = s1.addingReportingOverflow(carry)
@@ -148,8 +153,8 @@ struct Fe {
 
     func pow(_ e: Fe) -> Fe {
         var result = Fe.one
-        for i in (0 ..< 4).reversed() {
-            for bit in (0 ..< 64).reversed() {
+        for i in (0..<4).reversed() {
+            for bit in (0..<64).reversed() {
                 result = result.mul(result)
                 if (e.l[i] >> UInt64(bit)) & 1 == 1 { result = result.mul(self) }
             }

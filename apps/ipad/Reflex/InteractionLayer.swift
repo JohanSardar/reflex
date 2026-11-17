@@ -20,7 +20,9 @@ struct InteractionLayer: View {
     private var o: CGPoint { ink.contentOffset }
 
     private func toScreen(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x * z - o.x, y: p.y * z - o.y) }
-    private func toScreen(_ r: CGRect) -> CGRect { CGRect(x: r.minX * z - o.x, y: r.minY * z - o.y, width: r.width * z, height: r.height * z) }
+    private func toScreen(_ r: CGRect) -> CGRect {
+        CGRect(x: r.minX * z - o.x, y: r.minY * z - o.y, width: r.width * z, height: r.height * z)
+    }
     private func toSpace(_ p: CGPoint) -> CGPoint { CGPoint(x: (p.x + o.x) / z, y: (p.y + o.y) / z) }
 
     /// Objects take finger touches when the palette is closed, or in Select mode.
@@ -35,12 +37,16 @@ struct InteractionLayer: View {
             if ink.pickerVisible, let tool = ink.customTool { placementCapture(tool) }
             if objectsLive || lassoLive {
                 ForEach(session.objects) { obj in proxy(obj) }
-                if session.selection.count > 1 || !session.selectedStrokes.isEmpty, let b = session.selectionBounds { selectionProxy(b) }
+                if session.selection.count > 1 || !session.selectedStrokes.isEmpty, let b = session.selectionBounds {
+                    selectionProxy(b)
+                }
             }
             guideLines
             selectionChrome
             editor
-            if !dragging, resizeStart == nil, connectorID == nil, session.editing == nil, let b = session.selectionBounds {
+            if !dragging, resizeStart == nil, connectorID == nil, session.editing == nil,
+                let b = session.selectionBounds
+            {
                 MiniToolbar(session: session)
                     .fixedSize()
                     .position(toolbarPosition(for: toScreen(b)))
@@ -66,13 +72,27 @@ struct InteractionLayer: View {
     private func tapCanvas(_ p: CGPoint) {
         // The canvas also sees taps on a table's + buttons; those keep the table selected.
         if session.selection.count == 1, let t = session.selectedObjects.first, t.kind == .table {
-            let r = toScreen(t.frame), s = toScreen(p)
+            let r = toScreen(t.frame)
+            let s = toScreen(p)
             let pluses = [CGPoint(x: r.maxX + 26, y: r.midY), CGPoint(x: r.midX, y: r.maxY + 26)]
-            if pluses.contains(where: { hypot($0.x - s.x, $0.y - s.y) < 24 }) || Date().timeIntervalSince(plusPressed) < 0.5 { return }
+            if pluses.contains(where: { hypot($0.x - s.x, $0.y - s.y) < 24 })
+                || Date().timeIntervalSince(plusPressed) < 0.5
+            {
+                return
+            }
         }
-        if canvasMenu != nil { canvasMenu = nil; return }
-        if session.editing != nil { session.endEditing(); return }
-        if !session.selection.isEmpty || !session.selectedStrokes.isEmpty { session.clearSelection(); return }
+        if canvasMenu != nil {
+            canvasMenu = nil
+            return
+        }
+        if session.editing != nil {
+            session.endEditing()
+            return
+        }
+        if !session.selection.isEmpty || !session.selectedStrokes.isEmpty {
+            session.clearSelection()
+            return
+        }
         if session.selecting { return }
         canvasMenu = toScreen(p)
     }
@@ -81,7 +101,8 @@ struct InteractionLayer: View {
 
     @ViewBuilder private func proxy(_ obj: BoardObject) -> some View {
         if obj.isConnector {
-            let path = ConnectorGeometry.path(obj).applying(CGAffineTransform(scaleX: z, y: z).concatenating(CGAffineTransform(translationX: -o.x, y: -o.y)))
+            let path = ConnectorGeometry.path(obj).applying(
+                CGAffineTransform(scaleX: z, y: z).concatenating(CGAffineTransform(translationX: -o.x, y: -o.y)))
             Color.clear
                 .contentShape(path.strokedPath(StrokeStyle(lineWidth: 26, lineCap: .round)))
                 .onTapGesture { tap(obj, at: nil) }
@@ -122,7 +143,9 @@ struct InteractionLayer: View {
             session.select(obj.id, adding: true)
             return
         }
-        let already = session.selection == [obj.id] || (session.selection.contains(obj.id) && obj.group == nil && session.selection.count == 1)
+        let already =
+            session.selection == [obj.id]
+            || (session.selection.contains(obj.id) && obj.group == nil && session.selection.count == 1)
         if already, obj.hasText, !obj.locked {
             if obj.kind == .table, let loc, let t = obj.table {
                 let r = toScreen(obj.frame)
@@ -149,7 +172,8 @@ struct InteractionLayer: View {
                     dragging = true
                     session.beginMove()
                 }
-                session.move(by: CGSize(width: v.translation.width / z, height: v.translation.height / z), guidesOn: guides)
+                session.move(
+                    by: CGSize(width: v.translation.width / z, height: v.translation.height / z), guidesOn: guides)
             }
             .onEnded { _ in
                 guard dragging else { return }
@@ -166,8 +190,13 @@ struct InteractionLayer: View {
             .gesture(
                 DragGesture(minimumDistance: 4)
                     .onChanged { v in
-                        if !dragging { dragging = true; session.beginMove() }
-                        session.move(by: CGSize(width: v.translation.width / z, height: v.translation.height / z), guidesOn: guides)
+                        if !dragging {
+                            dragging = true
+                            session.beginMove()
+                        }
+                        session.move(
+                            by: CGSize(width: v.translation.width / z, height: v.translation.height / z),
+                            guidesOn: guides)
                     }
                     .onEnded { _ in
                         dragging = false
@@ -194,8 +223,14 @@ struct InteractionLayer: View {
                         let box = CGRect(x: pts.map(\.x).min()!, y: pts.map(\.y).min()!, width: 0, height: 0)
                             .union(CGRect(x: pts.map(\.x).max()!, y: pts.map(\.y).max()!, width: 0, height: 0))
                         var area: CGFloat = 0
-                        for i in pts.indices { let a = pts[i], b = pts[(i + 1) % pts.count]; area += a.x * b.y - b.x * a.y }
-                        if abs(area) / 2 < box.width * box.height * 0.15 { path.addRect(box) } else {
+                        for i in pts.indices {
+                            let a = pts[i]
+                            let b = pts[(i + 1) % pts.count]
+                            area += a.x * b.y - b.x * a.y
+                        }
+                        if abs(area) / 2 < box.width * box.height * 0.15 {
+                            path.addRect(box)
+                        } else {
                             path.addLines(between: pts)
                             path.closeSubpath()
                         }
@@ -264,12 +299,15 @@ struct InteractionLayer: View {
         .accessibilityIdentifier("canvas-menu")
     }
 
-    private func menuButton(_ title: String, _ symbol: String, enabled: Bool = true, action: @escaping () -> Void) -> some View {
+    private func menuButton(_ title: String, _ symbol: String, enabled: Bool = true, action: @escaping () -> Void)
+        -> some View
+    {
         Button {
             canvasMenu = nil
             action()
         } label: {
-            Label(title, systemImage: symbol).font(.system(size: 15, weight: .medium)).padding(.horizontal, 12).frame(height: 42)
+            Label(title, systemImage: symbol).font(.system(size: 15, weight: .medium)).padding(.horizontal, 12).frame(
+                height: 42)
         }
         .disabled(!enabled)
         .foregroundStyle(enabled ? Color.primary : Color.secondary)
@@ -280,9 +318,19 @@ struct InteractionLayer: View {
     private var guideLines: some View {
         Canvas { ctx, size in
             var path = Path()
-            for x in session.guides.x { let sx = x * z - o.x; path.move(to: CGPoint(x: sx, y: 0)); path.addLine(to: CGPoint(x: sx, y: size.height)) }
-            for y in session.guides.y { let sy = y * z - o.y; path.move(to: CGPoint(x: 0, y: sy)); path.addLine(to: CGPoint(x: size.width, y: sy)) }
-            ctx.stroke(path, with: .color(Color(red: 1, green: 0.78, blue: 0)), style: StrokeStyle(lineWidth: 1.2, dash: [5, 4]))
+            for x in session.guides.x {
+                let sx = x * z - o.x
+                path.move(to: CGPoint(x: sx, y: 0))
+                path.addLine(to: CGPoint(x: sx, y: size.height))
+            }
+            for y in session.guides.y {
+                let sy = y * z - o.y
+                path.move(to: CGPoint(x: 0, y: sy))
+                path.addLine(to: CGPoint(x: size.width, y: sy))
+            }
+            ctx.stroke(
+                path, with: .color(Color(red: 1, green: 0.78, blue: 0)),
+                style: StrokeStyle(lineWidth: 1.2, dash: [5, 4]))
         }
         .allowsHitTesting(false)
     }
@@ -313,14 +361,20 @@ struct InteractionLayer: View {
             .allowsHitTesting(false)
         if obj.locked {
             ForEach(corners(r), id: \.self) { p in
-                Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.gray).position(p).allowsHitTesting(false)
+                Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.gray).position(p)
+                    .allowsHitTesting(false)
             }
         } else {
-            let handles: [(UnitPoint, CGPoint)] = obj.kind == .text
+            let handles: [(UnitPoint, CGPoint)] =
+                obj.kind == .text
                 ? [(.leading, CGPoint(x: r.minX, y: r.midY)), (.trailing, CGPoint(x: r.maxX, y: r.midY))]
-                : [(.topLeading, CGPoint(x: r.minX, y: r.minY)), (.top, CGPoint(x: r.midX, y: r.minY)), (.topTrailing, CGPoint(x: r.maxX, y: r.minY)),
-                   (.leading, CGPoint(x: r.minX, y: r.midY)), (.trailing, CGPoint(x: r.maxX, y: r.midY)),
-                   (.bottomLeading, CGPoint(x: r.minX, y: r.maxY)), (.bottom, CGPoint(x: r.midX, y: r.maxY)), (.bottomTrailing, CGPoint(x: r.maxX, y: r.maxY))]
+                : [
+                    (.topLeading, CGPoint(x: r.minX, y: r.minY)), (.top, CGPoint(x: r.midX, y: r.minY)),
+                    (.topTrailing, CGPoint(x: r.maxX, y: r.minY)),
+                    (.leading, CGPoint(x: r.minX, y: r.midY)), (.trailing, CGPoint(x: r.maxX, y: r.midY)),
+                    (.bottomLeading, CGPoint(x: r.minX, y: r.maxY)), (.bottom, CGPoint(x: r.midX, y: r.maxY)),
+                    (.bottomTrailing, CGPoint(x: r.maxX, y: r.maxY)),
+                ]
             ForEach(handles, id: \.0) { anchor, p in
                 Circle().fill(.white).stroke(Color.accentColor, lineWidth: 2)
                     .frame(width: 14, height: 14)
@@ -340,9 +394,13 @@ struct InteractionLayer: View {
                 }
             }
             if !dragging, resizeStart == nil {
-                let spots = obj.kind == .table
+                let spots =
+                    obj.kind == .table
                     ? [CGPoint(x: r.midX, y: r.minY - 30), CGPoint(x: r.minX - 30, y: r.midY)]
-                    : [CGPoint(x: r.midX, y: r.minY - 30), CGPoint(x: r.maxX + 30, y: r.midY), CGPoint(x: r.midX, y: r.maxY + 30), CGPoint(x: r.minX - 30, y: r.midY)]
+                    : [
+                        CGPoint(x: r.midX, y: r.minY - 30), CGPoint(x: r.maxX + 30, y: r.midY),
+                        CGPoint(x: r.midX, y: r.maxY + 30), CGPoint(x: r.minX - 30, y: r.midY),
+                    ]
                 ForEach(spots, id: \.self) { p in
                     Image(systemName: "arrow.up.right.circle.fill")
                         .font(.system(size: 20))
@@ -362,7 +420,10 @@ struct InteractionLayer: View {
     }
 
     private func tablePlus(_ label: String, id: String, at p: CGPoint, action: @escaping () -> Void) -> some View {
-        Button { plusPressed = Date(); action() } label: {
+        Button {
+            plusPressed = Date()
+            action()
+        } label: {
             Image(systemName: "plus")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(.white)
@@ -387,28 +448,46 @@ struct InteractionLayer: View {
     private func anchorName(_ a: UnitPoint) -> String { "\(Int(a.x * 2))\(Int(a.y * 2))" }
 
     private func corners(_ r: CGRect) -> [CGPoint] {
-        [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY)]
+        [
+            CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.minX, y: r.maxY),
+            CGPoint(x: r.maxX, y: r.maxY),
+        ]
     }
 
     private func resizeGesture(_ obj: BoardObject, anchor: UnitPoint) -> some Gesture {
         DragGesture(minimumDistance: 1, coordinateSpace: .global)
             .onChanged { v in
-                if resizeStart == nil { resizeStart = obj.frame; session.beginResize() }
+                if resizeStart == nil {
+                    resizeStart = obj.frame
+                    session.beginResize()
+                }
                 guard let s = resizeStart else { return }
-                let dx = v.translation.width / z, dy = v.translation.height / z
-                var minX = s.minX, minY = s.minY, maxX = s.maxX, maxY = s.maxY
+                let dx = v.translation.width / z
+                let dy = v.translation.height / z
+                var minX = s.minX
+                var minY = s.minY
+                var maxX = s.maxX
+                var maxY = s.maxY
                 if anchor.x == 0 { minX += dx } else if anchor.x == 1 { maxX += dx }
                 if anchor.y == 0 { minY += dy } else if anchor.y == 1 { maxY += dy }
-                var f = CGRect(x: min(minX, maxX), y: min(minY, maxY), width: abs(maxX - minX), height: abs(maxY - minY))
+                var f = CGRect(
+                    x: min(minX, maxX), y: min(minY, maxY), width: abs(maxX - minX), height: abs(maxY - minY))
                 // Pictures and symbols keep their proportions from a corner.
-                if (obj.kind == .image || obj.kind == .symbol || obj.shape == .circle && false), anchor.x != 0.5, anchor.y != 0.5 {
+                if obj.kind == .image || obj.kind == .symbol || obj.shape == .circle && false, anchor.x != 0.5,
+                    anchor.y != 0.5
+                {
                     let k = max(f.width / s.width, f.height / s.height)
-                    let w = s.width * k, h = s.height * k
-                    f = CGRect(x: anchor.x == 0 ? s.maxX - w : s.minX, y: anchor.y == 0 ? s.maxY - h : s.minY, width: w, height: h)
+                    let w = s.width * k
+                    let h = s.height * k
+                    f = CGRect(
+                        x: anchor.x == 0 ? s.maxX - w : s.minX, y: anchor.y == 0 ? s.maxY - h : s.minY, width: w,
+                        height: h)
                 }
                 if guides.snapToGrid {
                     let g = guides.grid
-                    f = CGRect(x: (f.minX / g).rounded() * g, y: (f.minY / g).rounded() * g, width: max(g, (f.width / g).rounded() * g), height: max(g, (f.height / g).rounded() * g))
+                    f = CGRect(
+                        x: (f.minX / g).rounded() * g, y: (f.minY / g).rounded() * g,
+                        width: max(g, (f.width / g).rounded() * g), height: max(g, (f.height / g).rounded() * g))
                 }
                 session.resize(obj.id, to: f)
             }
@@ -422,7 +501,10 @@ struct InteractionLayer: View {
         DragGesture(minimumDistance: 2, coordinateSpace: .global)
             .onChanged { v in
                 let p = toSpace(v.location)
-                if connectorID == nil { connectorID = session.beginConnector(from: obj.id, at: CGPoint(x: obj.frame.midX, y: obj.frame.midY)) }
+                if connectorID == nil {
+                    connectorID = session.beginConnector(
+                        from: obj.id, at: CGPoint(x: obj.frame.midX, y: obj.frame.midY))
+                }
                 if let id = connectorID { session.moveEnd(id, start: false, to: p, attach: true) }
             }
             .onEnded { _ in
@@ -442,7 +524,10 @@ struct InteractionLayer: View {
                     .gesture(
                         DragGesture(minimumDistance: 1, coordinateSpace: .global)
                             .onChanged { v in
-                                if resizeStart == nil { resizeStart = obj.frame; session.beginResize() }
+                                if resizeStart == nil {
+                                    resizeStart = obj.frame
+                                    session.beginResize()
+                                }
                                 session.moveEnd(obj.id, start: start, to: toSpace(v.location), attach: obj.shape == nil)
                             }
                             .onEnded { _ in
@@ -460,34 +545,48 @@ struct InteractionLayer: View {
 
     @ViewBuilder private var editor: some View {
         if let id = session.editing, let obj = session.object(id) {
-            if obj.kind == .table, let cell = session.editingCell, let t = obj.table, cell.row < t.rows, cell.col < t.cols {
+            if obj.kind == .table, let cell = session.editingCell, let t = obj.table, cell.row < t.rows,
+                cell.col < t.cols
+            {
                 let r = toScreen(obj.frame)
-                let cw = r.width / CGFloat(t.cols), rh = r.height / CGFloat(t.rows)
-                let cellRect = CGRect(x: r.minX + CGFloat(cell.col) * cw, y: r.minY + CGFloat(cell.row) * rh, width: cw, height: rh)
-                ObjectTextEditor(text: Binding(get: { session.object(id)?.table?.cells[cell.row][cell.col] ?? "" },
-                                               set: { session.setCell(id, row: cell.row, col: cell.col, $0) }),
-                                 object: obj, zoom: z, darkPaper: darkPaper, onTab: { nextCell(obj, cell) }, onDone: { session.endEditing() },
-                                 prompt: cell.row == 0 ? "Column \(cell.col + 1)" : "", header: cell.row == 0)
-                    .frame(width: cellRect.width, height: cellRect.height)
-                    .background(Color.accentColor.opacity(0.08))
-                    .position(x: cellRect.midX, y: cellRect.midY)
-                    .id("\(id)-\(cell.row)-\(cell.col)")
+                let cw = r.width / CGFloat(t.cols)
+                let rh = r.height / CGFloat(t.rows)
+                let cellRect = CGRect(
+                    x: r.minX + CGFloat(cell.col) * cw, y: r.minY + CGFloat(cell.row) * rh, width: cw, height: rh)
+                ObjectTextEditor(
+                    text: Binding(
+                        get: { session.object(id)?.table?.cells[cell.row][cell.col] ?? "" },
+                        set: { session.setCell(id, row: cell.row, col: cell.col, $0) }),
+                    object: obj, zoom: z, darkPaper: darkPaper, onTab: { nextCell(obj, cell) },
+                    onDone: { session.endEditing() },
+                    prompt: cell.row == 0 ? "Column \(cell.col + 1)" : "", header: cell.row == 0
+                )
+                .frame(width: cellRect.width, height: cellRect.height)
+                .background(Color.accentColor.opacity(0.08))
+                .position(x: cellRect.midX, y: cellRect.midY)
+                .id("\(id)-\(cell.row)-\(cell.col)")
             } else if obj.kind != .table {
                 let r = toScreen(obj.frame)
-                ObjectTextEditor(text: Binding(get: { session.object(id)?.text ?? "" }, set: { session.setText(id, $0) }),
-                                 object: obj, zoom: z, darkPaper: darkPaper, onTab: nil, onDone: { session.endEditing() },
-                                 prompt: obj.kind == .sticky ? "Type a note" : obj.kind == .text ? "Text" : "")
-                    .frame(width: r.width, height: r.height)
-                    .position(x: r.midX, y: r.midY)
-                    .id(id)
+                ObjectTextEditor(
+                    text: Binding(get: { session.object(id)?.text ?? "" }, set: { session.setText(id, $0) }),
+                    object: obj, zoom: z, darkPaper: darkPaper, onTab: nil, onDone: { session.endEditing() },
+                    prompt: obj.kind == .sticky ? "Type a note" : obj.kind == .text ? "Text" : ""
+                )
+                .frame(width: r.width, height: r.height)
+                .position(x: r.midX, y: r.midY)
+                .id(id)
             }
         }
     }
 
     private func nextCell(_ obj: BoardObject, _ cell: (row: Int, col: Int)) {
         guard let t = obj.table else { return }
-        var c = cell.col + 1, r = cell.row
-        if c >= t.cols { c = 0; r += 1 }
+        var c = cell.col + 1
+        var r = cell.row
+        if c >= t.cols {
+            c = 0
+            r += 1
+        }
         if r >= t.rows { session.resizeTable(obj.id, rows: t.rows + 1, cols: t.cols) }
         session.editingCell = (r, c)
     }
@@ -516,18 +615,25 @@ struct ObjectTextEditor: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        let color = object.textColor.map { Color(hex: $0) } ?? (object.kind == .sticky || (object.kind == .table && !object.autoTableColors) ? Color(red: 0.11, green: 0.11, blue: 0.12) : (darkPaper ? .white : Color(red: 0.11, green: 0.11, blue: 0.12)))
-        var font = Font.system(size: object.fontSize * zoom, weight: object.bold ? .bold : header ? .semibold : .regular)
+        let color =
+            object.textColor.map { Color(hex: $0) }
+            ?? (object.kind == .sticky || (object.kind == .table && !object.autoTableColors)
+                ? Color(red: 0.11, green: 0.11, blue: 0.12)
+                : (darkPaper ? .white : Color(red: 0.11, green: 0.11, blue: 0.12)))
+        var font = Font.system(
+            size: object.fontSize * zoom, weight: object.bold ? .bold : header ? .semibold : .regular)
         if object.italic { font = font.italic() }
         // The on-screen keyboard's Tab key types a tab: in a table it moves to the next cell instead.
-        let typed = Binding<String>(get: { text }, set: { new in
-            if let onTab, new.contains("\t") {
-                text = new.replacingOccurrences(of: "\t", with: "")
-                onTab()
-            } else {
-                text = new
-            }
-        })
+        let typed = Binding<String>(
+            get: { text },
+            set: { new in
+                if let onTab, new.contains("\t") {
+                    text = new.replacingOccurrences(of: "\t", with: "")
+                    onTab()
+                } else {
+                    text = new
+                }
+            })
         return TextField("", text: typed, prompt: Text(prompt).foregroundStyle(color.opacity(0.35)), axis: .vertical)
             .font(font)
             .underline(object.underline)
@@ -537,7 +643,11 @@ struct ObjectTextEditor: View {
             .focused($focused)
             .padding(.horizontal, (object.kind == .text ? 8 : 16) * zoom)
             .padding(.vertical, (object.kind == .text ? 6 : 12) * zoom)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: object.kind == .text ? .topLeading : Alignment(horizontal: object.align.frame.horizontal, vertical: .center))
+            .frame(
+                maxWidth: .infinity, maxHeight: .infinity,
+                alignment: object.kind == .text
+                    ? .topLeading : Alignment(horizontal: object.align.frame.horizontal, vertical: .center)
+            )
             .onAppear { focused = true }
             .onKeyPress(.tab) {
                 onTab?()

@@ -5,9 +5,9 @@ let package = Package(
     name: "ReflexLink",
     platforms: [.iOS(.v26)],
     products: [
-        .library(name: "ReflexLink", targets: ["ReflexLink"]),
+        .library(name: "ReflexLink", targets: ["ReflexLink"])
     ],
     targets: [
-        .target(name: "ReflexLink"),
+        .target(name: "ReflexLink")
     ]
 )
