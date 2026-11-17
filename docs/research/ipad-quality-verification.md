@@ -68,17 +68,20 @@ and source-equivalent cleanup cannot establish the missing end-to-end evidence.
 
 ## Independent Sol review
 
-One round with **gpt-6.1-sol**, reasoning effort **medium**, through T3 Code:
+Two rounds with **gpt-6.1-sol**, reasoning effort **medium**, through T3 Code:
 **APPROVE**, no implementation findings and no tests added. Ledger: no blocker,
-should or nit items. The reviewer independently checked formatter equivalence,
+should or nit items. Round 1 independently checked formatter equivalence,
 byte-for-byte regeneration of the project/scheme/plist, strict lint, shell
 syntax, diff whitespace, source links and runner/toolchain availability. It
 kept the missing manual acceptance evidence separate from implementation
-approval. Usage was not exposed.
+approval. Round 2 approved the CI context/runtime corrections, confirming
+the full 26.4.1 runtime against the GitHub runner inventory. Both rounds had
+no implementation findings; A1 and A2 below were self-found and resolved.
+Usage was not exposed.
 
 Diff at review and after review: 44 files, 3,110 insertions and 1,094 deletions
 before this documentation-only evidence update. No product code changed after
-review. No findings were declined or fixes requested. The branch is pushed
+review. No findings were declined or fixes requested by Sol. The branch is pushed
 only after approval. No new TestFlight binary is needed for a user-visible fix;
 shipping this source cleanup would require a separately authorized new build
 number, upload and Beta App Review.
