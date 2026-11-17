@@ -25,7 +25,9 @@ final class RelayLobby: @unchecked Sendable {
     private var released = false
 
     init(url: String) throws {
-        guard var c = URLComponents(string: url), c.scheme == "ws" || c.scheme == "wss" else { throw LinkError.unreachable("The Relay address '\(url)' is not ws:// or wss://.") }
+        guard var c = URLComponents(string: url), c.scheme == "ws" || c.scheme == "wss" else {
+            throw LinkError.unreachable("The Relay address '\(url)' is not ws:// or wss://.")
+        }
         c.path = "/v0/connect"
         c.queryItems = [URLQueryItem(name: "room", value: Self.room)]
         guard let u = c.url else { throw LinkError.unreachable("Bad Relay address.") }
@@ -104,8 +106,11 @@ final class RelayLobby: @unchecked Sendable {
         switch m["t"] as? String {
         case "challenge":
             guard let nonce = m["nonce"] as? String,
-                  let sig = try? key.signature(for: Data("reflex-relay/v0 hello \(Self.room) \(nonce)".utf8)) else { return }
-            sendJSON(["t": "hello", "device": me, "key": B64.encode(key.publicKey.rawRepresentation), "sig": B64.encode(sig)])
+                let sig = try? key.signature(for: Data("reflex-relay/v0 hello \(Self.room) \(nonce)".utf8))
+            else { return }
+            sendJSON([
+                "t": "hello", "device": me, "key": B64.encode(key.publicKey.rawRepresentation), "sig": B64.encode(sig),
+            ])
         case "welcome":
             sendJSON(["t": "watch", "devices": ["*"]])
             finishStart(.success(()))
@@ -133,8 +138,8 @@ final class RelayLobby: @unchecked Sendable {
         let b = [UInt8](d)
         guard b.count >= 5, b.count >= 1 + Int(b[0]) + 4 else { return }
         let n = Int(b[0])
-        let device = String(decoding: b[1 ..< 1 + n], as: UTF8.self)
-        let ch = b[(1 + n) ..< (5 + n)].reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+        let device = String(decoding: b[1..<1 + n], as: UTF8.self)
+        let ch = b[(1 + n)..<(5 + n)].reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
         // The Link answers on this side's channel, without the opener bit.
         lock.lock()
         let c = channels[ch]
@@ -144,7 +149,9 @@ final class RelayLobby: @unchecked Sendable {
     }
 
     private func sendJSON(_ m: [String: Any]) {
-        guard let d = try? JSONSerialization.data(withJSONObject: m), let s = String(data: d, encoding: .utf8) else { return }
+        guard let d = try? JSONSerialization.data(withJSONObject: m), let s = String(data: d, encoding: .utf8) else {
+            return
+        }
         task.send(.string(s)) { _ in }
     }
 

@@ -90,7 +90,8 @@ enum Handwriting {
                 }
                 // Lines top to bottom, then left to right.
                 let lines = (request.results ?? []).sorted {
-                    abs($0.boundingBox.midY - $1.boundingBox.midY) > 0.1 ? $0.boundingBox.midY > $1.boundingBox.midY : $0.boundingBox.minX < $1.boundingBox.minX
+                    abs($0.boundingBox.midY - $1.boundingBox.midY) > 0.1
+                        ? $0.boundingBox.midY > $1.boundingBox.midY : $0.boundingBox.minX < $1.boundingBox.minX
                 }
                 let best = lines.compactMap { $0.topCandidates(1).first }
                 guard !best.isEmpty else {

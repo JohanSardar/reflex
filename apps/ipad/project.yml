@@ -11,6 +11,8 @@ settings:
     GENERATE_INFOPLIST_FILE: YES
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
 packages:
   ReflexInput:
     path: Packages/ReflexInput
@@ -28,6 +30,8 @@ targets:
     info:
       path: Reflex/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSBonjourServices: [_reflex-link._tcp, _reflex-p2p._tcp]
         NSLocalNetworkUsageDescription: Reflex finds and syncs with the Reflex Link on your computer over the local network, or directly over peer-to-peer Wi-Fi.
         NSCameraUsageDescription: Reflex uses the camera to take photos you add to a board.
@@ -40,11 +44,28 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: si.eilmer.reflex
         TARGETED_DEVICE_FAMILY: "2"
-        MARKETING_VERSION: "0.1"
-        CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_KEY_CFBundleDisplayName: Reflex
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+  ReflexInputTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Packages/ReflexInput/Tests/ReflexInputTests
+    dependencies:
+      - target: Reflex
+      - package: ReflexInput
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: si.eilmer.reflex.input-tests
+schemes:
+  Reflex:
+    build:
+      targets:
+        Reflex: all
+    test:
+      targets:
+        - ReflexInputTests

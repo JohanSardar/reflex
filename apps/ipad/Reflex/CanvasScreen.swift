@@ -29,28 +29,34 @@ struct CanvasScreen: View {
                     .allowsHitTesting(open == nil)
                     .accessibilityHidden(open != nil)
                 if let open {
-                    BoardScreen(session: open, link: link, voice: voice, library: library, onBack: closeBoard, onStatus: { pairing = true })
-                        .id(open.id)
-                        .transition(.asymmetric(insertion: .scale(scale: 0.92).combined(with: .opacity), removal: .opacity))
+                    BoardScreen(
+                        session: open, link: link, voice: voice, library: library, onBack: closeBoard,
+                        onStatus: { pairing = true }
+                    )
+                    .id(open.id)
+                    .transition(.asymmetric(insertion: .scale(scale: 0.92).combined(with: .opacity), removal: .opacity))
                 }
             }
         }
         .animation(.smooth(duration: 0.3), value: open?.id)
         // A board with a chosen paper colour sets the chrome and status bar to match it.
-        .preferredColorScheme(open.flatMap { b in
-            switch b.meta.paper.tint {
-            case .automatic: nil
-            case .dark: .dark
-            default: .light
+        .preferredColorScheme(
+            open.flatMap { b in
+                switch b.meta.paper.tint {
+                case .automatic: nil
+                case .dark: .dark
+                default: .light
+                }
             }
-        })
+        )
         .overlay(alignment: .top) {
             // The Mac's Link was reset: this iPad stopped dialing it, and says what to do.
             if case .linkChanged = link.state {
                 HStack(spacing: 12) {
                     Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.orange)
                     Text("Your Mac's Reflex was reset. Ask your agent for a new code.").font(.callout)
-                    Button("Type Code") { pairing = true }.buttonStyle(.glassProminent).accessibilityIdentifier("scan-again")
+                    Button("Type Code") { pairing = true }.buttonStyle(.glassProminent).accessibilityIdentifier(
+                        "scan-again")
                 }
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .glassEffect()
@@ -70,8 +76,12 @@ struct CanvasScreen: View {
         // On its own view, so it and the Agent question never compete for one view's alert.
         .background {
             Color.clear.alert(
-                link.localOnlyNotice?.count == 1 ? "1 board from \(link.localOnlyNotice?.owner ?? "an earlier pairing") stays on this iPad" : "\(link.localOnlyNotice?.count ?? 0) boards from \(link.localOnlyNotice?.owner ?? "an earlier pairing") stay on this iPad",
-                isPresented: Binding(get: { link.localOnlyNotice != nil && asking == nil }, set: { if !$0 { link.dismissLocalOnlyNotice() } })
+                link.localOnlyNotice?.count == 1
+                    ? "1 board from \(link.localOnlyNotice?.owner ?? "an earlier pairing") stays on this iPad"
+                    : "\(link.localOnlyNotice?.count ?? 0) boards from \(link.localOnlyNotice?.owner ?? "an earlier pairing") stay on this iPad",
+                isPresented: Binding(
+                    get: { link.localOnlyNotice != nil && asking == nil },
+                    set: { if !$0 { link.dismissLocalOnlyNotice() } })
             ) {
                 Button("Keep on this iPad", role: .cancel) { link.dismissLocalOnlyNotice() }
                 Button("Delete them", role: .destructive) {
@@ -79,20 +89,25 @@ struct CanvasScreen: View {
                     link.deleteLocalOnly()
                 }
             } message: {
-                Text("They were made while paired with another Mac, so their Sends don't go to this one. You can still open them here.")
+                Text(
+                    "They were made while paired with another Mac, so their Sends don't go to this one. You can still open them here."
+                )
             }
         }
         // A device of this person's paired with the Link: said once, so one nobody meant to pair shows.
         .background {
             Color.clear.alert(
                 "\(link.newDevice?.name ?? "A device") paired with your Mac",
-                isPresented: Binding(get: { link.newDevice != nil && asking == nil }, set: { if !$0 { link.newDevice = nil } })
+                isPresented: Binding(
+                    get: { link.newDevice != nil && asking == nil }, set: { if !$0 { link.newDevice = nil } })
             ) {
                 Button("OK", role: .cancel) { link.newDevice = nil }
             } message: {
-                Text(link.newDevice?.approves == true
-                    ? "It was paired with a code shown on your Mac: it can sync your boards and approve Agents."
-                    : "Approving Agents stays with this iPad. If you didn't pair it, run `reflex link status` on your Mac to see it.")
+                Text(
+                    link.newDevice?.approves == true
+                        ? "It was paired with a code shown on your Mac: it can sync your boards and approve Agents."
+                        : "Approving Agents stays with this iPad. If you didn't pair it, run `reflex link status` on your Mac to see it."
+                )
             }
         }
         // Another iPad of the person's wants to approve Agents: only an approving iPad can let it.
@@ -102,13 +117,17 @@ struct CanvasScreen: View {
         .background {
             Color.clear.alert(
                 "Let \(askingApprover?.name ?? "this iPad") approve Agents?",
-                isPresented: Binding(get: { askingApprover != nil && asking == nil && link.newDevice == nil }, set: { if !$0 { askingApprover = nil } }),
+                isPresented: Binding(
+                    get: { askingApprover != nil && asking == nil && link.newDevice == nil },
+                    set: { if !$0 { askingApprover = nil } }),
                 presenting: askingApprover
             ) { r in
                 Button("Don't Allow", role: .cancel) { link.decideApprover(r.device, allow: false) }
                 Button("Allow") { link.decideApprover(r.device, allow: true) }
             } message: { _ in
-                Text("It paired with your Mac. If you allow it, it can approve Agents too, like this iPad. Only allow an iPad you paired yourself.")
+                Text(
+                    "It paired with your Mac. If you allow it, it can approve Agents too, like this iPad. Only allow an iPad you paired yourself."
+                )
             }
         }
         .onChange(of: link.agentRequests, initial: true) { _, list in
@@ -128,7 +147,10 @@ struct CanvasScreen: View {
         .onChange(of: incomingCode) { _, code in if code != nil { pairing = true } }
         .task {
             link.start()
-            link.beforeChangingPerson = { open?.ink.flush(); InkCanvasController.finishSaving() }
+            link.beforeChangingPerson = {
+                open?.ink.flush()
+                InkCanvasController.finishSaving()
+            }
             if library == nil {
                 let lib = BoardLibrary(link: link)
                 library = lib
@@ -141,29 +163,36 @@ struct CanvasScreen: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { open?.ink.flush(); open?.saveNow(); open?.saveHistory() }
-        }
-        #if DEBUG
-        .onReceive(NotificationCenter.default.publisher(for: .debugInk)) { note in
-            guard let url = note.object as? URL, let open,
-                  let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else { return }
-            if url.path == "/line", let raw = q.first(where: { $0.name == "points" })?.value {
-                let points = raw.split(separator: ";").compactMap { pair -> CGPoint? in
-                    let xy = pair.split(separator: ",").compactMap { Double($0) }
-                    return xy.count == 2 ? CGPoint(x: xy[0], y: xy[1]) : nil
-                }
-                open.ink.debugDraw(screen: points)
+            if phase != .active {
+                open?.ink.flush()
+                open?.saveNow()
+                open?.saveHistory()
             }
         }
+        #if DEBUG
+            .onReceive(NotificationCenter.default.publisher(for: .debugInk)) { note in
+                guard let url = note.object as? URL, let open,
+                    let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+                else { return }
+                if url.path == "/line", let raw = q.first(where: { $0.name == "points" })?.value {
+                    let points = raw.split(separator: ";").compactMap { pair -> CGPoint? in
+                        let xy = pair.split(separator: ",").compactMap { Double($0) }
+                        return xy.count == 2 ? CGPoint(x: xy[0], y: xy[1]) : nil
+                    }
+                    open.ink.debugDraw(screen: points)
+                }
+            }
         #endif
     }
 
     private func openBoard(_ id: String) {
         guard let library else { return }
         open?.close()
-        open = BoardSession(id: id, link: link, library: library, customItems: ReflexTools.items { tool in
-            open?.shapeTool = tool
-        })
+        open = BoardSession(
+            id: id, link: link, library: library,
+            customItems: ReflexTools.items { tool in
+                open?.shapeTool = tool
+            })
     }
 
     private func closeBoard() {

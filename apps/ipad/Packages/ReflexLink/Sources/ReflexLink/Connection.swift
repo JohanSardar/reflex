@@ -80,11 +80,12 @@ final class FramedConnection: FrameChannel, @unchecked Sendable {
             while self.buffer.count >= 4 {
                 let n = self.buffer.prefix(4).reduce(0) { $0 << 8 | Int($1) }
                 if n > Self.maxFrame {
-                    self.continuation.finish(throwing: LinkError.protocolError("a frame of \(n) bytes is over the limit"))
+                    self.continuation.finish(
+                        throwing: LinkError.protocolError("a frame of \(n) bytes is over the limit"))
                     return self.conn.cancel()
                 }
                 guard self.buffer.count >= 4 + n else { break }
-                let frame = self.buffer.subdata(in: self.buffer.startIndex + 4 ..< self.buffer.startIndex + 4 + n)
+                let frame = self.buffer.subdata(in: self.buffer.startIndex + 4..<self.buffer.startIndex + 4 + n)
                 self.buffer = Data(self.buffer.dropFirst(4 + n))
                 self.continuation.yield(frame)
             }
@@ -110,7 +111,9 @@ final class FramedConnection: FrameChannel, @unchecked Sendable {
 
     /// The IPv4 address and port a Bonjour endpoint resolved to, once connected: kept to dial the Link directly later.
     var resolvedIPv4: (host: String, port: UInt16)? {
-        guard case .hostPort(let host, let port) = conn.currentPath?.remoteEndpoint, case .ipv4(let a) = host else { return nil }
+        guard case .hostPort(let host, let port) = conn.currentPath?.remoteEndpoint, case .ipv4(let a) = host else {
+            return nil
+        }
         return ("\(a)".split(separator: "%").first.map(String.init) ?? "\(a)", port.rawValue)
     }
 }
@@ -144,7 +147,10 @@ final class Session {
     private var rx: FrameCipher
     private var iterator: AsyncThrowingStream<Data, Error>.AsyncIterator
 
-    init(conn: any FrameChannel, peer: PeerInfo, tx: FrameCipher, rx: FrameCipher, iterator: AsyncThrowingStream<Data, Error>.AsyncIterator) {
+    init(
+        conn: any FrameChannel, peer: PeerInfo, tx: FrameCipher, rx: FrameCipher,
+        iterator: AsyncThrowingStream<Data, Error>.AsyncIterator
+    ) {
         self.conn = conn
         self.peer = peer
         self.tx = tx
@@ -170,10 +176,13 @@ final class Session {
         lastHeard = Date()
         let plain = try rx.open(f)
         let n = plain.prefix(4).reduce(0) { $0 << 8 | Int($1) }
-        guard plain.count >= 4 + n, let h = try JSONSerialization.jsonObject(with: plain.subdata(in: plain.startIndex + 4 ..< plain.startIndex + 4 + n)) as? [String: Any] else {
+        guard plain.count >= 4 + n,
+            let h = try JSONSerialization.jsonObject(
+                with: plain.subdata(in: plain.startIndex + 4..<plain.startIndex + 4 + n)) as? [String: Any]
+        else {
             throw LinkError.protocolError("a malformed message")
         }
-        return (h, plain.subdata(in: plain.startIndex + 4 + n ..< plain.endIndex))
+        return (h, plain.subdata(in: plain.startIndex + 4 + n..<plain.endIndex))
     }
 
     func recordRtt(_ ms: Double) {
@@ -224,7 +233,10 @@ struct RelayMoved: Error { var relay: String }
 ///     R → I  who    { person, name }  sealed; this iPad becomes that person's
 ///     I → R  who    { person, name }  sealed
 @MainActor
-func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?, offer: PairingOffer?, exposure: CodeExposure? = nil, relayCode: String? = nil) async throws -> Session {
+func handshake(
+    _ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?, offer: PairingOffer?,
+    exposure: CodeExposure? = nil, relayCode: String? = nil
+) async throws -> Session {
     var it = conn.frames.makeAsyncIterator()
     func next() async throws -> (raw: Data, msg: [String: Any]) {
         // A Link that never answers is cut off; its stream then ends.
@@ -235,8 +247,12 @@ func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?,
         defer { timer.cancel() }
         let raw = try await it.next(isolation: MainActor.shared)
         guard let raw else { throw LinkError.unreachable("the Link closed the connection during the handshake") }
-        guard let msg = try JSONSerialization.jsonObject(with: raw) as? [String: Any] else { throw LinkError.protocolError("a malformed handshake frame") }
-        if msg["t"] as? String == "refused" { throw LinkError.refused("The Link refused: \(msg["reason"] as? String ?? "no reason given")") }
+        guard let msg = try JSONSerialization.jsonObject(with: raw) as? [String: Any] else {
+            throw LinkError.protocolError("a malformed handshake frame")
+        }
+        if msg["t"] as? String == "refused" {
+            throw LinkError.refused("The Link refused: \(msg["reason"] as? String ?? "no reason given")")
+        }
         return (raw, msg)
     }
 
@@ -248,22 +264,32 @@ func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?,
         "person": ["id": relayCode != nil ? "" : me.person.id, "name": relay ? "" : me.person.name],
         "name": relay ? "" : me.name, "kind": "ipad",
     ]
-    if relayCode != nil { hello["pair"] = "cpace" } else if let offer { hello["pair"] = offer.code != nil ? "code" : offer.offer }
+    if relayCode != nil {
+        hello["pair"] = "cpace"
+    } else if let offer {
+        hello["pair"] = offer.code != nil ? "code" : offer.offer
+    }
     let mine = try JSONSerialization.data(withJSONObject: hello)
     conn.send(mine)
     let (theirsRaw, theirs) = try await next()
     if theirs["t"] as? String == "moved", let to = theirs["relay"] as? String { throw RelayMoved(relay: to) }
     guard theirs["t"] as? String == "hello", theirs["v"] as? Int == 0, theirs["protocol"] as? String == linkProtocol,
-          let key = theirs["key"] as? String, let keyRaw = B64.decode(key), let device = theirs["device"] as? String,
-          let ephRaw = (theirs["eph"] as? String).flatMap(B64.decode)
+        let key = theirs["key"] as? String, let keyRaw = B64.decode(key), let device = theirs["device"] as? String,
+        let ephRaw = (theirs["eph"] as? String).flatMap(B64.decode)
     else { throw LinkError.protocolError("The other device does not speak \(linkProtocol).") }
-    guard deviceID(for: keyRaw) == device else { throw LinkError.protocolError("The Link's device ID does not belong to its key.") }
+    guard deviceID(for: keyRaw) == device else {
+        throw LinkError.protocolError("The Link's device ID does not belong to its key.")
+    }
     if let offer, offer.device != device || offer.key != key {
         throw LinkError.refused("The device that answered is not the one in the pairing code.")
     }
     if offer == nil, relayCode == nil, pairedKey != key {
         // Say why before closing, so the Link's log names the cause instead of "closed during the handshake".
-        if let why = try? JSONSerialization.data(withJSONObject: ["t": "refused", "reason": "this iPad is paired with another Link identity at this address (the Link changed); it stops dialing and asks the person to scan this Link's code"]) {
+        if let why = try? JSONSerialization.data(withJSONObject: [
+            "t": "refused",
+            "reason":
+                "this iPad is paired with another Link identity at this address (the Link changed); it stops dialing and asks the person to scan this Link's code",
+        ]) {
             conn.send(why)
         }
         throw LinkError.linkChanged(theirs["name"] as? String ?? "")
@@ -275,27 +301,37 @@ func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?,
         let cp = try Cpace(code: code, transcript: transcript)
         conn.send(try JSONSerialization.data(withJSONObject: ["t": "cpace", "y": B64.encode(cp.share)]))
         let (_, c) = try await next()
-        guard c["t"] as? String == "cpace", let y = (c["y"] as? String).flatMap(B64.decode) else { throw LinkError.protocolError("The Link broke off the code check.") }
+        guard c["t"] as? String == "cpace", let y = (c["y"] as? String).flatMap(B64.decode) else {
+            throw LinkError.protocolError("The Link broke off the code check.")
+        }
         let secret = try cp.secret(theirs: y, initiator: true, transcript: transcript)
         let auth: [String: Any] = [
             "t": "auth", "sig": B64.encode(try me.key.signature(for: label("auth i"))),
-            "mac": B64.encode(Data(HMAC<SHA256>.authenticationCode(for: label("pair i"), using: SymmetricKey(data: secret)))),
+            "mac": B64.encode(
+                Data(HMAC<SHA256>.authenticationCode(for: label("pair i"), using: SymmetricKey(data: secret)))),
         ]
         conn.send(try JSONSerialization.data(withJSONObject: auth))
         // A wrong code: the Link answers `refused` (next() throws) instead of its auth.
         let (_, a) = try await next()
         let want = Data(HMAC<SHA256>.authenticationCode(for: label("pair r"), using: SymmetricKey(data: secret)))
-        guard a["t"] as? String == "auth", let mac = (a["mac"] as? String).flatMap(B64.decode), mac == want else { throw LinkError.refused("The Link refused: wrong pairing code") }
-        guard let sig = (a["sig"] as? String).flatMap(B64.decode), try Curve25519.Signing.PublicKey(rawRepresentation: keyRaw).isValidSignature(sig, for: label("auth r"))
+        guard a["t"] as? String == "auth", let mac = (a["mac"] as? String).flatMap(B64.decode), mac == want else {
+            throw LinkError.refused("The Link refused: wrong pairing code")
+        }
+        guard let sig = (a["sig"] as? String).flatMap(B64.decode),
+            try Curve25519.Signing.PublicKey(rawRepresentation: keyRaw).isValidSignature(sig, for: label("auth r"))
         else { throw LinkError.refused("The Link did not prove its key.") }
-        let s = try session(conn, eph: eph, ephRaw: ephRaw, transcript: transcript, peer: PeerInfo(device: device, key: key, person: Person(id: "", name: ""), name: ""), it: it)
+        let s = try session(
+            conn, eph: eph, ephRaw: ephRaw, transcript: transcript,
+            peer: PeerInfo(device: device, key: key, person: Person(id: "", name: ""), name: ""), it: it)
         // Who the Link is, inside the session; this iPad becomes its person's.
         let timer = Task { [conn] in
             try await Task.sleep(for: .seconds(10))
             conn.close()
         }
         defer { timer.cancel() }
-        guard let (w, _) = try await s.next(), w["t"] as? String == "who", let p = w["person"] as? [String: Any], let pid = p["id"] as? String, !pid.isEmpty else {
+        guard let (w, _) = try await s.next(), w["t"] as? String == "who", let p = w["person"] as? [String: Any],
+            let pid = p["id"] as? String, !pid.isEmpty
+        else {
             throw LinkError.protocolError("The Link didn't say who it is after the code check.")
         }
         let person = Person(id: pid, name: p["name"] as? String ?? "")
@@ -308,46 +344,70 @@ func handshake(_ conn: any FrameChannel, me: DeviceIdentity, pairedKey: String?,
     if let code = offer?.code {
         for (round, digit) in code.enumerated() {
             let commit = { (n: Data, who: String) in
-                Data(HMAC<SHA256>.authenticationCode(for: Data("\(linkProtocol) code \(who) \(round) \(digit) ".utf8) + transcript, using: SymmetricKey(data: n)))
+                Data(
+                    HMAC<SHA256>.authenticationCode(
+                        for: Data("\(linkProtocol) code \(who) \(round) \(digit) ".utf8) + transcript,
+                        using: SymmetricKey(data: n)))
             }
             let n = SymmetricKey(size: .bits128).withUnsafeBytes { Data($0) }
             conn.send(try JSONSerialization.data(withJSONObject: ["t": "commit", "c": B64.encode(commit(n, "i"))]))
             let (_, c) = try await next()
-            guard c["t"] as? String == "commit", let theirC = (c["c"] as? String).flatMap(B64.decode) else { throw LinkError.protocolError("The Link broke off the code check.") }
+            guard c["t"] as? String == "commit", let theirC = (c["c"] as? String).flatMap(B64.decode) else {
+                throw LinkError.protocolError("The Link broke off the code check.")
+            }
             exposure?.revealed = true
             conn.send(try JSONSerialization.data(withJSONObject: ["t": "reveal", "n": B64.encode(n)]))
             let (_, r) = try await next()
-            guard r["t"] as? String == "reveal", let theirN = (r["n"] as? String).flatMap(B64.decode) else { throw LinkError.protocolError("The Link broke off the code check.") }
+            guard r["t"] as? String == "reveal", let theirN = (r["n"] as? String).flatMap(B64.decode) else {
+                throw LinkError.protocolError("The Link broke off the code check.")
+            }
             guard commit(theirN, "r") == theirC else { throw LinkError.refused("The Link refused: wrong pairing code") }
         }
-        secret = Data(SHA256.hash(data: Data(linkProtocol.utf8) + Data(" code secret ".utf8) + Data(code.utf8) + transcript))
+        secret = Data(
+            SHA256.hash(data: Data(linkProtocol.utf8) + Data(" code secret ".utf8) + Data(code.utf8) + transcript))
     }
     var auth: [String: Any] = ["t": "auth", "sig": B64.encode(try me.key.signature(for: label("auth i")))]
     if offer != nil {
-        auth["mac"] = B64.encode(Data(HMAC<SHA256>.authenticationCode(for: label("pair i"), using: SymmetricKey(data: secret))))
+        auth["mac"] = B64.encode(
+            Data(HMAC<SHA256>.authenticationCode(for: label("pair i"), using: SymmetricKey(data: secret))))
     }
     conn.send(try JSONSerialization.data(withJSONObject: auth))
     let (_, a) = try await next()
     guard a["t"] as? String == "auth", let sig = (a["sig"] as? String).flatMap(B64.decode),
-          try Curve25519.Signing.PublicKey(rawRepresentation: keyRaw).isValidSignature(sig, for: label("auth r"))
+        try Curve25519.Signing.PublicKey(rawRepresentation: keyRaw).isValidSignature(sig, for: label("auth r"))
     else { throw LinkError.refused("The Link did not prove its key.") }
     if let offer {
         let want = Data(HMAC<SHA256>.authenticationCode(for: label("pair r"), using: SymmetricKey(data: secret)))
-        guard let mac = (a["mac"] as? String).flatMap(B64.decode), mac == want else { throw LinkError.refused("The Link does not know this pairing code's secret.") }
+        guard let mac = (a["mac"] as? String).flatMap(B64.decode), mac == want else {
+            throw LinkError.refused("The Link does not know this pairing code's secret.")
+        }
     }
 
     let person = theirs["person"] as? [String: Any]
-    let peer = PeerInfo(device: device, key: key, person: Person(id: person?["id"] as? String ?? "", name: person?["name"] as? String ?? ""), name: theirs["name"] as? String ?? "Reflex Link")
+    let peer = PeerInfo(
+        device: device, key: key,
+        person: Person(id: person?["id"] as? String ?? "", name: person?["name"] as? String ?? ""),
+        name: theirs["name"] as? String ?? "Reflex Link")
     return try session(conn, eph: eph, ephRaw: ephRaw, transcript: transcript, peer: peer, it: it)
 }
 
 /// The session keys from the X25519 exchange, once the handshake proved both sides.
 @MainActor
-private func session(_ conn: any FrameChannel, eph: Curve25519.KeyAgreement.PrivateKey, ephRaw: Data, transcript: Data, peer: PeerInfo, it: AsyncThrowingStream<Data, Error>.AsyncIterator) throws -> Session {
-    let shared = try eph.sharedSecretFromKeyAgreement(with: Curve25519.KeyAgreement.PublicKey(rawRepresentation: ephRaw))
+private func session(
+    _ conn: any FrameChannel, eph: Curve25519.KeyAgreement.PrivateKey, ephRaw: Data, transcript: Data, peer: PeerInfo,
+    it: AsyncThrowingStream<Data, Error>.AsyncIterator
+) throws -> Session {
+    let shared = try eph.sharedSecretFromKeyAgreement(
+        with: Curve25519.KeyAgreement.PublicKey(rawRepresentation: ephRaw))
     let okm = shared.withUnsafeBytes { Data($0) }
-    let keys = HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: okm), salt: transcript, info: Data("\(linkProtocol) session keys".utf8), outputByteCount: 64)
-        .withUnsafeBytes { Data($0) }
-    let i2r = SymmetricKey(data: keys.prefix(32)), r2i = SymmetricKey(data: keys.suffix(32))
-    return Session(conn: conn, peer: peer, tx: FrameCipher(key: i2r, aad: transcript), rx: FrameCipher(key: r2i, aad: transcript), iterator: it)
+    let keys = HKDF<SHA256>.deriveKey(
+        inputKeyMaterial: SymmetricKey(data: okm), salt: transcript, info: Data("\(linkProtocol) session keys".utf8),
+        outputByteCount: 64
+    )
+    .withUnsafeBytes { Data($0) }
+    let i2r = SymmetricKey(data: keys.prefix(32))
+    let r2i = SymmetricKey(data: keys.suffix(32))
+    return Session(
+        conn: conn, peer: peer, tx: FrameCipher(key: i2r, aad: transcript), rx: FrameCipher(key: r2i, aad: transcript),
+        iterator: it)
 }

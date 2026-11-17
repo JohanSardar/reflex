@@ -44,7 +44,11 @@ struct StatusCapsule: View {
         Button(action: action) {
             HStack(spacing: 7) {
                 Circle().fill(s.color.gradient).frame(width: 9, height: 9)
-                    .overlay { if case .connecting = link.state { Circle().stroke(s.color.opacity(0.4), lineWidth: 4).scaleEffect(1.6) } }
+                    .overlay {
+                        if case .connecting = link.state {
+                            Circle().stroke(s.color.opacity(0.4), lineWidth: 4).scaleEffect(1.6)
+                        }
+                    }
                 Text(shortHeadline(s)).lineLimit(1)
                 if link.pendingSends > 0 {
                     Text("·").foregroundStyle(.secondary)
@@ -61,7 +65,9 @@ struct StatusCapsule: View {
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Capsule())
         .accessibilityIdentifier("connect-button")
-        .accessibilityLabel("Connection: \(s.headline)\(s.approved.isEmpty ? "" : ", agents \(s.approved.map(\.name).joined(separator: ", "))")\(link.pendingSends > 0 ? ", \(link.pendingSends) Sends waiting" : "")")
+        .accessibilityLabel(
+            "Connection: \(s.headline)\(s.approved.isEmpty ? "" : ", agents \(s.approved.map(\.name).joined(separator: ", "))")\(link.pendingSends > 0 ? ", \(link.pendingSends) Sends waiting" : "")"
+        )
     }
 
     private func shortHeadline(_ s: LinkStatus) -> String {
@@ -95,7 +101,8 @@ struct PairSheet: View {
                     Section("Mac") {
                         HStack(spacing: 14) {
                             Image(systemName: "laptopcomputer").font(.title2).foregroundStyle(s.color)
-                                .frame(width: 44, height: 44).background(s.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                                .frame(width: 44, height: 44).background(
+                                    s.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(s.macName).font(.headline)
                                 Text(stateDetail).font(.subheadline).foregroundStyle(.secondary)
@@ -107,11 +114,16 @@ struct PairSheet: View {
                         .accessibilityIdentifier("mac-row")
                         if link.pendingSends > 0 {
                             HStack {
-                                Label(link.pendingSends == 1 ? "1 Send is waiting and goes out when \(s.macName) is back."
-                                      : "\(link.pendingSends) Sends are waiting and go out when \(s.macName) is back.", systemImage: "tray.full")
-                                    .foregroundStyle(.orange)
+                                Label(
+                                    link.pendingSends == 1
+                                        ? "1 Send is waiting and goes out when \(s.macName) is back."
+                                        : "\(link.pendingSends) Sends are waiting and go out when \(s.macName) is back.",
+                                    systemImage: "tray.full"
+                                )
+                                .foregroundStyle(.orange)
                                 Spacer()
-                                if case .connected = link.state {} else {
+                                if case .connected = link.state {
+                                } else {
                                     Button("Retry Now") { link.retryNow() }.buttonStyle(.bordered)
                                 }
                             }
@@ -119,15 +131,19 @@ struct PairSheet: View {
                     }
                     Section {
                         if s.approved.isEmpty && link.agentRequests.isEmpty {
-                            Text("No Agents yet. When an Agent on your Mac asks to receive your Sends, you'll be asked here to allow it.")
-                                .foregroundStyle(.secondary)
+                            Text(
+                                "No Agents yet. When an Agent on your Mac asks to receive your Sends, you'll be asked here to allow it."
+                            )
+                            .foregroundStyle(.secondary)
                         }
                         ForEach(link.agentRequests) { a in
                             HStack {
                                 agentIcon(displayName(a), color: a.color)
                                 VStack(alignment: .leading) {
                                     Text(displayName(a)).font(.headline)
-                                    Text("Wants to receive your Sends · \(agentDetail(a, among: link.agentRequests.map(displayName) + s.approved.map(displayName)))").font(.subheadline).foregroundStyle(.secondary)
+                                    Text(
+                                        "Wants to receive your Sends · \(agentDetail(a, among: link.agentRequests.map(displayName) + s.approved.map(displayName)))"
+                                    ).font(.subheadline).foregroundStyle(.secondary)
                                 }
                                 Spacer()
                                 Button("Don't Allow") { link.decide(a.id, allow: false) }.buttonStyle(.bordered)
@@ -139,32 +155,47 @@ struct PairSheet: View {
                                 agentIcon(displayName(a), color: a.color)
                                 VStack(alignment: .leading) {
                                     Text(displayName(a)).font(.headline)
-                                    Text(agentDetail(a, among: s.approved)).font(.subheadline).foregroundStyle(.secondary)
+                                    Text(agentDetail(a, among: s.approved)).font(.subheadline).foregroundStyle(
+                                        .secondary)
                                 }
                                 Spacer()
                             }
                             .swipeActions {
                                 Button("Revoke", role: .destructive) { link.decide(a.id, allow: false) }
-                                Button("Rename") { renameDraft = displayName(a); renamingAgent = a.id }.tint(.blue)
+                                Button("Rename") {
+                                    renameDraft = displayName(a)
+                                    renamingAgent = a.id
+                                }.tint(.blue)
                             }
                             .contextMenu {
-                                Button("Rename", systemImage: "pencil") { renameDraft = displayName(a); renamingAgent = a.id }
-                                Button("Revoke", systemImage: "hand.raised", role: .destructive) { link.decide(a.id, allow: false) }
+                                Button("Rename", systemImage: "pencil") {
+                                    renameDraft = displayName(a)
+                                    renamingAgent = a.id
+                                }
+                                Button("Revoke", systemImage: "hand.raised", role: .destructive) {
+                                    link.decide(a.id, allow: false)
+                                }
                             }
                         }
                     } header: {
                         Text("Agents")
                     } footer: {
-                        if !s.approved.isEmpty { Text("Swipe an Agent to rename or revoke it. A revoked Agent stops receiving Sends.") }
+                        if !s.approved.isEmpty {
+                            Text("Swipe an Agent to rename or revoke it. A revoked Agent stops receiving Sends.")
+                        }
                     }
                 }
                 Section {
                     if !s.paired {
                         VStack(alignment: .leading, spacing: 10) {
-                            Image("Logo").resizable().frame(width: 56, height: 56).clipShape(.rect(cornerRadius: 13, style: .continuous)).accessibilityHidden(true)
+                            Image("Logo").resizable().frame(width: 56, height: 56).clipShape(
+                                .rect(cornerRadius: 13, style: .continuous)
+                            ).accessibilityHidden(true)
                             Text("Pair with your Mac").font(.title3.bold())
-                            Text("Ask your agent on the Mac to connect your iPad. It gives you a 6-digit code: type it here.")
-                                .foregroundStyle(.secondary)
+                            Text(
+                                "Ask your agent on the Mac to connect your iPad. It gives you a 6-digit code: type it here."
+                            )
+                            .foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 6)
                     }
@@ -189,7 +220,9 @@ struct PairSheet: View {
                 } header: {
                     Text(s.paired ? "Pair Again or Another Mac" : "Pairing Code")
                 } footer: {
-                    Text("Your iPad looks for the Mac on this Wi-Fi and nearby, then through the relay, so the Mac can be anywhere. Typing the code also lets in the agent that gave it to you.")
+                    Text(
+                        "Your iPad looks for the Mac on this Wi-Fi and nearby, then through the relay, so the Mac can be anywhere. Typing the code also lets in the agent that gave it to you."
+                    )
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("pair-error") }
@@ -200,14 +233,24 @@ struct PairSheet: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .onAppear {
                 // A pasted or opened reflex://pair link pairs straight away; a stray value is cleared.
-                if code.hasPrefix("reflex://") { let c = code; code = ""; Task { await pair(c) } }
-                else { code = digitsOnly(code) }
+                if code.hasPrefix("reflex://") {
+                    let c = code
+                    code = ""
+                    Task { await pair(c) }
+                } else {
+                    code = digitsOnly(code)
+                }
             }
-            .alert("Rename Agent", isPresented: Binding(get: { renamingAgent != nil }, set: { if !$0 { renamingAgent = nil } })) {
+            .alert(
+                "Rename Agent",
+                isPresented: Binding(get: { renamingAgent != nil }, set: { if !$0 { renamingAgent = nil } })
+            ) {
                 TextField("Name", text: $renameDraft).accessibilityIdentifier("rename-field")
                 Button("Cancel", role: .cancel) {}
                 Button("Rename") { if let id = renamingAgent { setNickname(id, renameDraft) } }
-            } message: { Text("The name is only shown on this iPad.") }
+            } message: {
+                Text("The name is only shown on this iPad.")
+            }
         }
         .presentationSizing(.form)
     }
@@ -215,7 +258,9 @@ struct PairSheet: View {
     private var stateDetail: String {
         switch link.state {
         case .connected:
-            let path = link.activeTransport.map { $0 == "p2p" ? "peer-to-peer Wi-Fi" : $0 == "relay" ? "the Relay" : "Wi-Fi" } ?? "Wi-Fi"
+            let path =
+                link.activeTransport.map { $0 == "p2p" ? "peer-to-peer Wi-Fi" : $0 == "relay" ? "the Relay" : "Wi-Fi" }
+                ?? "Wi-Fi"
             return "Connected over \(path)"
         case .connecting: return "Connecting…"
         case .offline: return "Not reachable right now. Sends wait here until it's back."
@@ -224,7 +269,9 @@ struct PairSheet: View {
         }
     }
 
-    private var nicknames: [String: String] { (try? JSONDecoder().decode([String: String].self, from: nicknamesData)) ?? [:] }
+    private var nicknames: [String: String] {
+        (try? JSONDecoder().decode([String: String].self, from: nicknamesData)) ?? [:]
+    }
 
     private func setNickname(_ id: String, _ name: String) {
         var n = nicknames
@@ -238,17 +285,21 @@ struct PairSheet: View {
 
     /// What tells this Agent apart: its colour, when it asked, and a short ID when two share a name.
     private func agentDetail(_ a: AgentInfo, among all: [AgentInfo]) -> String {
-        agentDetail(id: a.id, name: displayName(a), color: a.color, at: a.requestedAt,
-                    status: "Allowed", names: all.map(displayName))
+        agentDetail(
+            id: a.id, name: displayName(a), color: a.color, at: a.requestedAt,
+            status: "Allowed", names: all.map(displayName))
     }
     private func agentDetail(_ a: AgentRequest, among names: [String]) -> String {
         agentDetail(id: a.id, name: displayName(a), color: a.color, at: a.requestedAt, status: nil, names: names)
     }
-    private func agentDetail(id: String, name: String, color: String, at: Int64?, status: String?, names: [String]) -> String {
+    private func agentDetail(id: String, name: String, color: String, at: Int64?, status: String?, names: [String])
+        -> String
+    {
         var parts: [String] = status.map { [$0] } ?? []
         parts.append(color.capitalized)
         if let at {
-            parts.append("asked " + Date(timeIntervalSince1970: Double(at) / 1000).formatted(.relative(presentation: .named)))
+            parts.append(
+                "asked " + Date(timeIntervalSince1970: Double(at) / 1000).formatted(.relative(presentation: .named)))
         }
         if names.filter({ $0 == name }).count > 1 {
             parts.append("ID " + String(id.suffix(4)).uppercased())

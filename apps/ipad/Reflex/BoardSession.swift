@@ -17,7 +17,9 @@ final class BoardSession {
     let files: BoardFiles
     var notice: String?
     private(set) var objects: [BoardObject]
-    var selection: Set<String> = [] { didSet { if selection != oldValue, editing.map({ !selection.contains($0) }) ?? false { editing = nil } } }
+    var selection: Set<String> = [] {
+        didSet { if selection != oldValue, editing.map({ !selection.contains($0) }) ?? false { editing = nil } }
+    }
     /// Strokes picked up by the lasso, by Reflex ID.
     var selectedStrokes: Set<String> = []
     /// The object whose text is being typed.
@@ -76,7 +78,9 @@ final class BoardSession {
         library.update(id) { $0.opened = Date() }
     }
 
-    var meta: BoardMeta { library.boards[id] ?? BoardMeta(id: id, title: "Untitled", created: Date(), modified: Date()) }
+    var meta: BoardMeta {
+        library.boards[id] ?? BoardMeta(id: id, title: "Untitled", created: Date(), modified: Date())
+    }
 
     func updateMeta(_ change: (inout BoardMeta) -> Void) { library.update(id, change) }
 
@@ -126,7 +130,8 @@ final class BoardSession {
     func saveNow() {
         saveTask?.cancel()
         files.save(objects: objects)
-        let text = objects.flatMap { o in [o.text] + (o.table?.cells.flatMap { $0 } ?? []) }.filter { !$0.isEmpty }.joined(separator: "\n")
+        let text = objects.flatMap { o in [o.text] + (o.table?.cells.flatMap { $0 } ?? []) }.filter { !$0.isEmpty }
+            .joined(separator: "\n")
         updateMeta {
             $0.text = text
             if !isEmpty { $0.hasContent = true }
@@ -146,12 +151,16 @@ final class BoardSession {
         let rect = contentBounds ?? CGRect(x: 0, y: 0, width: 800, height: 600)
         let paper = meta.paper
         let area = rect.insetBy(dx: -40, dy: -40)
-        let image = BoardRenderer.image(of: area, drawing: ink.drawing, objects: objects, files: files, paper: paper, maxSide: 640, dark: false)
-        let darkImage = BoardRenderer.image(of: area, drawing: ink.drawing, objects: objects, files: files, paper: paper, maxSide: 640, dark: true)
+        let image = BoardRenderer.image(
+            of: area, drawing: ink.drawing, objects: objects, files: files, paper: paper, maxSide: 640, dark: false)
+        let darkImage = BoardRenderer.image(
+            of: area, drawing: ink.drawing, objects: objects, files: files, paper: paper, maxSide: 640, dark: true)
         guard let data = image?.pngData() else { return }
         let darkData = darkImage?.pngData()
-        let url = files.thumbnail, darkURL = files.thumbnailDark
-        let library = library, id = id
+        let url = files.thumbnail
+        let darkURL = files.thumbnailDark
+        let library = library
+        let id = id
         BoardFiles.queue.async {
             try? data.write(to: url, options: .atomic)
             if let darkData { try? darkData.write(to: darkURL, options: .atomic) }
@@ -173,7 +182,10 @@ final class BoardSession {
         if undoStack.count > 60 { undoStack.removeFirst(undoStack.count - 60) }
         redoStack.removeAll()
         refreshUndo()
-        updateMeta { $0.modified = Date(); $0.hasContent = true }
+        updateMeta {
+            $0.modified = Date()
+            $0.hasContent = true
+        }
         scheduleSave()
         scheduleHistorySave()
     }
@@ -205,7 +217,7 @@ final class BoardSession {
     }
 
     /// Undoes several steps at once, from the history menu.
-    func undo(steps: Int) { for _ in 0 ..< steps { undo() } }
+    func undo(steps: Int) { for _ in 0..<steps { undo() } }
 
     private func apply(_ s: Snapshot) {
         if s.drawing.dataRepresentation() != ink.drawing.dataRepresentation() { ink.restore(s.drawing) }
@@ -241,9 +253,12 @@ final class BoardSession {
     func saveHistory() {
         let keep = 30
         let encode = { (steps: [(name: String, state: Snapshot)]) in
-            steps.suffix(keep).map { SavedStep(name: $0.name, drawing: $0.state.drawing.dataRepresentation(), objects: $0.state.objects) }
+            steps.suffix(keep).map {
+                SavedStep(name: $0.name, drawing: $0.state.drawing.dataRepresentation(), objects: $0.state.objects)
+            }
         }
-        let saved = SavedHistory(undo: encode(undoStack), redo: encode(redoStack), current: ink.drawing.dataRepresentation())
+        let saved = SavedHistory(
+            undo: encode(undoStack), redo: encode(redoStack), current: ink.drawing.dataRepresentation())
         let url = files.history
         BoardFiles.queue.async {
             if let data = try? BoardFiles.encoder.encode(saved) { try? data.write(to: url, options: .atomic) }
@@ -256,17 +271,23 @@ final class BoardSession {
         if data == drawing.dataRepresentation() { return true }
         guard let saved = try? PKDrawing(data: data), saved.strokes.count == drawing.strokes.count else { return false }
         return zip(saved.strokes, drawing.strokes).allSatisfy { a, b in
-            a.path.count == b.path.count && abs(a.renderBounds.minX - b.renderBounds.minX) < 0.5 && abs(a.renderBounds.minY - b.renderBounds.minY) < 0.5
+            a.path.count == b.path.count && abs(a.renderBounds.minX - b.renderBounds.minX) < 0.5
+                && abs(a.renderBounds.minY - b.renderBounds.minY) < 0.5
                 && abs(a.renderBounds.width - b.renderBounds.width) < 0.5
         }
     }
 
     private func loadHistory() {
         guard let data = try? Data(contentsOf: files.history),
-              let saved = try? BoardFiles.decoder.decode(SavedHistory.self, from: data),
-              Self.sameInk(saved.current, ink.drawing) else { return }
+            let saved = try? BoardFiles.decoder.decode(SavedHistory.self, from: data),
+            Self.sameInk(saved.current, ink.drawing)
+        else { return }
         let decode = { (steps: [SavedStep]) in
-            steps.compactMap { s in (try? PKDrawing(data: s.drawing)).map { (name: s.name, state: Snapshot(drawing: $0, objects: s.objects)) } }
+            steps.compactMap { s in
+                (try? PKDrawing(data: s.drawing)).map {
+                    (name: s.name, state: Snapshot(drawing: $0, objects: s.objects))
+                }
+            }
         }
         undoStack = decode(saved.undo)
         redoStack = decode(saved.redo)
@@ -322,12 +343,15 @@ final class BoardSession {
         let fit = min(1, usable.width * 0.8 / max(size.width, 1), usable.height * 0.8 / max(size.height, 1))
         size = CGSize(width: size.width * fit, height: size.height * fit)
         let c = point ?? freeSpot(for: size, in: usable)
-        return CGRect(x: c.x - size.width / 2, y: c.y - size.height / 2, width: size.width, height: size.height).integral
+        return CGRect(x: c.x - size.width / 2, y: c.y - size.height / 2, width: size.width, height: size.height)
+            .integral
     }
 
     /// The part of the view not under the chrome (top bar, bottom capsules, the palette), in Space points.
     private var usableRect: CGRect {
-        let z = ink.zoomScale, o = ink.contentOffset, size = ink.canvasView.bounds.size
+        let z = ink.zoomScale
+        let o = ink.contentOffset
+        let size = ink.canvasView.bounds.size
         let top: CGFloat = 96
         var bottom: CGFloat = 92
         let pal = ink.pickerObscured
@@ -338,8 +362,10 @@ final class BoardSession {
         if ink.pickerVisible, !pal.isNull, pal.minX > size.width * 0.6, pal.height > size.height * 0.4 {
             right = max(right, size.width - pal.minX + 12)
         }
-        let screen = CGRect(x: 20, y: top, width: max(size.width - 20 - right, 100), height: max(size.height - top - bottom, 100))
-        return CGRect(x: (screen.minX + o.x) / z, y: (screen.minY + o.y) / z, width: screen.width / z, height: screen.height / z)
+        let screen = CGRect(
+            x: 20, y: top, width: max(size.width - 20 - right, 100), height: max(size.height - top - bottom, 100))
+        return CGRect(
+            x: (screen.minX + o.x) / z, y: (screen.minY + o.y) / z, width: screen.width / z, height: screen.height / z)
     }
 
     /// The centre of a free spot for a new object. Objects and ink count as taken; the spot nearest
@@ -352,7 +378,9 @@ final class BoardSession {
         var taken = objects.filter { !$0.isConnector }.map(\.frame)
         taken += ink.strokes.map(\.bounds)
         taken = taken.filter { $0.intersects(search) }.map { $0.insetBy(dx: -gap / 2, dy: -gap / 2) }
-        func rect(_ p: CGPoint) -> CGRect { CGRect(x: p.x - size.width / 2, y: p.y - size.height / 2, width: size.width, height: size.height) }
+        func rect(_ p: CGPoint) -> CGRect {
+            CGRect(x: p.x - size.width / 2, y: p.y - size.height / 2, width: size.width, height: size.height)
+        }
         func covered(_ p: CGPoint) -> CGFloat {
             let f = rect(p)
             return taken.reduce(0) { sum, t in
@@ -366,7 +394,10 @@ final class BoardSession {
             var y = area.minY + size.height / 2
             while y <= area.maxY - size.height / 2 + 0.5 {
                 var x = area.minX + size.width / 2
-                while x <= area.maxX - size.width / 2 + 0.5 { out.append(CGPoint(x: x, y: y)); x += step }
+                while x <= area.maxX - size.width / 2 + 0.5 {
+                    out.append(CGPoint(x: x, y: y))
+                    x += step
+                }
                 y += step
             }
             return out.isEmpty ? [c] : out
@@ -379,7 +410,9 @@ final class BoardSession {
             ink.show(center: away, zoom: ink.zoomScale, animated: true)
             return away
         }
-        return inView.min { (covered($0), hypot($0.x - c.x, $0.y - c.y)) < (covered($1), hypot($1.x - c.x, $1.y - c.y)) } ?? c
+        return inView.min {
+            (covered($0), hypot($0.x - c.x, $0.y - c.y)) < (covered($1), hypot($1.x - c.x, $1.y - c.y))
+        } ?? c
     }
 
     func addSticky(at point: CGPoint? = nil) {
@@ -389,7 +422,10 @@ final class BoardSession {
 
     func addText(at point: CGPoint? = nil) {
         let f = newFrame(CGSize(width: 260, height: 60), at: point)
-        insert(BoardObject(kind: .text, frame: f, fontSize: (28 * f.width / 260).rounded(), align: .leading, shadow: false), edit: true)
+        insert(
+            BoardObject(
+                kind: .text, frame: f, fontSize: (28 * f.width / 260).rounded(), align: .leading, shadow: false),
+            edit: true)
     }
 
     func addShape(_ kind: ShapeKind, at point: CGPoint? = nil) {
@@ -404,17 +440,30 @@ final class BoardSession {
             insert(o)
             return
         }
-        let size = kind == .terminator ? CGSize(width: 240, height: 100) : kind == .parallelogram || kind == .blockArrow ? CGSize(width: 240, height: 150) : CGSize(width: 180, height: 180)
-        insert(BoardObject(kind: .shape, frame: newFrame(size, at: point), fill: Palette.fills[0], stroke: nil, dash: .none, fontSize: 20, shape: kind, shadow: false))
+        let size =
+            kind == .terminator
+            ? CGSize(width: 240, height: 100)
+            : kind == .parallelogram || kind == .blockArrow
+                ? CGSize(width: 240, height: 150) : CGSize(width: 180, height: 180)
+        insert(
+            BoardObject(
+                kind: .shape, frame: newFrame(size, at: point), fill: Palette.fills[0], stroke: nil, dash: .none,
+                fontSize: 20, shape: kind, shadow: false))
     }
 
     func addSymbol(_ name: String, at point: CGPoint? = nil) {
-        insert(BoardObject(kind: .symbol, frame: newFrame(CGSize(width: 160, height: 160), at: point), fill: "#0A84FF", symbol: name, shadow: false))
+        insert(
+            BoardObject(
+                kind: .symbol, frame: newFrame(CGSize(width: 160, height: 160), at: point), fill: "#0A84FF",
+                symbol: name, shadow: false))
     }
 
     func addTable(at point: CGPoint? = nil) {
-        insert(BoardObject(kind: .table, frame: newFrame(CGSize(width: 360, height: 160), at: point), fill: "#FFFFFF", stroke: "#AEAEB2", fontSize: 17, align: .leading,
-                           table: TableData(cells: [["", ""], ["", ""]]), shadow: false))
+        insert(
+            BoardObject(
+                kind: .table, frame: newFrame(CGSize(width: 360, height: 160), at: point), fill: "#FFFFFF",
+                stroke: "#AEAEB2", fontSize: 17, align: .leading,
+                table: TableData(cells: [["", ""], ["", ""]]), shadow: false))
     }
 
     func addImage(_ data: Data, at point: CGPoint? = nil) {
@@ -428,17 +477,25 @@ final class BoardSession {
         let maxSide: CGFloat = 520
         let s = image.size
         let k = min(1, maxSide / max(s.width, s.height, 1))
-        insert(BoardObject(kind: .image, frame: newFrame(CGSize(width: s.width * k, height: s.height * k), at: point), image: name, shadow: false))
+        insert(
+            BoardObject(
+                kind: .image, frame: newFrame(CGSize(width: s.width * k, height: s.height * k), at: point), image: name,
+                shadow: false))
     }
 
     func deleteSelection() {
         let before = current
         let ids = selection
         if !selectedStrokes.isEmpty { quietly { ink.removeStrokes(selectedStrokes) } }
-        objects.removeAll { ids.contains($0.id) || ($0.isConnector && (ids.contains($0.from?.object ?? "-") || ids.contains($0.to?.object ?? "-"))) }
+        objects.removeAll {
+            ids.contains($0.id)
+                || ($0.isConnector && (ids.contains($0.from?.object ?? "-") || ids.contains($0.to?.object ?? "-")))
+        }
         selection = []
         selectedStrokes = []
-        if objects.count != before.objects.count || before.drawing.strokes.count != ink.drawing.strokes.count { push("Delete", before) }
+        if objects.count != before.objects.count || before.drawing.strokes.count != ink.drawing.strokes.count {
+            push("Delete", before)
+        }
     }
 
     func duplicateSelection() {
@@ -450,21 +507,33 @@ final class BoardSession {
             c.id = BoardObject(kind: o.kind, frame: .zero).id
             c.frame = o.frame.offsetBy(dx: 30, dy: 30)
             c.locked = false
-            c.from?.point.x += 30; c.from?.point.y += 30
-            c.to?.point.x += 30; c.to?.point.y += 30
+            c.from?.point.x += 30
+            c.from?.point.y += 30
+            c.to?.point.x += 30
+            c.to?.point.y += 30
             map[o.id] = c.id
             copies.append(c)
         }
         // Copies of grouped things form a new group, and connectors between copies stick to the copies.
         var groups: [String: String] = [:]
         for i in copies.indices {
-            if let g = copies[i].group { copies[i].group = groups[g] ?? { let n = "g_" + UUID().uuidString.prefix(8); groups[g] = n; return n }() }
+            if let g = copies[i].group {
+                copies[i].group =
+                    groups[g]
+                    ?? {
+                        let n = "g_" + UUID().uuidString.prefix(8)
+                        groups[g] = n
+                        return n
+                    }()
+            }
             if let f = copies[i].from?.object { copies[i].from?.object = map[f] }
             if let t = copies[i].to?.object { copies[i].to?.object = map[t] }
         }
         objects.append(contentsOf: copies)
         var strokes: [String] = []
-        if !selectedStrokes.isEmpty { quietly { strokes = ink.duplicateStrokes(selectedStrokes, offset: CGPoint(x: 30, y: 30)) } }
+        if !selectedStrokes.isEmpty {
+            quietly { strokes = ink.duplicateStrokes(selectedStrokes, offset: CGPoint(x: 30, y: 30)) }
+        }
         selection = Set(copies.map(\.id))
         selectedStrokes = Set(strokes)
         push("Duplicate", before)
@@ -553,10 +622,14 @@ final class BoardSession {
     }
 
     func distribute(horizontally: Bool) {
-        let list = selectedObjects.filter { !$0.isConnector && !$0.locked }.sorted { horizontally ? $0.frame.minX < $1.frame.minX : $0.frame.minY < $1.frame.minY }
+        let list = selectedObjects.filter { !$0.isConnector && !$0.locked }.sorted {
+            horizontally ? $0.frame.minX < $1.frame.minX : $0.frame.minY < $1.frame.minY
+        }
         guard list.count > 2 else { return }
         let total = list.reduce(0) { $0 + (horizontally ? $1.frame.width : $1.frame.height) }
-        let span = horizontally ? list.last!.frame.maxX - list.first!.frame.minX : list.last!.frame.maxY - list.first!.frame.minY
+        let span =
+            horizontally
+            ? list.last!.frame.maxX - list.first!.frame.minX : list.last!.frame.maxY - list.first!.frame.minY
         let gap = (span - total) / CGFloat(list.count - 1)
         var pos = horizontally ? list.first!.frame.minX : list.first!.frame.minY
         var target: [String: CGFloat] = [:]
@@ -580,7 +653,10 @@ final class BoardSession {
 
     func beginMove() {
         gestureStart = Dictionary(uniqueKeysWithValues: selectedObjects.map { ($0.id, $0.frame) })
-        gestureEnds = Dictionary(uniqueKeysWithValues: selectedObjects.filter(\.isConnector).map { ($0.id, ($0.from?.point ?? .zero, $0.to?.point ?? .zero)) })
+        gestureEnds = Dictionary(
+            uniqueKeysWithValues: selectedObjects.filter(\.isConnector).map {
+                ($0.id, ($0.from?.point ?? .zero, $0.to?.point ?? .zero))
+            })
         gestureStrokesMoved = .zero
         undoStack.append(("Move", current))
         redoStack.removeAll()
@@ -610,7 +686,9 @@ final class BoardSession {
         for i in objects.indices {
             guard let start = movable[objects[i].id] else { continue }
             if objects[i].isConnector, let ends = gestureEnds[objects[i].id] {
-                if objects[i].from?.object == nil { objects[i].from?.point = CGPoint(x: ends.0.x + d.x, y: ends.0.y + d.y) }
+                if objects[i].from?.object == nil {
+                    objects[i].from?.point = CGPoint(x: ends.0.x + d.x, y: ends.0.y + d.y)
+                }
                 if objects[i].to?.object == nil { objects[i].to?.point = CGPoint(x: ends.1.x + d.x, y: ends.1.y + d.y) }
             } else {
                 objects[i].frame.origin = CGPoint(x: start.minX + d.x, y: start.minY + d.y)
@@ -633,7 +711,10 @@ final class BoardSession {
         }
         gestureStart = [:]
         refreshUndo()
-        updateMeta { $0.modified = Date(); $0.hasContent = true }
+        updateMeta {
+            $0.modified = Date()
+            $0.hasContent = true
+        }
         scheduleSave()
     }
 
@@ -660,7 +741,10 @@ final class BoardSession {
     /// Moves a connector's end, sticking it to an object under it.
     func moveEnd(_ id: String, start: Bool, to p: CGPoint, attach: Bool) {
         guard let i = objects.firstIndex(where: { $0.id == id }) else { return }
-        let target = attach ? objects.last(where: { !$0.isConnector && $0.id != id && $0.frame.insetBy(dx: -8, dy: -8).contains(p) })?.id : nil
+        let target =
+            attach
+            ? objects.last(where: { !$0.isConnector && $0.id != id && $0.frame.insetBy(dx: -8, dy: -8).contains(p) })?
+                .id : nil
         let end = ConnectorEnd(object: target, point: p)
         if start { objects[i].from = end } else { objects[i].to = end }
         reflowConnectors()
@@ -679,7 +763,9 @@ final class BoardSession {
 
     func endConnector(_ id: String) {
         // A connector dragged nowhere is dropped.
-        if let o = object(id), let a = o.from?.point, let b = o.to?.point, hypot(a.x - b.x, a.y - b.y) < 20, o.to?.object == nil {
+        if let o = object(id), let a = o.from?.point, let b = o.to?.point, hypot(a.x - b.x, a.y - b.y) < 20,
+            o.to?.object == nil
+        {
             objects.removeAll { $0.id == id }
             undoStack.removeLast()
         } else {
@@ -695,8 +781,16 @@ final class BoardSession {
         let ovals = Set(objects.filter { $0.kind == .shape && $0.shape == .circle }.map(\.id))
         for i in objects.indices where objects[i].isConnector {
             var o = objects[i]
-            if let f = o.from?.object, let r = frames[f] { o.from?.point = ConnectorGeometry.edgePoint(of: r, toward: o.to.map { pointFor($0, frames) } ?? CGPoint(x: r.midX, y: r.midY), oval: ovals.contains(f)) }
-            if let t = o.to?.object, let r = frames[t] { o.to?.point = ConnectorGeometry.edgePoint(of: r, toward: o.from.map { pointFor($0, frames) } ?? CGPoint(x: r.midX, y: r.midY), oval: ovals.contains(t)) }
+            if let f = o.from?.object, let r = frames[f] {
+                o.from?.point = ConnectorGeometry.edgePoint(
+                    of: r, toward: o.to.map { pointFor($0, frames) } ?? CGPoint(x: r.midX, y: r.midY),
+                    oval: ovals.contains(f))
+            }
+            if let t = o.to?.object, let r = frames[t] {
+                o.to?.point = ConnectorGeometry.edgePoint(
+                    of: r, toward: o.from.map { pointFor($0, frames) } ?? CGPoint(x: r.midX, y: r.midY),
+                    oval: ovals.contains(t))
+            }
             if let a = o.from?.point, let b = o.to?.point {
                 o.frame = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
             }
@@ -719,24 +813,40 @@ final class BoardSession {
         var grid: CGFloat
     }
 
-    private func snap(_ r: CGRect, settings: GuideSettings, excluding: Set<String>) -> (CGPoint, (x: [CGFloat], y: [CGFloat])) {
+    private func snap(_ r: CGRect, settings: GuideSettings, excluding: Set<String>) -> (
+        CGPoint, (x: [CGFloat], y: [CGFloat])
+    ) {
         let threshold = 6 / max(ink.zoomScale, 0.1)
         var dx: CGFloat?
         var dy: CGFloat?
         var gx: [CGFloat] = []
         var gy: [CGFloat] = []
-        let others = objects.filter { !excluding.contains($0.id) && !$0.isConnector && $0.frame.intersects(ink.visibleRect.insetBy(dx: -200, dy: -200)) }
-        func consider(_ value: CGFloat, _ targets: [CGFloat], _ current: inout CGFloat?, _ lines: inout [CGFloat], offset: CGFloat) {
+        let others = objects.filter {
+            !excluding.contains($0.id) && !$0.isConnector
+                && $0.frame.intersects(ink.visibleRect.insetBy(dx: -200, dy: -200))
+        }
+        func consider(
+            _ value: CGFloat, _ targets: [CGFloat], _ current: inout CGFloat?, _ lines: inout [CGFloat], offset: CGFloat
+        ) {
             for t in targets where abs(t - value) < threshold {
-                if current == nil || abs(t - value) < abs(current!) { current = t - value; lines = [t] }
+                if current == nil || abs(t - value) < abs(current!) {
+                    current = t - value
+                    lines = [t]
+                }
             }
             _ = offset
         }
         var xs: [CGFloat] = []
         var ys: [CGFloat] = []
         for o in others {
-            if settings.edges { xs += [o.frame.minX, o.frame.maxX]; ys += [o.frame.minY, o.frame.maxY] }
-            if settings.center { xs.append(o.frame.midX); ys.append(o.frame.midY) }
+            if settings.edges {
+                xs += [o.frame.minX, o.frame.maxX]
+                ys += [o.frame.minY, o.frame.maxY]
+            }
+            if settings.center {
+                xs.append(o.frame.midX)
+                ys.append(o.frame.midY)
+            }
         }
         if settings.center {
             let v = ink.visibleRect
@@ -747,7 +857,9 @@ final class BoardSession {
         for value in settings.edges ? [r.minY, r.maxY, r.midY] : [r.midY] { consider(value, ys, &dy, &gy, offset: 0) }
         // Equal spacing: the gap to the nearest neighbour matches the gap between two others.
         if settings.spacing, dx == nil {
-            let row = others.filter { $0.frame.maxY > r.minY && $0.frame.minY < r.maxY }.sorted { $0.frame.minX < $1.frame.minX }
+            let row = others.filter { $0.frame.maxY > r.minY && $0.frame.minY < r.maxY }.sorted {
+                $0.frame.minX < $1.frame.minX
+            }
             if row.count >= 2 {
                 let gaps = zip(row, row.dropFirst()).map { $1.frame.minX - $0.frame.maxX }.filter { $0 > 0 }
                 if let left = row.last(where: { $0.frame.maxX <= r.minX + threshold }) {
@@ -799,7 +911,11 @@ final class BoardSession {
             var item: [String: Any] = ["si.eilmer.reflex.objects": data]
             let text = list.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n")
             if !text.isEmpty { item["public.utf8-plain-text"] = text }
-            if list.count == 1, let name = list[0].image, let img = UIImage(contentsOfFile: files.mediaURL(name).path(percentEncoded: false)) { item["public.png"] = img.pngData() as Any }
+            if list.count == 1, let name = list[0].image,
+                let img = UIImage(contentsOfFile: files.mediaURL(name).path(percentEncoded: false))
+            {
+                item["public.png"] = img.pngData() as Any
+            }
             UIPasteboard.general.items = [item]
         }
     }
@@ -816,20 +932,29 @@ final class BoardSession {
 
     func paste(at point: CGPoint? = nil) {
         let pb = UIPasteboard.general
-        if let data = pb.data(forPasteboardType: "si.eilmer.reflex.objects"), let list = try? BoardFiles.decoder.decode([BoardObject].self, from: data), !list.isEmpty {
+        if let data = pb.data(forPasteboardType: "si.eilmer.reflex.objects"),
+            let list = try? BoardFiles.decoder.decode([BoardObject].self, from: data), !list.isEmpty
+        {
             lastPasteOffset += 30
             let u = list.reduce(CGRect.null) { $0.union($1.frame) }
             let target = point ?? CGPoint(x: ink.visibleRect.midX, y: ink.visibleRect.midY)
-            let dx = target.x - u.midX + (point == nil ? lastPasteOffset : 0), dy = target.y - u.midY + (point == nil ? lastPasteOffset : 0)
+            let dx = target.x - u.midX + (point == nil ? lastPasteOffset : 0)
+            let dy = target.y - u.midY + (point == nil ? lastPasteOffset : 0)
             let before = current
             var copies: [BoardObject] = []
             for var o in list {
                 o.id = BoardObject(kind: o.kind, frame: .zero).id
                 o.frame = o.frame.offsetBy(dx: dx, dy: dy)
-                o.from = o.from.map { ConnectorEnd(object: nil, point: CGPoint(x: $0.point.x + dx, y: $0.point.y + dy)) }
+                o.from = o.from.map {
+                    ConnectorEnd(object: nil, point: CGPoint(x: $0.point.x + dx, y: $0.point.y + dy))
+                }
                 o.to = o.to.map { ConnectorEnd(object: nil, point: CGPoint(x: $0.point.x + dx, y: $0.point.y + dy)) }
                 // An image copied from another board needs its file here.
-                if let name = o.image, !FileManager.default.fileExists(atPath: files.mediaURL(name).path(percentEncoded: false)) { o.image = nil }
+                if let name = o.image,
+                    !FileManager.default.fileExists(atPath: files.mediaURL(name).path(percentEncoded: false))
+                {
+                    o.image = nil
+                }
                 copies.append(o)
             }
             objects.append(contentsOf: copies)
@@ -842,7 +967,9 @@ final class BoardSession {
             return
         }
         if let text = pb.string, !text.isEmpty {
-            var o = BoardObject(kind: .text, frame: newFrame(CGSize(width: 320, height: 60), at: point), fontSize: 24, align: .leading, shadow: false)
+            var o = BoardObject(
+                kind: .text, frame: newFrame(CGSize(width: 320, height: 60), at: point), fontSize: 24, align: .leading,
+                shadow: false)
             o.text = text
             let lines = CGFloat(max(1, text.split(separator: "\n").count))
             o.frame.size.height = max(60, lines * 34 + 20)
@@ -875,7 +1002,9 @@ final class BoardSession {
     }
 
     func setCell(_ id: String, row: Int, col: Int, _ text: String) {
-        guard let i = objects.firstIndex(where: { $0.id == id }), var t = objects[i].table, row < t.rows, col < t.cols, t.cells[row][col] != text else { return }
+        guard let i = objects.firstIndex(where: { $0.id == id }), var t = objects[i].table, row < t.rows, col < t.cols,
+            t.cells[row][col] != text
+        else { return }
         if undoStack.last?.name != "Typing \(id)" { push("Typing \(id)", current) }
         t.cells[row][col] = text
         objects[i].table = t
@@ -885,7 +1014,9 @@ final class BoardSession {
     private func autosizeText(_ i: Int) {
         let o = objects[i]
         let font = UIFont.systemFont(ofSize: o.fontSize, weight: o.bold ? .bold : .regular)
-        let box = (o.text.isEmpty ? "M" : o.text).boundingRect(with: CGSize(width: o.frame.width - 16, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin], attributes: [.font: font], context: nil)
+        let box = (o.text.isEmpty ? "M" : o.text).boundingRect(
+            with: CGSize(width: o.frame.width - 16, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin], attributes: [.font: font], context: nil)
         objects[i].frame.size.height = max(ceil(box.height) + 20, o.fontSize + 20)
     }
 
@@ -894,8 +1025,10 @@ final class BoardSession {
         change([id], "Table") { o in
             let old = o.frame
             guard var t = o.table else { return }
-            let rows = max(1, min(rows, 30)), cols = max(1, min(cols, 12))
-            let rowH = o.frame.height / CGFloat(max(t.rows, 1)), colW = o.frame.width / CGFloat(max(t.cols, 1))
+            let rows = max(1, min(rows, 30))
+            let cols = max(1, min(cols, 12))
+            let rowH = o.frame.height / CGFloat(max(t.rows, 1))
+            let colW = o.frame.width / CGFloat(max(t.cols, 1))
             while t.cells.count < rows { t.cells.append(Array(repeating: "", count: t.cols)) }
             t.cells = Array(t.cells.prefix(rows))
             t.cells = t.cells.map { r in Array((r + Array(repeating: "", count: max(0, cols - r.count))).prefix(cols)) }
@@ -942,22 +1075,33 @@ final class BoardSession {
             say("Didn't hear anything, so nothing was sent.")
             return
         }
-        let z = ink.zoomScale, o = ink.contentOffset, size = ink.canvasView.bounds.size
+        let z = ink.zoomScale
+        let o = ink.contentOffset
+        let size = ink.canvasView.bounds.size
         let view = CGRect(x: o.x / z, y: o.y / z, width: size.width / z, height: size.height / z)
         let ints = { (r: CGRect) in [r.minX, r.minY, r.width, r.height].map { Int($0.rounded()) } }
         let portable = ink.portableStrokes(ids)
         let pk = ink.pkStrokes(ids)
         let encode = { (s: PortableStroke) -> [String: Any] in
-            ["id": s.id, "points": s.spacePoints, "bounds": s.bounds, "color": s.namedColor, "width": s.points.first?.width ?? 3, "at": Int64(s.createdAt.timeIntervalSince1970 * 1000)]
+            [
+                "id": s.id, "points": s.spacePoints, "bounds": s.bounds, "color": s.namedColor,
+                "width": s.points.first?.width ?? 3, "at": Int64(s.createdAt.timeIntervalSince1970 * 1000),
+            ]
         }
-        var raw: [String: Any] = ["send": "s_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased(), "trigger": trigger, "viewport": ints(view),
-            "strokes": portable.map(encode), "context": ink.portableStrokes(ink.strokes.map(\.id)).map(encode)]
+        var raw: [String: Any] = [
+            "send": "s_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased(), "trigger": trigger,
+            "viewport": ints(view),
+            "strokes": portable.map(encode), "context": ink.portableStrokes(ink.strokes.map(\.id)).map(encode),
+        ]
         if let said, !said.isEmpty { raw["said"] = said }
         if !words.isEmpty { raw["words"] = words }
         let marked = ink.strokes.filter { ids.contains($0.id) }.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
         let full = view.insetBy(dx: -view.width * 0.15, dy: -view.height * 0.15)
         let recent = marked.isNull ? nil : marked.insetBy(dx: -60, dy: -60)
-        let drawing = ink.drawing, objects = objects, paper = meta.paper, files = files
+        let drawing = ink.drawing
+        let objects = objects
+        let paper = meta.paper
+        let files = files
         let dark = ink.canvasView.traitCollection.userInterfaceStyle == .dark
         reserved.formUnion(ids)
         let previous = sending
@@ -971,12 +1115,19 @@ final class BoardSession {
             var crops: [[String: Any]] = []
             do {
                 for (kind, rect) in regions {
-                    guard let image = BoardRenderer.image(of: rect, drawing: drawing, objects: objects, files: files, paper: paper, maxSide: 1000, dark: dark, viewportZoom: z),
-                          let png = await Task.detached(priority: .userInitiated, operation: { image.pngData() }).value else {
+                    guard
+                        let image = BoardRenderer.image(
+                            of: rect, drawing: drawing, objects: objects, files: files, paper: paper, maxSide: 1000,
+                            dark: dark, viewportZoom: z),
+                        let png = await Task.detached(priority: .userInitiated, operation: { image.pngData() }).value
+                    else {
                         throw CocoaError(.fileWriteUnknown)
                     }
                     let hash = try link.storeAsset(png)
-                    crops.append(["asset": hash, "bounds": ints(rect), "kind": kind, "strokes": kind == "recent_strokes" ? ids : []])
+                    crops.append([
+                        "asset": hash, "bounds": ints(rect), "kind": kind,
+                        "strokes": kind == "recent_strokes" ? ids : [],
+                    ])
                     await Task.yield()
                 }
                 raw["crops"] = crops
@@ -990,8 +1141,11 @@ final class BoardSession {
             do {
                 _ = try link.enqueueSend(id, raw: raw, destination: destination)
                 ink.claim(ids)
-                if case .connected = link.state { say("Sent") }
-                else { say("Saved. It goes out when your Mac is back.") }
+                if case .connected = link.state {
+                    say("Sent")
+                } else {
+                    say("Saved. It goes out when your Mac is back.")
+                }
                 lastSendOK = Date()
             } catch { say("Could not send: \(error.localizedDescription)") }
             reserved.subtract(ids)

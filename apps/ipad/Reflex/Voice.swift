@@ -33,7 +33,8 @@ final class VoiceCapture {
 
     /// True when the mic or speech recognition hasn't been allowed yet (or was refused).
     static var needsPermission: Bool {
-        SFSpeechRecognizer.authorizationStatus() != .authorized || AVAudioApplication.shared.recordPermission != .granted
+        SFSpeechRecognizer.authorizationStatus() != .authorized
+            || AVAudioApplication.shared.recordPermission != .granted
     }
 
     /// Asks for the mic and speech recognition, outside a hold. True if both are allowed.
@@ -103,9 +104,11 @@ final class VoiceCapture {
         partial = ""
         let base = started.timeIntervalSince1970
         let words: [[String: Any]] = (t?.segments ?? []).map { s in
-            ["text": s.substring,
-             "start_ms": Int(((base + s.timestamp) * 1000).rounded()),
-             "end_ms": Int(((base + s.timestamp + s.duration) * 1000).rounded())]
+            [
+                "text": s.substring,
+                "start_ms": Int(((base + s.timestamp) * 1000).rounded()),
+                "end_ms": Int(((base + s.timestamp + s.duration) * 1000).rounded()),
+            ]
         }
         log.info("Heard \(t?.formattedString ?? "", privacy: .public) (\(words.count) words)")
         return (t?.formattedString ?? "", words)
@@ -114,7 +117,10 @@ final class VoiceCapture {
     /// The on-device recognizer for the person's language. Audio never goes to a server, so
     /// without on-device recognition there is no voice.
     private nonisolated static func recognizer() throws -> SFSpeechRecognizer {
-        guard let r = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")), r.isAvailable else {
+        guard
+            let r = SFSpeechRecognizer(locale: Locale.current)
+                ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")), r.isAvailable
+        else {
             throw VoiceError("Speech recognition isn't available right now.")
         }
         guard r.supportsOnDeviceRecognition else {
@@ -124,58 +130,70 @@ final class VoiceCapture {
     }
 
     #if DEBUG
-    /// Transcribes an audio file through the same on-device path as the mic, for
-    /// the Simulator (`reflex://debug/voice?file=`): its timings start when the file does.
-    func debugTranscribe(_ url: URL) async throws -> (said: String, words: [[String: Any]]) {
-        _ = try Self.recognizer()
-        guard await Self.speechAllowed() else { throw VoiceError("Speech recognition isn't allowed.") }
-        let started = Date()
-        let heard = try await Self.transcribe(url)
-        let base = started.timeIntervalSince1970
-        let words: [[String: Any]] = heard.segments.map { s in
-            ["text": s.text, "start_ms": Int(((base + s.at) * 1000).rounded()), "end_ms": Int(((base + s.at + s.duration) * 1000).rounded())]
+        /// Transcribes an audio file through the same on-device path as the mic, for
+        /// the Simulator (`reflex://debug/voice?file=`): its timings start when the file does.
+        func debugTranscribe(_ url: URL) async throws -> (said: String, words: [[String: Any]]) {
+            _ = try Self.recognizer()
+            guard await Self.speechAllowed() else { throw VoiceError("Speech recognition isn't allowed.") }
+            let started = Date()
+            let heard = try await Self.transcribe(url)
+            let base = started.timeIntervalSince1970
+            let words: [[String: Any]] = heard.segments.map { s in
+                [
+                    "text": s.text, "start_ms": Int(((base + s.at) * 1000).rounded()),
+                    "end_ms": Int(((base + s.at + s.duration) * 1000).rounded()),
+                ]
+            }
+            log.info("Heard from file: \(heard.text, privacy: .public) (\(words.count) words)")
+            return (heard.text, words)
         }
-        log.info("Heard from file: \(heard.text, privacy: .public) (\(words.count) words)")
-        return (heard.text, words)
-    }
 
-    private nonisolated static func transcribe(_ url: URL) async throws -> (text: String, segments: [Heard]) {
-        let recognizer = try recognizer()
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.requiresOnDeviceRecognition = true
-        request.addsPunctuation = true
-        let file = try AVAudioFile(forReading: url)
-        return try await withCheckedThrowingContinuation { c in
-            let once = Once()
-            let task = recognizer.recognitionTask(with: request) { result, error in
-                guard result?.isFinal == true || error != nil, once.first() else { return }
-                let t = result?.bestTranscription
-                if let error, t == nil {
-                    c.resume(throwing: VoiceError("Speech recognition failed: \(error.localizedDescription)"))
-                    return
+        private nonisolated static func transcribe(_ url: URL) async throws -> (text: String, segments: [Heard]) {
+            let recognizer = try recognizer()
+            let request = SFSpeechAudioBufferRecognitionRequest()
+            request.requiresOnDeviceRecognition = true
+            request.addsPunctuation = true
+            let file = try AVAudioFile(forReading: url)
+            return try await withCheckedThrowingContinuation { c in
+                let once = Once()
+                let task = recognizer.recognitionTask(with: request) { result, error in
+                    guard result?.isFinal == true || error != nil, once.first() else { return }
+                    let t = result?.bestTranscription
+                    if let error, t == nil {
+                        c.resume(throwing: VoiceError("Speech recognition failed: \(error.localizedDescription)"))
+                        return
+                    }
+                    c.resume(
+                        returning: (
+                            t?.formattedString ?? "",
+                            (t?.segments ?? []).map {
+                                Heard(text: $0.substring, at: $0.timestamp, duration: $0.duration)
+                            }
+                        ))
                 }
-                c.resume(returning: (t?.formattedString ?? "", (t?.segments ?? []).map { Heard(text: $0.substring, at: $0.timestamp, duration: $0.duration) }))
+                _ = task
+                while let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096),
+                    (try? file.read(into: buffer)) != nil, buffer.frameLength > 0
+                {
+                    request.append(buffer)
+                }
+                request.endAudio()
             }
-            _ = task
-            while let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096),
-                  (try? file.read(into: buffer)) != nil, buffer.frameLength > 0 {
-                request.append(buffer)
-            }
-            request.endAudio()
         }
-    }
     #endif
 
     // The audio tap and the recognizer call back on their own queues, so their
     // closures are made here, outside the main actor, and hop back to it.
-    private nonisolated static func tap(_ input: AVAudioInputNode, format: AVAudioFormat, into request: SFSpeechAudioBufferRecognitionRequest,
-                                        level: @escaping @MainActor @Sendable (Float) -> Void) {
+    private nonisolated static func tap(
+        _ input: AVAudioInputNode, format: AVAudioFormat, into request: SFSpeechAudioBufferRecognitionRequest,
+        level: @escaping @MainActor @Sendable (Float) -> Void
+    ) {
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
             request.append(buffer)
             guard let data = buffer.floatChannelData?[0] else { return }
             let n = Int(buffer.frameLength)
             var sum: Float = 0
-            for i in 0 ..< n { sum += data[i] * data[i] }
+            for i in 0..<n { sum += data[i] * data[i] }
             let rms = sqrt(sum / Float(max(n, 1)))
             let l = min(1, max(0, (20 * log10(max(rms, 0.000_01)) + 50) / 45))
             Task { @MainActor in level(l) }
@@ -212,18 +230,23 @@ final class VoiceCapture {
 }
 
 #if DEBUG
-/// True the first time only; the recognizer can report more than once.
-private final class Once: @unchecked Sendable {
-    private let lock = NSLock()
-    private var done = false
-    func first() -> Bool { lock.withLock { defer { done = true }; return !done } }
-}
+    /// True the first time only; the recognizer can report more than once.
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+        func first() -> Bool {
+            lock.withLock {
+                defer { done = true }
+                return !done
+            }
+        }
+    }
 
-struct Heard: Sendable {
-    var text: String
-    var at: TimeInterval
-    var duration: TimeInterval
-}
+    struct Heard: Sendable {
+        var text: String
+        var at: TimeInterval
+        var duration: TimeInterval
+    }
 #endif
 
 struct VoiceError: LocalizedError {
@@ -262,7 +285,10 @@ struct VoiceSendDock: View {
         .onChange(of: lastSend) { _, _ in
             sentPulse = true
             UINotificationFeedbackGenerator().notificationOccurred(.success)
-            Task { try? await Task.sleep(for: .seconds(1.4)); sentPulse = false }
+            Task {
+                try? await Task.sleep(for: .seconds(1.4))
+                sentPulse = false
+            }
         }
     }
 
@@ -276,8 +302,11 @@ struct VoiceSendDock: View {
                 LevelMeter(level: voice.level, active: voice.state == .listening)
                     .frame(width: 120, height: 26)
                 TimelineView(.periodic(from: started, by: 1)) { ctx in
-                    Text(Duration.seconds(max(0, ctx.date.timeIntervalSince(started))).formatted(.time(pattern: .minuteSecond)))
-                        .font(.system(size: 15, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+                    Text(
+                        Duration.seconds(max(0, ctx.date.timeIntervalSince(started))).formatted(
+                            .time(pattern: .minuteSecond))
+                    )
+                    .font(.system(size: 15, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
                 }
                 Text("Release to Send").font(.system(size: 14, weight: .medium)).foregroundStyle(.white.opacity(0.85))
             }
@@ -311,7 +340,10 @@ struct VoiceSendDock: View {
             permissionTouch = true
             Task {
                 let ok = await voice.requestPermission()
-                onFail(ok ? "Ready. Hold the mic and talk, then let go to Send." : "Reflex needs the microphone and speech recognition. Allow them in Settings.")
+                onFail(
+                    ok
+                        ? "Ready. Hold the mic and talk, then let go to Send."
+                        : "Reflex needs the microphone and speech recognition. Allow them in Settings.")
             }
             return
         }
@@ -332,9 +364,13 @@ struct VoiceSendDock: View {
 
     /// Release, or a touch the system cancelled (an alert, a palm): either way recording ends.
     private func pressEnded() {
-        log.info("Mic press ended (holding \(voice.holding), state \(String(describing: voice.state), privacy: .public))")
+        log.info(
+            "Mic press ended (holding \(voice.holding), state \(String(describing: voice.state), privacy: .public))")
         pressed = false
-        if permissionTouch { permissionTouch = false; return }
+        if permissionTouch {
+            permissionTouch = false
+            return
+        }
         guard voice.holding else { return }
         voice.holding = false
         let start = starting
@@ -409,14 +445,13 @@ struct LevelMeter: View {
             // While the mic is starting, a gentle idle wave.
             while !Task.isCancelled && !active {
                 history.removeFirst()
-                history.append(Float.random(in: 0.08 ... 0.25))
+                history.append(Float.random(in: 0.08...0.25))
                 try? await Task.sleep(for: .milliseconds(90))
             }
         }
         .accessibilityHidden(true)
     }
 }
-
 
 /// Reports a finger going down and coming up (or being cancelled) on a view that SwiftUI
 /// doesn't rebuild while the button around it changes.

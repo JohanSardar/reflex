@@ -20,8 +20,10 @@ struct InkStore {
 
     init(space: String) {
         let local = space.hasPrefix("local-only:")
-        let base = URL.applicationSupportDirectory.appending(path: local ? "Reflex/LocalOnly" : "Reflex/Spaces", directoryHint: .isDirectory)
-        directory = base.appending(path: local ? String(space.dropFirst("local-only:".count)) : space, directoryHint: .isDirectory)
+        let base = URL.applicationSupportDirectory.appending(
+            path: local ? "Reflex/LocalOnly" : "Reflex/Spaces", directoryHint: .isDirectory)
+        directory = base.appending(
+            path: local ? String(space.dropFirst("local-only:".count)) : space, directoryHint: .isDirectory)
     }
 
     func load() -> (PKDrawing, StrokeLedger) {
@@ -70,7 +72,9 @@ struct InkStore {
 
     func save(_ drawing: PKDrawing, portable: [PortableStroke], retired: [StrokeRecord], unsent: [String]) {
         let saved = Saved(strokes: portable, retired: retired, unsent: unsent)
-        let directory = directory, strokesURL = strokesURL, drawingURL = drawingURL
+        let directory = directory
+        let strokesURL = strokesURL
+        let drawingURL = drawingURL
         Self.queue.async {
             do {
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

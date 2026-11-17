@@ -39,7 +39,9 @@ final class RelayConnection: FrameChannel, @unchecked Sendable {
     private static let opener: UInt32 = 0x8000_0000
 
     init(relay: RelayInfo, me: DeviceIdentity, link: String) throws {
-        guard var c = URLComponents(string: relay.url), c.scheme == "ws" || c.scheme == "wss" else { throw LinkError.unreachable("The Relay address '\(relay.url)' is not ws:// or wss://.") }
+        guard var c = URLComponents(string: relay.url), c.scheme == "ws" || c.scheme == "wss" else {
+            throw LinkError.unreachable("The Relay address '\(relay.url)' is not ws:// or wss://.")
+        }
         c.path = "/v0/connect"
         c.queryItems = [URLQueryItem(name: "room", value: relay.room)]
         guard let url = c.url else { throw LinkError.unreachable("Bad Relay address.") }
@@ -69,7 +71,11 @@ final class RelayConnection: FrameChannel, @unchecked Sendable {
     }
 
     private var started = false
-    private var isStarted: Bool { lock.lock(); defer { lock.unlock() }; return started }
+    private var isStarted: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return started
+    }
 
     private func finishStart(_ r: Result<Void, Error>) {
         lock.lock()
@@ -105,7 +111,8 @@ final class RelayConnection: FrameChannel, @unchecked Sendable {
         switch m["t"] as? String {
         case "challenge":
             guard let nonce = m["nonce"] as? String,
-                  let sig = try? me.key.signature(for: Data("reflex-relay/v0 hello \(room) \(nonce)".utf8)) else { return }
+                let sig = try? me.key.signature(for: Data("reflex-relay/v0 hello \(room) \(nonce)".utf8))
+            else { return }
             sendJSON(["t": "hello", "device": me.device, "key": B64.encode(me.publicRaw), "sig": B64.encode(sig)])
         case "welcome":
             welcomed = true
@@ -127,15 +134,17 @@ final class RelayConnection: FrameChannel, @unchecked Sendable {
         let b = [UInt8](d)
         guard b.count >= 5, b.count >= 1 + Int(b[0]) + 4 else { return }
         let n = Int(b[0])
-        guard String(decoding: b[1 ..< 1 + n], as: UTF8.self) == link else { return }
-        let ch = b[(1 + n) ..< (5 + n)].reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+        guard String(decoding: b[1..<1 + n], as: UTF8.self) == link else { return }
+        let ch = b[(1 + n)..<(5 + n)].reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
         // The Link answers on this side's channel, without the opener bit.
         guard ch == Self.channel else { return }
         continuation.yield(Data(b[(5 + n)...]))
     }
 
     private func sendJSON(_ m: [String: Any]) {
-        guard let d = try? JSONSerialization.data(withJSONObject: m), let s = String(data: d, encoding: .utf8) else { return }
+        guard let d = try? JSONSerialization.data(withJSONObject: m), let s = String(data: d, encoding: .utf8) else {
+            return
+        }
         task.send(.string(s)) { _ in }
     }
 

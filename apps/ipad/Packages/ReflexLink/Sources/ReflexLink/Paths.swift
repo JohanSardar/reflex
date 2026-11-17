@@ -54,7 +54,8 @@ struct PathSet {
             better = nil
             return nil
         }
-        let a = Self.score(cur), b = Self.score(best)
+        let a = Self.score(cur)
+        let b = Self.score(best)
         guard b < a * Self.switchRatio, a - b >= Self.minGainMs else {
             better = nil
             return nil

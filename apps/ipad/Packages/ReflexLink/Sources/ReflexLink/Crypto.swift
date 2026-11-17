@@ -112,19 +112,25 @@ public struct PairingOffer: Sendable {
     }
 
     public init(_ text: String) throws {
-        guard let u = URLComponents(string: text.trimmingCharacters(in: .whitespacesAndNewlines)), u.scheme == "reflex", u.host == "pair" else {
+        guard let u = URLComponents(string: text.trimmingCharacters(in: .whitespacesAndNewlines)), u.scheme == "reflex",
+            u.host == "pair"
+        else {
             throw LinkError.badCode("That is not a pairing code. It starts with reflex://pair?")
         }
         let q = Dictionary((u.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { a, _ in a })
         func need(_ k: String) throws -> String {
-            guard let v = q[k], !v.isEmpty else { throw LinkError.badCode("The pairing code is missing '\(k)'. Copy the whole code.") }
+            guard let v = q[k], !v.isEmpty else {
+                throw LinkError.badCode("The pairing code is missing '\(k)'. Copy the whole code.")
+            }
             return v
         }
         guard try need("v") == "0" else { throw LinkError.badCode("This pairing code's version is not supported.") }
         offer = try need("o")
         device = try need("d")
         key = try need("k")
-        guard let s = B64.decode(try need("s")), s.count == 32 else { throw LinkError.badCode("The pairing code's secret is damaged.") }
+        guard let s = B64.decode(try need("s")), s.count == 32 else {
+            throw LinkError.badCode("The pairing code's secret is damaged.")
+        }
         secret = s
         hosts = try need("h").split(separator: ",").map(String.init)
         guard let p = UInt16(try need("p")) else { throw LinkError.badCode("The pairing code's port is damaged.") }
@@ -132,7 +138,9 @@ public struct PairingOffer: Sendable {
         name = q["n"] ?? ""
         // The person comes last in the code, so a code cut short shows here: a damaged ID, or no name after it.
         let pi = try need("pi")
-        guard pi.count == 14, pi.hasPrefix("p_"), pi.dropFirst(2).allSatisfy({ $0.isHexDigit && !$0.isUppercase }), q["pn"] != nil else {
+        guard pi.count == 14, pi.hasPrefix("p_"), pi.dropFirst(2).allSatisfy({ $0.isHexDigit && !$0.isUppercase }),
+            q["pn"] != nil
+        else {
             throw LinkError.badCode("The pairing code is cut short. Copy the whole code.")
         }
         person = Person(id: pi, name: q["pn"] ?? "")

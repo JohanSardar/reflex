@@ -2,42 +2,10 @@ import CoreGraphics
 import CryptoKit
 import Foundation
 import Network
-import Observation
 import OSLog
+import Observation
 
 let linkLog = Logger(subsystem: "si.eilmer.reflex", category: "link")
-
-/// An Agent waiting for the person to approve it, sent by the Link.
-public struct AgentRequest: Identifiable, Sendable, Equatable {
-    public var id: String
-    public var name: String
-    public var color: String
-    /// When the Link asked (ms). An answer is for this request only: asked again later, it is a new question.
-    public var requestedAt: Int64?
-}
-
-/// Another iPad of the person's waiting for "Let … approve Agents?" (asked of approving iPads only).
-public struct ApproverRequest: Identifiable, Sendable, Equatable {
-    public var device: String
-    public var name: String
-    public var id: String { device }
-}
-
-/// The person's answer to one request, kept until the Link confirms it.
-public struct AgentDecision: Codable, Sendable, Equatable {
-    public var status: String
-    public var requestedAt: Int64?
-}
-
-/// An Agent the Link knows: its name and color, for its chip and the history.
-public struct AgentInfo: Codable, Identifiable, Sendable, Equatable {
-    public var id: String
-    public var name: String
-    /// A named protocol color.
-    public var color: String
-    public var status: String
-    public var requestedAt: Int64?
-}
 
 /// Paired transport, approval, local page discovery and durable Send delivery.
 @MainActor @Observable
@@ -140,24 +108,43 @@ public final class LinkSync {
 
     public init(deviceName: String) {
         let fm = FileManager.default
-        for d in [Self.linkDir, Self.spacesDir, Self.localOnlyDir, Self.assetsDir] { try? fm.createDirectory(at: d, withIntermediateDirectories: true) }
+        for d in [Self.linkDir, Self.spacesDir, Self.localOnlyDir, Self.assetsDir] {
+            try? fm.createDirectory(at: d, withIntermediateDirectories: true)
+        }
         let idURL = Self.linkDir.appending(path: "identity.json")
         let saved = (try? Data(contentsOf: idURL)).flatMap { try? JSONDecoder().decode(Saved.self, from: $0) }
-        if let saved, let raw = B64.decode(saved.key), let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: raw) {
-            identity = DeviceIdentity(key: key, person: saved.person ?? Person(id: "p_unpaired", name: ""), name: saved.name)
+        if let saved, let raw = B64.decode(saved.key),
+            let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: raw)
+        {
+            identity = DeviceIdentity(
+                key: key, person: saved.person ?? Person(id: "p_unpaired", name: ""), name: saved.name)
             actor = saved.actor
             person = saved.person
         } else {
             let key = Curve25519.Signing.PrivateKey()
-            actor = Data((0 ..< 16).map { _ in UInt8.random(in: 0 ... 255) }).hex
+            actor = Data((0..<16).map { _ in UInt8.random(in: 0...255) }).hex
             identity = DeviceIdentity(key: key, person: Person(id: "p_unpaired", name: ""), name: deviceName)
-            Self.writeSecret(Saved(key: B64.encode(key.rawRepresentation), actor: actor, name: deviceName, person: nil), to: idURL)
+            Self.writeSecret(
+                Saved(key: B64.encode(key.rawRepresentation), actor: actor, name: deviceName, person: nil), to: idURL)
         }
-        paired = (try? Data(contentsOf: Self.linkDir.appending(path: "paired.json"))).flatMap { try? JSONDecoder().decode(Paired.self, from: $0) }
-        relay = (try? Data(contentsOf: Self.linkDir.appending(path: "relay.json"))).flatMap { try? JSONDecoder().decode(RelayInfo.self, from: $0) }
-        agents = (try? Data(contentsOf: Self.linkDir.appending(path: "agents.json"))).flatMap { try? JSONDecoder().decode([String: AgentInfo].self, from: $0) } ?? [:]
-        decisions = (try? Data(contentsOf: Self.linkDir.appending(path: "decisions.json"))).flatMap { try? JSONDecoder().decode([String: AgentDecision].self, from: $0) } ?? [:]
-        localOnly = (try? Data(contentsOf: Self.linkDir.appending(path: "local-only.json"))).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+        paired = (try? Data(contentsOf: Self.linkDir.appending(path: "paired.json"))).flatMap {
+            try? JSONDecoder().decode(Paired.self, from: $0)
+        }
+        relay = (try? Data(contentsOf: Self.linkDir.appending(path: "relay.json"))).flatMap {
+            try? JSONDecoder().decode(RelayInfo.self, from: $0)
+        }
+        agents =
+            (try? Data(contentsOf: Self.linkDir.appending(path: "agents.json"))).flatMap {
+                try? JSONDecoder().decode([String: AgentInfo].self, from: $0)
+            } ?? [:]
+        decisions =
+            (try? Data(contentsOf: Self.linkDir.appending(path: "decisions.json"))).flatMap {
+                try? JSONDecoder().decode([String: AgentDecision].self, from: $0)
+            } ?? [:]
+        localOnly =
+            (try? Data(contentsOf: Self.linkDir.appending(path: "local-only.json"))).flatMap {
+                try? JSONDecoder().decode([String: String].self, from: $0)
+            } ?? [:]
         // Kept by an earlier build in Spaces/ under the Space's own ID: move them to LocalOnly/.
         for (id, owner) in localOnly where !id.hasPrefix(Self.localPrefix) {
             localOnly[id] = nil
@@ -183,9 +170,13 @@ public final class LinkSync {
     private func loadPages() {
         var found: [String] = []
         for (root, prefix) in [(Self.spacesDir, ""), (Self.localOnlyDir, Self.localPrefix)] {
-            for dir in (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? [] {
+            for dir
+                in (try? FileManager.default.contentsOfDirectory(
+                    at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+            {
                 guard (try? dir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
-                      dir.lastPathComponent != "library" else { continue }
+                    dir.lastPathComponent != "library"
+                else { continue }
                 found.append(prefix + dir.lastPathComponent)
             }
         }
@@ -199,9 +190,12 @@ public final class LinkSync {
         let trash = Self.root.appending(path: "Trash", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
         var name = (key.hasPrefix(Self.localPrefix) ? "local-only-" : "") + title(key)
-        if FileManager.default.fileExists(atPath: trash.appending(path: name).path(percentEncoded: false)) { name += "-\(Self.now())" }
+        if FileManager.default.fileExists(atPath: trash.appending(path: name).path(percentEncoded: false)) {
+            name += "-\(Self.now())"
+        }
         do {
-            try FileManager.default.moveItem(at: Self.folder(key), to: trash.appending(path: name, directoryHint: .isDirectory))
+            try FileManager.default.moveItem(
+                at: Self.folder(key), to: trash.appending(path: name, directoryHint: .isDirectory))
             spaces.removeAll { $0 == key }
         } catch { linkLog.error("Could not remove page: \(error.localizedDescription)") }
     }
@@ -210,7 +204,8 @@ public final class LinkSync {
     public func folderURL(_ key: String) -> URL { Self.folder(key) }
 
     private func countPendingSends() {
-        let files = (try? FileManager.default.contentsOfDirectory(atPath: Self.outboxDir.path(percentEncoded: false))) ?? []
+        let files =
+            (try? FileManager.default.contentsOfDirectory(atPath: Self.outboxDir.path(percentEncoded: false))) ?? []
         let n = files.filter { $0.hasSuffix(".json") }.count
         if n != pendingSends { pendingSends = n }
     }
@@ -241,7 +236,9 @@ public final class LinkSync {
             name = "\(id)-\(n)"
             n += 1
         }
-        try? FileManager.default.moveItem(at: spacesDir.appending(path: id, directoryHint: .isDirectory), to: localOnlyDir.appending(path: name, directoryHint: .isDirectory))
+        try? FileManager.default.moveItem(
+            at: spacesDir.appending(path: id, directoryHint: .isDirectory),
+            to: localOnlyDir.appending(path: name, directoryHint: .isDirectory))
         return localPrefix + name
     }
 
@@ -258,7 +255,9 @@ public final class LinkSync {
     public var destinationKey: String? { paired?.key }
 
     public func enqueueSend(_ space: String, raw: [String: Any], destination: String?) throws -> [String: Any] {
-        guard let paired, let person, paired.key == destination, spaces.contains(space), localOnly[space] == nil, !space.hasPrefix(Self.localPrefix) else {
+        guard let paired, let person, paired.key == destination, spaces.contains(space), localOnly[space] == nil,
+            !space.hasPrefix(Self.localPrefix)
+        else {
             throw LinkError.protocolError("Connect this page to your Link before sending.")
         }
         guard let id = raw["send"] as? String, Self.safeID(id) else { throw LinkError.protocolError("Invalid Send ID") }
@@ -268,18 +267,22 @@ public final class LinkSync {
         send["at"] = Self.now()
         let item: [String: Any] = ["link": paired.key, "space": space, "send": send]
         try FileManager.default.createDirectory(at: Self.outboxDir, withIntermediateDirectories: true)
-        try JSONSerialization.data(withJSONObject: item).write(to: Self.outboxDir.appending(path: id + ".json"), options: [.atomic, .completeFileProtection])
+        try JSONSerialization.data(withJSONObject: item).write(
+            to: Self.outboxDir.appending(path: id + ".json"), options: [.atomic, .completeFileProtection])
         countPendingSends()
         if let session { deliver(item, session) }
         return send
     }
 
     private static func safeID(_ id: String) -> Bool {
-        !id.isEmpty && id.count <= 200 && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
+        !id.isEmpty && id.count <= 200
+            && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
     }
 
     private func deliver(_ item: [String: Any], _ s: Session) {
-        guard item["link"] as? String == paired?.key, let send = item["send"] as? [String: Any], let space = item["space"] as? String else { return }
+        guard item["link"] as? String == paired?.key, let send = item["send"] as? [String: Any],
+            let space = item["space"] as? String
+        else { return }
         for crop in send["crops"] as? [[String: Any]] ?? [] {
             guard let hash = crop["asset"] as? String, let bytes = asset(hash) else { return }
             sendAsset(hash, bytes, s)
@@ -288,13 +291,16 @@ public final class LinkSync {
     }
 
     private func deliverPending(_ s: Session) {
-        let files = (try? FileManager.default.contentsOfDirectory(at: Self.outboxDir, includingPropertiesForKeys: nil)) ?? []
+        let files =
+            (try? FileManager.default.contentsOfDirectory(at: Self.outboxDir, includingPropertiesForKeys: nil)) ?? []
         let items = files.compactMap { file -> [String: Any]? in
             guard let data = try? Data(contentsOf: file) else { return nil }
             return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         }.sorted { a, b in
-            let sa = a["send"] as? [String: Any] ?? [:], sb = b["send"] as? [String: Any] ?? [:]
-            let ta = sa["at"] as? Double ?? 0, tb = sb["at"] as? Double ?? 0
+            let sa = a["send"] as? [String: Any] ?? [:]
+            let sb = b["send"] as? [String: Any] ?? [:]
+            let ta = sa["at"] as? Double ?? 0
+            let tb = sb["at"] as? Double ?? 0
             return ta == tb ? (sa["send"] as? String ?? "") < (sb["send"] as? String ?? "") : ta < tb
         }
         for item in items { deliver(item, s) }
@@ -316,7 +322,9 @@ public final class LinkSync {
         let part = 1024 * 1024
         var off = 0
         repeat {
-            s.send(["t": "asset", "hash": hash, "off": off, "size": bytes.count], bytes.subdata(in: off ..< min(bytes.count, off + part)))
+            s.send(
+                ["t": "asset", "hash": hash, "off": off, "size": bytes.count],
+                bytes.subdata(in: off..<min(bytes.count, off + part)))
             off += part
         } while off < bytes.count
     }
@@ -334,7 +342,9 @@ public final class LinkSync {
         decisions[agent] = AgentDecision(status: allow ? "approved" : "denied", requestedAt: asked)
         saveDecisions()
         for s in paths.all { sendDecisions(s, only: agent) }
-        if paths.isEmpty { linkLog.info("Kept the answer for \(agent, privacy: .public); it goes out when the Link is back") }
+        if paths.isEmpty {
+            linkLog.info("Kept the answer for \(agent, privacy: .public); it goes out when the Link is back")
+        }
     }
 
     /// The person's answer to "Let <device> approve Agents?", on this approving iPad.
@@ -352,7 +362,9 @@ public final class LinkSync {
     }
 
     private func saveDecisions() {
-        if let data = try? JSONEncoder().encode(decisions) { try? data.write(to: Self.linkDir.appending(path: "decisions.json"), options: .atomic) }
+        if let data = try? JSONEncoder().encode(decisions) {
+            try? data.write(to: Self.linkDir.appending(path: "decisions.json"), options: .atomic)
+        }
     }
 
     /// Questions to show: every Agent the Link lists as pending that the person hasn't answered here yet.
@@ -365,7 +377,8 @@ public final class LinkSync {
             next.append(AgentRequest(id: a.id, name: a.name, color: a.color, requestedAt: a.requestedAt))
         }
         if next != agentRequests { agentRequests = next }
-        let elsewhere = !canApprove && !pending.isEmpty
+        let elsewhere =
+            !canApprove && !pending.isEmpty
             ? "\(pending.first!.name) wants to use your Spaces. Allow it on your iPad that approves Agents: this one can't yet."
             : nil
         if elsewhere != approvalElsewhere { approvalElsewhere = elsewhere }
@@ -387,7 +400,9 @@ public final class LinkSync {
     public func dismissLocalOnlyNotice() { localOnlyNotice = nil }
 
     private func saveLocalOnly() {
-        if let data = try? JSONEncoder().encode(localOnly) { try? data.write(to: Self.linkDir.appending(path: "local-only.json"), options: .atomic) }
+        if let data = try? JSONEncoder().encode(localOnly) {
+            try? data.write(to: Self.linkDir.appending(path: "local-only.json"), options: .atomic)
+        }
     }
 
     // MARK: Pairing and connecting
@@ -440,7 +455,8 @@ public final class LinkSync {
                 try await conn.start(timeout: 5)
                 let offer = PairingOffer(code: code, device: f.device, key: f.key, name: f.name, person: f.person)
                 let at = conn.resolvedIPv4
-                try await pair(conn, offer: offer, hosts: at.map { [$0.host] } ?? [], port: at?.port ?? 0, exposure: exposure)
+                try await pair(
+                    conn, offer: offer, hosts: at.map { [$0.host] } ?? [], port: at?.port ?? 0, exposure: exposure)
                 return
             } catch {
                 conn.close()
@@ -474,7 +490,8 @@ public final class LinkSync {
         var relays: [String] = []
         for r in [relay?.url, Self.defaultRelay].compactMap({ $0 }) where !relays.contains(r) { relays.append(r) }
         var visited: [String] = []
-        var wrong = 0, seen = 0
+        var wrong = 0
+        var seen = 0
         var errors: [String] = []
         while !relays.isEmpty, visited.count < 3 {
             let url = relays.removeFirst()
@@ -496,12 +513,18 @@ public final class LinkSync {
                 do {
                     let s = try await handshake(ch, me: identity, pairedKey: nil, offer: nil, relayCode: code)
                     lobby.release()
-                    linkLog.info("Proved the code to \(s.peer.name, privacy: .public) through the relay at \(url, privacy: .public)")
+                    linkLog.info(
+                        "Proved the code to \(s.peer.name, privacy: .public) through the relay at \(url, privacy: .public)"
+                    )
                     adopt(s, name: s.peer.name, person: s.peer.person, hosts: [], port: 0)
                     return
                 } catch let m as RelayMoved {
                     ch.close()
-                    if m.relay.hasPrefix("wss://") || m.relay.hasPrefix("ws://"), !visited.contains(m.relay), !relays.contains(m.relay) { relays.insert(m.relay, at: 0) }
+                    if m.relay.hasPrefix("wss://") || m.relay.hasPrefix("ws://"), !visited.contains(m.relay),
+                        !relays.contains(m.relay)
+                    {
+                        relays.insert(m.relay, at: 0)
+                    }
                 } catch LinkError.refused(let why) where why.hasSuffix("wrong pairing code") {
                     ch.close()
                     wrong += 1
@@ -512,9 +535,14 @@ public final class LinkSync {
             }
             lobby.close()
         }
-        if wrong > 0 { throw LinkError.badCode("That code didn't work. Check the digits, or ask your agent for a new code and type that.") }
+        if wrong > 0 {
+            throw LinkError.badCode(
+                "That code didn't work. Check the digits, or ask your agent for a new code and type that.")
+        }
         if seen == 0 && errors.isEmpty {
-            throw LinkError.unreachable("No Mac with Reflex found, nearby or through the relay. Ask your agent for a new code, and check your Mac is online. On the same Wi-Fi, check Reflex may find devices on your local network (Settings › Privacy & Security › Local Network).")
+            throw LinkError.unreachable(
+                "No Mac with Reflex found, nearby or through the relay. Ask your agent for a new code, and check your Mac is online. On the same Wi-Fi, check Reflex may find devices on your local network (Settings › Privacy & Security › Local Network)."
+            )
         }
         throw LinkError.unreachable("Could not pair through the relay. \(errors.joined(separator: "; "))")
     }
@@ -529,10 +557,13 @@ public final class LinkSync {
 
         /// A Bonjour result whose record says who the Link is (a key and a person); over peer-to-peer, only on that interface.
         nonisolated static func read(_ r: NWBrowser.Result, p2p: Bool) -> FoundLink? {
-            guard case .bonjour(let txt) = r.metadata, let device = txt["dev"], let key = txt["k"], let pi = txt["pi"] else { return nil }
+            guard case .bonjour(let txt) = r.metadata, let device = txt["dev"], let key = txt["k"], let pi = txt["pi"]
+            else { return nil }
             let iface = p2p ? r.interfaces.first(where: { $0.name.hasPrefix("awdl") || $0.name.hasPrefix("llw") }) : nil
             if p2p && iface == nil { return nil }
-            return FoundLink(endpoint: r.endpoint, interface: iface, device: device, key: key, name: txt["n"] ?? "your Mac", person: Person(id: pi, name: txt["pn"] ?? ""))
+            return FoundLink(
+                endpoint: r.endpoint, interface: iface, device: device, key: key, name: txt["n"] ?? "your Mac",
+                person: Person(id: pi, name: txt["pn"] ?? ""))
         }
     }
 
@@ -573,12 +604,16 @@ public final class LinkSync {
         b?.cancel()
         // The paired Link first, then the rest of the LAN, then peer-to-peer for Links not seen on the LAN.
         let mine = paired?.device
-        let ordered = found.lan.values.sorted { ($0.device == mine ? 0 : 1, $0.name) < ($1.device == mine ? 0 : 1, $1.name) }
+        let ordered = found.lan.values.sorted {
+            ($0.device == mine ? 0 : 1, $0.name) < ($1.device == mine ? 0 : 1, $1.name)
+        }
         return ordered + found.near.values.filter { found.lan[$0.device] == nil }
     }
 
     /// Pairs over a connected channel with this offer, then stays connected.
-    private func pair(_ conn: FramedConnection, offer: PairingOffer, hosts: [String], port: UInt16, exposure: CodeExposure? = nil) async throws {
+    private func pair(
+        _ conn: FramedConnection, offer: PairingOffer, hosts: [String], port: UInt16, exposure: CodeExposure? = nil
+    ) async throws {
         // A device that holds nothing of its own yet becomes the offering person's device (ADR-0008).
         let wasPerson = identity.person
         identity.person = offer.person
@@ -614,10 +649,14 @@ public final class LinkSync {
             saveDecisions()
         }
         changedHosts = []
-        paired = Paired(device: s.peer.device, key: s.peer.key, name: offer.name, person: offer.person, hosts: hosts, port: port)
+        paired = Paired(
+            device: s.peer.device, key: s.peer.key, name: offer.name, person: offer.person, hosts: hosts, port: port)
         Self.writeSecret(paired!, to: Self.linkDir.appending(path: "paired.json"))
         person = offer.person
-        Self.writeSecret(Saved(key: B64.encode(identity.key.rawRepresentation), actor: actor, name: identity.name, person: offer.person), to: Self.linkDir.appending(path: "identity.json"))
+        Self.writeSecret(
+            Saved(
+                key: B64.encode(identity.key.rawRepresentation), actor: actor, name: identity.name, person: offer.person
+            ), to: Self.linkDir.appending(path: "identity.json"))
         linkLog.info("Paired with \(offer.name, privacy: .public) at \(s.conn.remote, privacy: .public)")
         // The peer-to-peer browser looks for one Link by its device ID: a new Link needs a new one.
         p2p?.stop()
@@ -721,7 +760,7 @@ public final class LinkSync {
             } catch LinkError.linkChanged {
                 // Another Link answers there: not dialed again (it would refuse every 2 s) until the network changes.
                 if let host { changedHosts.insert(host) }
-                try? await Task.sleep(for: .milliseconds(200)) // let the refusal reach the Link before closing
+                try? await Task.sleep(for: .milliseconds(200))  // let the refusal reach the Link before closing
                 conn.close()
             } catch {
                 conn.close()
@@ -738,15 +777,21 @@ public final class LinkSync {
                 return
             } catch {
                 conn.close()
-                linkLog.info("Relay path to \(paired.name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                linkLog.info(
+                    "Relay path to \(paired.name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)"
+                )
             }
         }
         guard paths.isEmpty else { return reconnectSoon(after: 5) }
         // Another Link answers where this iPad's Link was, and its own Link answered on no path: it was most likely
         // reset or reinstalled. Ask the person to scan its new code; keep trying the other ways meanwhile.
-        if !changedHosts.isEmpty, paired.hosts.allSatisfy({ changedHosts.contains($0) || ($0 == "127.0.0.1" && !Self.simulator) }) {
+        if !changedHosts.isEmpty,
+            paired.hosts.allSatisfy({ changedHosts.contains($0) || ($0 == "127.0.0.1" && !Self.simulator) })
+        {
             if state != .linkChanged(paired.name) {
-                linkLog.error("The Link at \(paired.name, privacy: .public)'s address has a new key; waiting for the person to scan its code")
+                linkLog.error(
+                    "The Link at \(paired.name, privacy: .public)'s address has a new key; waiting for the person to scan its code"
+                )
             }
             state = .linkChanged(paired.name)
             return reconnectSoon(after: 10)
@@ -819,7 +864,9 @@ public final class LinkSync {
         paths.add(s)
         publishPaths()
         state = .connected(s.peer.name)
-        linkLog.info("Connected to \(s.peer.name, privacy: .public) over \(s.transport, privacy: .public) \(s.conn.remote, privacy: .public); \(self.paths.all.count) paths")
+        linkLog.info(
+            "Connected to \(s.peer.name, privacy: .public) over \(s.transport, privacy: .public) \(s.conn.remote, privacy: .public); \(self.paths.all.count) paths"
+        )
         if first || paths.active === s { fresh(s) }
         Task { await loop(s) }
     }
@@ -836,7 +883,8 @@ public final class LinkSync {
         do {
             while let (h, body) = try await s.next() { handle(h, body, s) }
         } catch {
-            linkLog.error("Dropping the \(s.transport, privacy: .public) path: \(error.localizedDescription, privacy: .public)")
+            linkLog.error(
+                "Dropping the \(s.transport, privacy: .public) path: \(error.localizedDescription, privacy: .public)")
         }
         s.close()
         let wasActive = paths.remove(s)
@@ -845,7 +893,8 @@ public final class LinkSync {
             state = .offline("Reconnecting to \(s.peer.name)")
         } else if wasActive, let next = paths.active {
             // What was in flight on the lost path may be gone: start over on the one that is left.
-            linkLog.info("Lost the \(s.transport, privacy: .public) path; now sending over \(next.transport, privacy: .public)")
+            linkLog.info(
+                "Lost the \(s.transport, privacy: .public) path; now sending over \(next.transport, privacy: .public)")
             fresh(next)
         }
         // The ticker redials peer-to-peer; LAN and the Relay are dialed here.
@@ -857,23 +906,32 @@ public final class LinkSync {
         case "send_ack":
             guard let id = h["send"] as? String, Self.safeID(id) else { return }
             let file = Self.outboxDir.appending(path: id + ".json")
-            guard let data = try? Data(contentsOf: file), let item = try? JSONSerialization.jsonObject(with: data) as? [String: Any], item["link"] as? String == paired?.key else { return }
+            guard let data = try? Data(contentsOf: file),
+                let item = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                item["link"] as? String == paired?.key
+            else { return }
             try? FileManager.default.removeItem(at: file)
             countPendingSends()
         case "agents":
             var known: [String: AgentInfo] = [:]
             for a in h["agents"] as? [[String: Any]] ?? [] {
                 guard let id = a["id"] as? String else { continue }
-                known[id] = AgentInfo(id: id, name: a["name"] as? String ?? id, color: a["color"] as? String ?? "violet", status: a["status"] as? String ?? "approved",
-                                      requestedAt: (a["requested_at"] as? NSNumber)?.int64Value)
+                known[id] = AgentInfo(
+                    id: id, name: a["name"] as? String ?? id, color: a["color"] as? String ?? "violet",
+                    status: a["status"] as? String ?? "approved",
+                    requestedAt: (a["requested_at"] as? NSNumber)?.int64Value)
             }
             agents = known
             canApprove = h["approver"] as? Bool ?? true
-            if let data = try? JSONEncoder().encode(known) { try? data.write(to: Self.linkDir.appending(path: "agents.json"), options: .atomic) }
+            if let data = try? JSONEncoder().encode(known) {
+                try? data.write(to: Self.linkDir.appending(path: "agents.json"), options: .atomic)
+            }
             // An answer is done once the Link no longer lists that Agent as pending, and stale once it was asked
             // again since (the answer was for the earlier request): then the person is asked anew.
             let landed = decisions.filter { id, d in
-                known[id]?.status != "pending" || (d.requestedAt != nil && known[id]?.requestedAt != nil && d.requestedAt != known[id]?.requestedAt)
+                known[id]?.status != "pending"
+                    || (d.requestedAt != nil && known[id]?.requestedAt != nil
+                        && d.requestedAt != known[id]?.requestedAt)
             }.map(\.key)
             if !landed.isEmpty {
                 for id in landed { decisions[id] = nil }
@@ -896,7 +954,9 @@ public final class LinkSync {
             s.recordRtt(Double(Self.now() - at))
             let from = paths.active
             if let to = paths.evaluate() {
-                linkLog.info("Now sending over \(to.transport, privacy: .public) (\(to.rttMs ?? -1) ms) instead of \(from?.transport ?? "-", privacy: .public) (\(from?.rttMs ?? -1) ms)")
+                linkLog.info(
+                    "Now sending over \(to.transport, privacy: .public) (\(to.rttMs ?? -1) ms) instead of \(from?.transport ?? "-", privacy: .public) (\(from?.rttMs ?? -1) ms)"
+                )
                 publishPaths()
             }
         case "agent_request":
@@ -910,7 +970,10 @@ public final class LinkSync {
                 saveDecisions()
             }
             guard canApprove, !agentRequests.contains(where: { $0.id == id }) else { return }
-            agentRequests.append(AgentRequest(id: id, name: h["name"] as? String ?? id, color: h["color"] as? String ?? "violet", requestedAt: at))
+            agentRequests.append(
+                AgentRequest(
+                    id: id, name: h["name"] as? String ?? id, color: h["color"] as? String ?? "violet", requestedAt: at)
+            )
         case "agent_decision_refused":
             // This iPad's answers don't count (it paired with `reflex pair` after another iPad): stop sending it.
             guard let id = h["id"] as? String else { return }
@@ -929,7 +992,7 @@ public final class LinkSync {
             guard let name = h["name"] as? String else { return }
             newDevice = (name, h["approves"] as? Bool ?? false)
         default:
-            return // anything from a newer Link
+            return  // anything from a newer Link
         }
     }
 
@@ -938,9 +1001,9 @@ public final class LinkSync {
     static func now() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 
     #if targetEnvironment(simulator)
-    static let simulator = true
+        static let simulator = true
     #else
-    static let simulator = false
+        static let simulator = false
     #endif
 
     static func json(_ v: Any) -> String {
@@ -955,7 +1018,9 @@ public final class LinkSync {
         do {
             try JSONEncoder().encode(v).write(to: url, options: [.atomic, .completeFileProtection])
         } catch {
-            linkLog.error("Could not save \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            linkLog.error(
+                "Could not save \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
         }
     }
 }

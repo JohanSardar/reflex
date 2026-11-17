@@ -7,8 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		24261E97EF8C40DF86A11A67 /* BoardFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B81C13D637E9A57F2B75A28 /* BoardFiles.swift */; };
+		326716802F45D8E75D7A831F /* BoardSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA19239F366526DEE2AC0A82 /* BoardSession.swift */; };
 		35DE8E4648D3E18C401BAD10 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 98481F3EB392CF01B8D39CED /* Assets.xcassets */; };
+		38B6DE2A9033145700703CB0 /* BoardLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3438D0F8F32F0B96B484F99 /* BoardLibrary.swift */; };
 		48B74E2F9FCF99E932A54C57 /* PairSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F279A47D5602D40DAD49D3C0 /* PairSheet.swift */; };
+		5E1CDFF27F6E477379809AB0 /* StrokeIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C3371E5DDCFE7D72E0D15F6 /* StrokeIdentityTests.swift */; };
 		78EB4F334BCA170F6283B09B /* BoardModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA06CADB3738427DE7E7DB46 /* BoardModel.swift */; };
 		7C37C7A2E18BA1A692A242FA /* ReflexInput in Frameworks */ = {isa = PBXBuildFile; productRef = 3295D9657C1EB818EAFA23C5 /* ReflexInput */; };
 		86192D414D0F99054D90927F /* MiniToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ADB7CCE50F5FEF473896D7C /* MiniToolbar.swift */; };
@@ -20,35 +24,57 @@
 		AE2F3D20A7171C1DD7C74CA5 /* CanvasScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 025EBD84B13E2749FADC298A /* CanvasScreen.swift */; };
 		BD97EAB62B0CB7F90CE2C912 /* Handwriting.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC31D4E7E035B1B92EF4CAE /* Handwriting.swift */; };
 		C5B8FFAE8E8E7BD7C31391C3 /* ReflexTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60F9E3147D9A86BBBA955E6D /* ReflexTools.swift */; };
+		CD8C0CC6598D772835A60BC4 /* ReflexInput in Frameworks */ = {isa = PBXBuildFile; productRef = 911E2BDA7D836B500267F043 /* ReflexInput */; };
 		D07252F8EABFD071D98275F8 /* InteractionLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFBF3AF5613F24B000226C82 /* InteractionLayer.swift */; };
 		D81C7DC4EDACD57EFAF70CBC /* BrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14F49667A56B28F461542CA4 /* BrowserView.swift */; };
-		D88096101CA9432FA07938C6 /* SpaceSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69BAF4E1D80231F143C1C8E1 /* SpaceSession.swift */; };
 		FCCDCDA94BE70ED2342CED8B /* ReflexLink in Frameworks */ = {isa = PBXBuildFile; productRef = 178AADCDAE1C63DA1DF91BB1 /* ReflexLink */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		7DE0045F6F890A4DF14F111A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A5388A64CF148C546F840C8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 21502C22BC4A0FB01C9F15C5;
+			remoteInfo = Reflex;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		025EBD84B13E2749FADC298A /* CanvasScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasScreen.swift; sourceTree = "<group>"; };
 		14F49667A56B28F461542CA4 /* BrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserView.swift; sourceTree = "<group>"; };
 		3EAE784E8E35762E81C8317F /* Reflex.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Reflex.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4ADB7CCE50F5FEF473896D7C /* MiniToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniToolbar.swift; sourceTree = "<group>"; };
+		5B81C13D637E9A57F2B75A28 /* BoardFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardFiles.swift; sourceTree = "<group>"; };
 		60F9E3147D9A86BBBA955E6D /* ReflexTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReflexTools.swift; sourceTree = "<group>"; };
 		67AC7BE637ACC8B15C35B1AA /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
-		69BAF4E1D80231F143C1C8E1 /* SpaceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceSession.swift; sourceTree = "<group>"; };
 		6D419DE876B9DB474766CC77 /* SymbolCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SymbolCatalog.swift; sourceTree = "<group>"; };
 		6D4550F287B1A53DCAEC12B8 /* ReflexLink */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ReflexLink; path = Packages/ReflexLink; sourceTree = SOURCE_ROOT; };
 		6F99831FE1DCFCD587A60690 /* ReflexInput */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ReflexInput; path = Packages/ReflexInput; sourceTree = SOURCE_ROOT; };
+		7C3371E5DDCFE7D72E0D15F6 /* StrokeIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrokeIdentityTests.swift; sourceTree = "<group>"; };
 		98481F3EB392CF01B8D39CED /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		9EB35031F8CE73EA5E64E42C /* BoardScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardScreen.swift; sourceTree = "<group>"; };
+		AA19239F366526DEE2AC0A82 /* BoardSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardSession.swift; sourceTree = "<group>"; };
 		B19B50FE40FAAAA58F039ED6 /* ReflexApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReflexApp.swift; sourceTree = "<group>"; };
 		BC8E8B6AC631BCC380336539 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		C2A30E2E592A2B82F8CB84F8 /* ReflexInputTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ReflexInputTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C57770DD7F9396256BD4FD3F /* ObjectRendering.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObjectRendering.swift; sourceTree = "<group>"; };
 		CDC31D4E7E035B1B92EF4CAE /* Handwriting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Handwriting.swift; sourceTree = "<group>"; };
+		D3438D0F8F32F0B96B484F99 /* BoardLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardLibrary.swift; sourceTree = "<group>"; };
 		DA06CADB3738427DE7E7DB46 /* BoardModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoardModel.swift; sourceTree = "<group>"; };
 		EFBF3AF5613F24B000226C82 /* InteractionLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteractionLayer.swift; sourceTree = "<group>"; };
 		F279A47D5602D40DAD49D3C0 /* PairSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		0A84EE083D0AE726868DC9AA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CD8C0CC6598D772835A60BC4 /* ReflexInput in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		1D6678E9FED2977D766BCB9B /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -66,8 +92,17 @@
 			children = (
 				6F99831FE1DCFCD587A60690 /* ReflexInput */,
 				6D4550F287B1A53DCAEC12B8 /* ReflexLink */,
+				DAD7A686559EF3200146485D /* ReflexInput */,
 			);
 			path = Packages;
+			sourceTree = "<group>";
+		};
+		17EEA5353875FE1776EB449A /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				D2E5F8EDEFCE7D85F5734F1F /* ReflexInputTests */,
+			);
+			path = Tests;
 			sourceTree = "<group>";
 		};
 		4772A2EC6CC2B2C08ED4BFE2 = {
@@ -83,6 +118,7 @@
 			isa = PBXGroup;
 			children = (
 				3EAE784E8E35762E81C8317F /* Reflex.app */,
+				C2A30E2E592A2B82F8CB84F8 /* ReflexInputTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -91,8 +127,11 @@
 			isa = PBXGroup;
 			children = (
 				98481F3EB392CF01B8D39CED /* Assets.xcassets */,
+				5B81C13D637E9A57F2B75A28 /* BoardFiles.swift */,
+				D3438D0F8F32F0B96B484F99 /* BoardLibrary.swift */,
 				DA06CADB3738427DE7E7DB46 /* BoardModel.swift */,
 				9EB35031F8CE73EA5E64E42C /* BoardScreen.swift */,
+				AA19239F366526DEE2AC0A82 /* BoardSession.swift */,
 				14F49667A56B28F461542CA4 /* BrowserView.swift */,
 				025EBD84B13E2749FADC298A /* CanvasScreen.swift */,
 				CDC31D4E7E035B1B92EF4CAE /* Handwriting.swift */,
@@ -103,11 +142,26 @@
 				F279A47D5602D40DAD49D3C0 /* PairSheet.swift */,
 				B19B50FE40FAAAA58F039ED6 /* ReflexApp.swift */,
 				60F9E3147D9A86BBBA955E6D /* ReflexTools.swift */,
-				69BAF4E1D80231F143C1C8E1 /* SpaceSession.swift */,
 				6D419DE876B9DB474766CC77 /* SymbolCatalog.swift */,
 				67AC7BE637ACC8B15C35B1AA /* Voice.swift */,
 			);
 			path = Reflex;
+			sourceTree = "<group>";
+		};
+		D2E5F8EDEFCE7D85F5734F1F /* ReflexInputTests */ = {
+			isa = PBXGroup;
+			children = (
+				7C3371E5DDCFE7D72E0D15F6 /* StrokeIdentityTests.swift */,
+			);
+			path = ReflexInputTests;
+			sourceTree = "<group>";
+		};
+		DAD7A686559EF3200146485D /* ReflexInput */ = {
+			isa = PBXGroup;
+			children = (
+				17EEA5353875FE1776EB449A /* Tests */,
+			);
+			path = ReflexInput;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -134,6 +188,26 @@
 			productReference = 3EAE784E8E35762E81C8317F /* Reflex.app */;
 			productType = "com.apple.product-type.application";
 		};
+		B1E1DBB4418F697438D8B186 /* ReflexInputTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 07E15AB160E77CEC1C7BBD99 /* Build configuration list for PBXNativeTarget "ReflexInputTests" */;
+			buildPhases = (
+				BB7AB8A35D2A1D1CEB0B3163 /* Sources */,
+				0A84EE083D0AE726868DC9AA /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				9834D583294D47C30BD70EFC /* PBXTargetDependency */,
+			);
+			name = ReflexInputTests;
+			packageProductDependencies = (
+				911E2BDA7D836B500267F043 /* ReflexInput */,
+			);
+			productName = ReflexInputTests;
+			productReference = C2A30E2E592A2B82F8CB84F8 /* ReflexInputTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -144,6 +218,9 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					21502C22BC4A0FB01C9F15C5 = {
+						ProvisioningStyle = Automatic;
+					};
+					B1E1DBB4418F697438D8B186 = {
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -167,6 +244,7 @@
 			projectRoot = "";
 			targets = (
 				21502C22BC4A0FB01C9F15C5 /* Reflex */,
+				B1E1DBB4418F697438D8B186 /* ReflexInputTests */,
 			);
 		};
 /* End PBXProject section */
@@ -187,8 +265,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				24261E97EF8C40DF86A11A67 /* BoardFiles.swift in Sources */,
+				38B6DE2A9033145700703CB0 /* BoardLibrary.swift in Sources */,
 				78EB4F334BCA170F6283B09B /* BoardModel.swift in Sources */,
 				A36EBFE5A2797D21A2235AFC /* BoardScreen.swift in Sources */,
+				326716802F45D8E75D7A831F /* BoardSession.swift in Sources */,
 				D81C7DC4EDACD57EFAF70CBC /* BrowserView.swift in Sources */,
 				AE2F3D20A7171C1DD7C74CA5 /* CanvasScreen.swift in Sources */,
 				BD97EAB62B0CB7F90CE2C912 /* Handwriting.swift in Sources */,
@@ -198,21 +279,51 @@
 				48B74E2F9FCF99E932A54C57 /* PairSheet.swift in Sources */,
 				AC64987EDEADC85E30C0038D /* ReflexApp.swift in Sources */,
 				C5B8FFAE8E8E7BD7C31391C3 /* ReflexTools.swift in Sources */,
-				D88096101CA9432FA07938C6 /* SpaceSession.swift in Sources */,
 				A56633A6BB9729081E6A59DF /* SymbolCatalog.swift in Sources */,
 				8868AF65494D12C1D2B6332E /* Voice.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BB7AB8A35D2A1D1CEB0B3163 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5E1CDFF27F6E477379809AB0 /* StrokeIdentityTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		9834D583294D47C30BD70EFC /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 21502C22BC4A0FB01C9F15C5 /* Reflex */;
+			targetProxy = 7DE0045F6F890A4DF14F111A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		0F8C723CD5068C8ABD48F6CE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "si.eilmer.reflex.input-tests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Reflex.app/Reflex";
+			};
+			name = Release;
+		};
 		1ED3470F5642A201EE12E3C3 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = Reflex/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Reflex;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -223,7 +334,6 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = si.eilmer.reflex;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 2;
@@ -265,6 +375,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -285,6 +396,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -332,6 +444,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -346,6 +459,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -362,7 +476,6 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = Reflex/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Reflex;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -373,16 +486,40 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = si.eilmer.reflex;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 2;
 			};
 			name = Debug;
 		};
+		C5A1CCF243707D29ED78C55D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "si.eilmer.reflex.input-tests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Reflex.app/Reflex";
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		07E15AB160E77CEC1C7BBD99 /* Build configuration list for PBXNativeTarget "ReflexInputTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C5A1CCF243707D29ED78C55D /* Debug */,
+				0F8C723CD5068C8ABD48F6CE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		354728B56DEF4A8E1A3CBB61 /* Build configuration list for PBXProject "Reflex" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -420,6 +557,10 @@
 			productName = ReflexLink;
 		};
 		3295D9657C1EB818EAFA23C5 /* ReflexInput */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ReflexInput;
+		};
+		911E2BDA7D836B500267F043 /* ReflexInput */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ReflexInput;
 		};

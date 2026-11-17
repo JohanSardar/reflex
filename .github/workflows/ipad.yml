@@ -1,0 +1,36 @@
+name: iPad
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ipad-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    name: Format, build and test
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+      DESTINATION: platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=26.4
+      DERIVED_DATA: ${{ runner.temp }}/ipad-check
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Check formatting, compile Release and run tests
+        run: apps/ipad/scripts/check.sh
+      - name: Preserve test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipad-test-results
+          path: ${{ runner.temp }}/ipad-check/TestResults/*.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
